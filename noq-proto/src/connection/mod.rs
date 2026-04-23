@@ -20,7 +20,6 @@ use crate::{
     Dir, Duration, EndpointConfig, FourTuple, Frame, INITIAL_MTU, Instant, MAX_CID_SIZE,
     MAX_STREAM_COUNT, MIN_INITIAL_SIZE, Side, StreamId, TIMER_GRANULARITY, TokenStore, Transmit,
     TransportError, TransportErrorCode, VarInt,
-    cid_generator::ConnectionIdGenerator,
     cid_queue::CidQueue,
     config::{ServerConfig, TransportConfig},
     congestion::Controller,
@@ -316,7 +315,8 @@ impl Connection {
         remote_cid: ConnectionId,
         network_path: FourTuple,
         crypto: Box<dyn crypto::Session>,
-        cid_gen: &dyn ConnectionIdGenerator,
+        local_cid_len: usize,
+        local_cid_lifetime: Option<Duration>,
         now: Instant,
         version: u32,
         allow_mtud: bool,
@@ -353,8 +353,8 @@ impl Connection {
         let local_cid_state = FxHashMap::from_iter([(
             PathId::ZERO,
             CidState::new(
-                cid_gen.cid_len(),
-                cid_gen.cid_lifetime(),
+                local_cid_len,
+                local_cid_lifetime,
                 now,
                 if pref_addr_cid.is_some() { 2 } else { 1 },
             ),
