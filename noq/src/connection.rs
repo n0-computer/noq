@@ -1829,15 +1829,24 @@ pub enum SendDatagramError {
     ConnectionLost(#[from] ConnectionError),
 }
 
-/// The maximum amount of datagrams which will be produced in a single `drive_transmit` call
+/// The maximum amount of datagrams which will be produced in a single `drive_transmit` call.
 ///
 /// This limits the amount of CPU resources consumed by datagram generation,
 /// and allows other tasks (like receiving ACKs) to run in between.
-const MAX_TRANSMIT_DATAGRAMS: usize = 20;
+///
+/// Kept in lockstep with `MAX_TRANSMIT_SEGMENTS` so a single GSO super-segment
+/// can hold a couple of transmit drives back-to-back without bouncing to the
+/// scheduler.
+const MAX_TRANSMIT_DATAGRAMS: usize = 80;
 
-/// The maximum amount of datagrams that are sent in a single transmit
+/// The maximum amount of datagrams that are sent in a single transmit.
 ///
 /// This can be lower than the maximum platform capabilities, to avoid excessive
 /// memory allocations when calling `poll_transmit()`. Benchmarks have shown
-/// that numbers around 10 are a good compromise.
-const MAX_TRANSMIT_SEGMENTS: NonZeroUsize = NonZeroUsize::new(10).expect("known");
+/// that numbers around 10 are a good compromise on small payloads, but with
+/// `UDP_SEGMENT` (GSO) on Linux it pays off to batch more aggressively: at MTU
+/// 1280 this means 51.2 KB per `sendmsg()` call instead of 12.8 KB. The Linux
+/// kernel hard limit `UDP_MAX_SEGMENTS` is 64, so 40 stays comfortably within
+/// bounds. On uplink-saturated benchmarks this gives a meaningful throughput
+/// improvement at the cost of slightly more work per drive call.
+const MAX_TRANSMIT_SEGMENTS: NonZeroUsize = NonZeroUsize::new(40).expect("known");
