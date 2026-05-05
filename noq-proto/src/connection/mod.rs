@@ -4235,36 +4235,28 @@ impl Connection {
                     return;
                 }
             }
-            Ok((packet, number)) => {
+            Ok((packet, pn)) => {
                 // We received an authenticated packet and decrypted it.
-                qlog.header(&packet.header, number, path_id);
-                let span = match number {
+                qlog.header(&packet.header, pn, path_id);
+                let span = match pn {
                     Some(pn) => trace_span!("recv", space = ?packet.header.space(), pn),
                     None => trace_span!("recv", space = ?packet.header.space()),
                 };
                 let _guard = span.enter();
 
-                // Now the packet is authenticated we can update the network path if needed.
-                // Be careful here to not yet rely on the path existing however, new paths
-                // are accepted and created later.
-                if let Some(known_network_path) = self
-                    .paths
-                    .get_mut(&path_id)
-                    .map(|path| &mut path.data.network_path)
-                    && known_network_path.remote == network_path.remote
-                    && known_network_path.local_ip.is_none()
-                    && network_path.local_ip.is_some()
-                {
-                    // Set the local IP if we did not yet have one. We do this for both the
-                    // server and the client since not all transports will report a local IP
-                    // at the very first incoming packet.
-                    trace!(?network_path.local_ip, "setting local IP from incoming packet");
-                    known_network_path.local_ip = network_path.local_ip;
-                }
+                // Now the packet is authenticated we do the migration during the handshake,
+                // see Hanshake::allow_server_migration for details.  Be careful here to not
+                // yet rely on the path existing however, new paths are accepted and created
+                // later.
+                // Note that we can't do any other migrations yet, for those we need to know
+                // whether this was a probing packet or not. See the end of
+                // Self::process_packet for that.
                 if self.is_handshaking()
                     && self
                         .path(path_id)
-                        .map(|path_data| path_data.network_path != network_path)
+                        .map(|path_data| {
+                            !path_data.network_path.is_probably_same_path(&network_path)
+                        })
                         .unwrap_or(false)
                 {
                     // Accept the server migration, see Handshake::allow_server_migration
@@ -4292,7 +4284,7 @@ impl Connection {
                 let dedup = self.spaces[packet.header.space()]
                     .path_space_mut(path_id)
                     .map(|pns| &mut pns.dedup);
-                if number.zip(dedup).is_some_and(|(n, d)| d.insert(n)) {
+                if pn.zip(dedup).is_some_and(|(n, d)| d.insert(n)) {
                     debug!("discarding possible duplicate packet");
                     self.qlog.emit_packet_received(qlog, now);
                     return;
@@ -4323,7 +4315,7 @@ impl Connection {
 
                         if self.side().is_server() && !self.abandoned_paths.contains(&path_id) {
                             // Only the client is allowed to open paths
-                            self.ensure_path(path_id, network_path, now, number);
+                            self.ensure_path(path_id, network_path, now, pn);
                         }
                         if self.paths.contains_key(&path_id) {
                             self.on_packet_authenticated(
@@ -4331,7 +4323,7 @@ impl Connection {
                                 packet.header.space(),
                                 path_id,
                                 ecn,
-                                number,
+                                pn,
                                 spin,
                                 packet.header.is_1rtt(),
                                 &network_path,
@@ -4343,7 +4335,7 @@ impl Connection {
                         now,
                         network_path,
                         path_id,
-                        number,
+                        pn,
                         packet,
                         &mut qlog,
                     );
