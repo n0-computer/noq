@@ -50,13 +50,24 @@ jobs:
       - name: Patch noq crates in iroh workspace
         working-directory: iroh
         run: |
-          cat >> Cargo.toml <<'EOF'
+          if [ grep -q '\[patch\.crates-io\]' ]; then
+            awk -i '
+              BEGIN { in_patch = 0 }
+              /\[patch\.crates-io\]/ { in_patch = 1 }
+              in_patch && /^noq =/ { print "noq = { path = "../noq/noq" }"; next }
+              in_patch && /^noq-proto =/ { print "noq-proto = { path = "../noq/noq-proto" }"; next }
+              in_patch && /^noq-udp =/ { print "noq-udp = { path = "../noq/noq-udp" }"; next }
+              { print }
+              ' Cargo.toml
+          else
+            cat >> Cargo.toml <<'EOF'
 
-          [patch.crates-io]
-          noq = { path = "../noq/noq" }
-          noq-proto = { path = "../noq/noq-proto" }
-          noq-udp = { path = "../noq/noq-udp" }
-          EOF
+            [patch.crates-io]
+            noq = { path = "../noq/noq" }
+            noq-proto = { path = "../noq/noq-proto" }
+            noq-udp = { path = "../noq/noq-udp" }
+            EOF
+          fi
 
       - name: Build patchbay tests
         working-directory: iroh
