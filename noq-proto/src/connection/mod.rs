@@ -4259,8 +4259,6 @@ impl Connection {
                         })
                         .unwrap_or(false)
                 {
-                    // Accept the server migration, see Handshake::allow_server_migration
-                    // for details.
                     if let Some(hs) = self.state.as_handshake()
                         && hs.allow_server_migration
                     {
