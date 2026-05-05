@@ -23,7 +23,9 @@ use std::{
 use crate::runtime::TokioRuntime;
 use crate::{Duration, Instant};
 use bytes::Bytes;
-use proto::{ConnectionError, PathId, RandomConnectionIdGenerator, crypto::rustls::QuicClientConfig};
+use proto::{
+    ConnectionError, PathId, RandomConnectionIdGenerator, crypto::rustls::QuicClientConfig,
+};
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use rustls::{
     RootCertStore,
@@ -1407,14 +1409,17 @@ async fn closed_includes_path_stats_for_all_known_paths() -> TestResult {
         let closed = on_closed_fut.await;
 
         let initial_path = PathId::ZERO;
-        let keys: Vec<_> = closed.path_stats.keys().copied().collect();
+        let ids: Vec<_> = closed.path_stats.iter().map(|(id, _stats)| *id).collect();
         assert!(
-            closed.path_stats.contains_key(&path2_id),
-            "Closed.path_stats missing the discarded path {path2_id:?}; keys={keys:?}",
+            closed.path_stats.iter().any(|(id, _stats)| *id == path2_id),
+            "Closed.path_stats missing the discarded path {path2_id:?}; ids={ids:?}",
         );
         assert!(
-            closed.path_stats.contains_key(&initial_path),
-            "Closed.path_stats missing the initial path {initial_path:?}; keys={keys:?}",
+            closed
+                .path_stats
+                .iter()
+                .any(|(id, _stats)| *id == initial_path),
+            "Closed.path_stats missing the initial path {initial_path:?}; ids={ids:?}",
         );
 
         TestResult::Ok(())

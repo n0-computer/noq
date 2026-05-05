@@ -1,6 +1,5 @@
 use std::{
     any::Any,
-    collections::BTreeMap,
     fmt,
     future::Future,
     io,
@@ -1174,7 +1173,7 @@ pub struct Closed {
     /// or [`WeakPathHandle`] handle was kept alive.
     ///
     /// [`WeakPathHandle`]: crate::WeakPathHandle
-    pub path_stats: BTreeMap<PathId, PathStats>,
+    pub path_stats: Vec<(PathId, PathStats)>,
 }
 
 impl Closed {
@@ -1186,18 +1185,26 @@ impl Closed {
             .error
             .clone()
             .expect("Closed::new called before error was set");
+
         let stats = state.inner.stats();
-        let mut path_stats = BTreeMap::new();
+
+        let non_discarded_paths = state.inner.paths();
+        let mut path_stats =
+            Vec::with_capacity(non_discarded_paths.len() + state.final_path_stats.len());
+
         // Non-discarded paths are tracked by proto::Connection.
-        for path_id in state.inner.paths() {
-            if let Some(stats) = state.inner.path_stats(path_id) {
-                path_stats.insert(path_id, stats);
-            }
-        }
+        path_stats.extend(
+            non_discarded_paths
+                .into_iter()
+                .filter_map(|id| state.inner.path_stats(id).map(|stats| (id, stats))),
+        );
         // Already-discarded paths whose final stats we kept around.
-        for (path_id, ps) in &state.final_path_stats {
-            path_stats.entry(*path_id).or_insert(*ps);
-        }
+        path_stats.extend(
+            state
+                .final_path_stats
+                .iter()
+                .map(|(id, stats)| (*id, *stats)),
+        );
         Self {
             reason,
             stats,
