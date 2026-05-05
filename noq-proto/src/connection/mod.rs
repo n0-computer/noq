@@ -3709,7 +3709,10 @@ impl Connection {
         // be reset and will delay detecting the path as idle. However tail-loss probes
         // would still not get acknowledged if the path was broken so eventually the path
         // would still become idle.
-        let is_on_path = *remote == self.path_data(path_id).network_path;
+        let is_on_path = self
+            .path_data(path_id)
+            .network_path
+            .is_probably_same_path(remote);
 
         self.total_authed_packets += 1;
         self.reset_keep_alive(path_id, now);
