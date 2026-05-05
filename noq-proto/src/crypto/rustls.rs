@@ -265,8 +265,7 @@ pub struct HandshakeData {
     pub server_name: Option<String>,
     /// The key exchange group negotiated with the peer.
     ///
-    /// `None` until the handshake has completed, and also for resumed TLS 1.2
-    /// sessions where no key exchange occurs.
+    /// `None` until the handshake has completed.
     pub negotiated_key_exchange_group: Option<rustls::NamedGroup>,
 }
 
