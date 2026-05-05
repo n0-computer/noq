@@ -4245,9 +4245,9 @@ impl Connection {
                 let _guard = span.enter();
 
                 // Now the packet is authenticated we do the migration during the handshake,
-                // see Hanshake::allow_server_migration for details.  Be careful here to not
-                // yet rely on the path existing however, new paths are accepted and created
-                // later.
+                // see Handshake::allow_server_migration for details.  Be careful here to
+                // not yet rely on the path existing however, new paths are accepted and
+                // created later.
                 // Note that we can't do any other migrations yet, for those we need to know
                 // whether this was a probing packet or not. See the end of
                 // Self::process_packet for that.
