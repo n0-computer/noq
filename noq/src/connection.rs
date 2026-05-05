@@ -568,9 +568,9 @@ impl Connection {
     pub fn on_closed(&self) -> OnClosed {
         let (tx, rx) = oneshot::channel();
         let mut state = self.0.lock_without_waking("on_closed");
-        if state.error.is_some() {
+        if let Some(reason) = state.error.clone() {
             // Connection already closed, send immediately
-            let _ = tx.send(Closed::new(&mut state));
+            let _ = tx.send(Closed::new(&mut state, reason));
         } else {
             state.on_closed.push(tx);
         }
@@ -1180,12 +1180,7 @@ impl Closed {
     /// Snapshot the current connection state into a [`Closed`] value.
     ///
     /// Must only be called once `state.error` has been set.
-    pub(crate) fn new(state: &mut State) -> Self {
-        let reason = state
-            .error
-            .clone()
-            .expect("Closed::new called before error was set");
-
+    pub(crate) fn new(state: &mut State, reason: ConnectionError) -> Self {
         let stats = state.inner.stats();
 
         let non_discarded_paths = state.inner.paths();
@@ -1737,7 +1732,7 @@ impl State {
 
     /// Used to wake up all blocked futures when the connection becomes closed for any reason
     fn terminate(&mut self, reason: ConnectionError, shared: &Shared) {
-        self.error = Some(reason);
+        self.error = Some(reason.clone());
         if let Some(x) = self.on_handshake_data.take() {
             let _ = x.send(());
         }
@@ -1758,7 +1753,7 @@ impl State {
 
         // Send to the registered on_closed futures.
         if !self.on_closed.is_empty() {
-            let closed = Closed::new(self);
+            let closed = Closed::new(self, reason);
             for tx in self.on_closed.drain(..) {
                 tx.send(closed.clone()).ok();
             }
@@ -1829,9 +1824,11 @@ impl Drop for State {
                 .send((self.handle, proto::EndpointEvent::drained()));
         }
 
-        if !self.on_closed.is_empty() {
+        if !self.on_closed.is_empty()
+            && let Some(reason) = self.error.clone()
+        {
             // Ensure that all on_closed oneshot senders are triggered before dropping.
-            let closed = Closed::new(self);
+            let closed = Closed::new(self, reason);
             for tx in self.on_closed.drain(..) {
                 tx.send(closed.clone()).ok();
             }
