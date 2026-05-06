@@ -340,6 +340,8 @@ impl Drop for WeakPathHandle {
 ///
 /// Holds the shared [`AtomicUsize`] but does not itself contribute to the count.
 /// Hands out [`PathRef`] handles via [`Self::acquire`].
+///
+/// [`State::path_refs`]: crate::connection::State::path_refs
 #[derive(Debug, Default)]
 pub(crate) struct PathRefOwner {
     ref_count: Arc<AtomicUsize>,
