@@ -263,7 +263,7 @@ pub struct HandshakeData {
     ///
     /// Always `None` for outgoing connections
     pub server_name: Option<String>,
-    /// The key exchange group negotiated with the peer.
+    /// The key exchange group negotiated with the peer. Useful for logging and metrics.
     ///
     /// `None` until the handshake has completed.
     pub negotiated_key_exchange_group: Option<rustls::NamedGroup>,
