@@ -2016,11 +2016,8 @@ impl Connection {
         let cid_queue = self.remote_cids.get_mut(&path_id)?;
         let (token, network_path) = path.path_responses.pop_off_path(path.network_path)?;
 
-        let cid = cid_queue
-            .next_reserved()
-            .unwrap_or_else(|| cid_queue.active());
-        // TODO(@divma): we should take a different approach when there is no fresh CID to use.
-        // https://github.com/quinn-rs/quinn/issues/2184
+        // TODO: make off-path probes unlinkable.
+        let cid = cid_queue.active();
 
         let frame = frame::PathResponse(token);
 
@@ -2030,6 +2027,23 @@ impl Connection {
         let mut builder = PacketBuilder::new(now, SpaceId::Data, path_id, cid, buf, self)?;
         let stats = &mut self.path_stats.for_path(path_id).frame_tx;
         builder.write_frame_with_log_msg(frame, stats, Some("(off-path)"));
+
+        // If we are a client doing NAT traversal, always include a PATH_CHALLENGE with any
+        // off-path PATH_RESPONSE. No need to schedule any retries for this, if NAT
+        // traversal is taking place then this remote already is being probed with
+        // retries, this only speeds up a successful traversal.
+        if self
+            .find_validated_path_on_network_path(network_path)
+            .is_none()
+            && self.n0_nat_traversal.client_side().is_ok()
+        {
+            let token = self.rng.random();
+            let stats = &mut self.path_stats.for_path(path_id).frame_tx;
+            builder.write_frame(frame::PathChallenge(token), stats);
+            let ip_port = (network_path.remote.ip(), network_path.remote.port());
+            self.n0_nat_traversal.mark_probe_sent(ip_port, token);
+        }
+
         // Off-path: not tracked in congestion control. The packet is sent to a
         // different destination than path_id's network path.
         builder.pad_to(MIN_INITIAL_SIZE);
@@ -2433,9 +2447,10 @@ impl Connection {
                         }
                     }
                     ConnTimer::NatTraversalProbeRetry => {
-                        if self.n0_nat_traversal.queue_retries(self.is_ipv6()) {
-                            let delay =
-                                RttEstimator::new(self.config.initial_rtt).pto_base() * 2 / 3;
+                        self.n0_nat_traversal.queue_retries(self.is_ipv6());
+                        if let Some(delay) =
+                            self.n0_nat_traversal.retry_delay(self.config.initial_rtt)
+                        {
                             self.timers.set(
                                 Timer::Conn(ConnTimer::NatTraversalProbeRetry),
                                 now + delay,
@@ -5521,12 +5536,15 @@ impl Connection {
 
                     if server_state.current_round() > round_before {
                         // A new round was started, reset the NAT probe retry timer.
-                        let delay = RttEstimator::new(self.config.initial_rtt).pto_base() * 2 / 3;
-                        self.timers.set(
-                            Timer::Conn(ConnTimer::NatTraversalProbeRetry),
-                            now + delay,
-                            self.qlog.with_time(now),
-                        );
+                        if let Some(delay) =
+                            self.n0_nat_traversal.retry_delay(self.config.initial_rtt)
+                        {
+                            self.timers.set(
+                                Timer::Conn(ConnTimer::NatTraversalProbeRetry),
+                                now + delay,
+                                self.qlog.with_time(now),
+                            );
+                        }
                     }
                 }
             }
@@ -7123,8 +7141,7 @@ impl Connection {
         let client_state = self.n0_nat_traversal.client_side_mut()?;
         let (mut reach_out_frames, probed_addrs) =
             client_state.initiate_nat_traversal_round(ipv6)?;
-        if !probed_addrs.is_empty() {
-            let delay = RttEstimator::new(self.config.initial_rtt).pto_base() * 2 / 3;
+        if let Some(delay) = self.n0_nat_traversal.retry_delay(self.config.initial_rtt) {
             self.timers.set(
                 Timer::Conn(ConnTimer::NatTraversalProbeRetry),
                 now + delay,
