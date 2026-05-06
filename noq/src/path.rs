@@ -360,9 +360,9 @@ impl PathRefOwner {
 
 /// Handle side of a path's reference counter, held by [`Path`] and [`WeakPathHandle`].
 ///
-/// Cloning bumps the counter, dropping decrements it. The last-dropped handle takes
-/// the connection state lock to clear the corresponding entries from
-/// [`State::path_refs`] and [`State::final_path_stats`].
+/// Cloning bumps the counter automatically. When dropping a `PathRef`, holders must call
+/// [`Self::on_drop`] to decrement the counter and clear the corresponding entries
+/// from the connection state if the counter reaches zero.
 ///
 /// [`WeakPathHandle`]: crate::path::WeakPathHandle
 #[derive(Debug)]
@@ -382,6 +382,10 @@ impl Clone for PathRef {
 }
 
 impl PathRef {
+    /// Decreases the refcount and clears state once the counter reaches zero.
+    ///
+    /// This must be called before dropping a [`PathRef`], i.e. in the [`Drop`] impl
+    /// of its holder.
     fn on_drop(&self, conn: &ConnectionRef) {
         if self.ref_count.fetch_sub(1, Ordering::Relaxed) > 1 {
             return;
