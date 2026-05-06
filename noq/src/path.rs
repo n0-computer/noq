@@ -185,12 +185,13 @@ impl Path {
     }
 
     /// Sets the [`PathStatus`] of this path.
-    pub fn set_status(&self, status: PathStatus) -> Result<(), SetPathStatusError> {
+    ///
+    /// Returns the previous status of the path.
+    pub fn set_status(&self, status: PathStatus) -> Result<PathStatus, SetPathStatusError> {
         self.conn
             .lock_and_wake("set path status")
             .inner
-            .set_path_status(self.id, status)?;
-        Ok(())
+            .set_path_status(self.id, status)
     }
 
     /// Returns the [`PathStats`] for this path.
