@@ -1419,6 +1419,51 @@ fn abandon_path_data_continues() -> TestResult {
     Ok(())
 }
 
+/// Regression test: a NewIdentifiers reply arriving after a path is abandoned
+/// must not result in the frames being queued for transmission in
+/// `pending.new_cids`.
+#[test]
+fn new_identifiers_after_abandon_does_not_panic() -> TestResult {
+    use crate::shared::{ConnectionEvent, ConnectionEventInner, IssuedCid};
+    use crate::token::ResetToken;
+
+    let _guard = subscribe();
+    let mut pair = multipath_pair();
+
+    // A second path is needed so close_path(0) is not the last open path.
+    let server_addr = pair.addrs_to_server();
+    let _path1 = pair.open_path(Client, server_addr, PathStatus::Available)?;
+    pair.drive();
+
+    let cid_seq_before = pair.conn(Client).active_local_path_cid_seq(0);
+
+    pair.close_path(Client, PathId::ZERO, 0u8.into())?;
+    pair.drive_client();
+    pair.drive_server();
+    pair.drive_client();
+
+    // Inject a NewIdentifiers reply for the just-abandoned path.
+    let synthetic_seq = cid_seq_before.1 + 1;
+    let issued = vec![IssuedCid {
+        path_id: PathId::ZERO,
+        sequence: synthetic_seq,
+        id: ConnectionId::new(&[0xAAu8; 8]),
+        reset_token: ResetToken::from([0u8; crate::RESET_TOKEN_SIZE]),
+    }];
+    let late_event = ConnectionEvent(ConnectionEventInner::NewIdentifiers(
+        issued, pair.time, 8, None,
+    ));
+    pair.handle_event(Client, late_event);
+
+    // The CID must not have been added to local_cid_state, otherwise it would be
+    // queued in `pending.new_cids` and later sent as a NEW_CONNECTION_ID frame
+    // for an abandoned path.
+    let cid_seq_after = pair.conn(Client).active_local_path_cid_seq(0);
+    assert_eq!(cid_seq_before, cid_seq_after);
+
+    Ok(())
+}
+
 /// Ported from picoquic `multipath_test_ab1`. Abandon + reopen cycle, 3 rounds.
 #[test]
 fn abandon_cycle() -> TestResult {
@@ -1669,6 +1714,61 @@ fn test_simple_nat_traveral_opens_path() -> TestResult {
     assert_matches!(pair.poll(Client), None);
     assert_matches!(pair.poll(Server), None);
 
+    pair.drive();
+
+    let event = pair.poll(Client).expect("should have event");
+    assert_matches!(event, Event::Path(PathEvent::Opened { .. }));
+
+    let event = pair.poll(Server).expect("should have event");
+    assert_matches!(event, Event::Path(PathEvent::Opened { .. }));
+
+    Ok(())
+}
+
+/// Test that a PATH_CHALLENGE is added to a PATH_RESPONSE for NAT traversal.
+#[test]
+fn test_simple_nat_traversal_challenge_with_response() -> TestResult {
+    let _guard = subscribe();
+    let mut pair = multipath_pair_with_nat_traversal(true);
+
+    info!("setting routes, adding addrs");
+    pair.routes = Some(Box::new(SimpleFirewallRoutingTable::new()));
+    pair.add_nat_traversal_address(Server, SimpleFirewallRoutingTable::SERVER_FW_ADDR)?;
+    pair.add_nat_traversal_address(Client, SimpleFirewallRoutingTable::CLIENT_FW_ADDR)?;
+    pair.drive();
+
+    let event = pair.poll(Client).expect("should have event");
+    assert_matches!(
+        event,
+        Event::NatTraversal(n0_nat_traversal::Event::AddressAdded(_))
+    );
+
+    info!("init NAT traversal");
+    pair.initiate_nat_traversal_round(Client)?;
+
+    // Ensure we have no more events queued
+    assert_matches!(pair.poll(Client), None);
+    assert_matches!(pair.poll(Server), None);
+
+    // Client sends probe (blocked) + REACH_OUT, server send probe. Both firewalls open.
+    pair.step();
+
+    // Client receives probe, includes its own challenge with the response.
+    let stats0 = pair.stats(Client);
+    pair.step();
+    let stats1 = pair.stats(Client);
+
+    // Without the challenge-with-response only a PATH_RESPONSE would have been sent.
+    assert_eq!(
+        stats1.frame_tx.path_response - stats0.frame_tx.path_response,
+        1
+    );
+    assert_eq!(
+        stats1.frame_tx.path_challenge - stats0.frame_tx.path_challenge,
+        1
+    );
+
+    // Continue till the end.
     pair.drive();
 
     let event = pair.poll(Client).expect("should have event");

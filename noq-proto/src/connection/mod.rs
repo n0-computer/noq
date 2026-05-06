@@ -2016,11 +2016,8 @@ impl Connection {
         let cid_queue = self.remote_cids.get_mut(&path_id)?;
         let (token, network_path) = path.path_responses.pop_off_path(path.network_path)?;
 
-        let cid = cid_queue
-            .next_reserved()
-            .unwrap_or_else(|| cid_queue.active());
-        // TODO(@divma): we should take a different approach when there is no fresh CID to use.
-        // https://github.com/quinn-rs/quinn/issues/2184
+        // TODO: make off-path probes unlinkable.
+        let cid = cid_queue.active();
 
         let frame = frame::PathResponse(token);
 
@@ -2030,6 +2027,23 @@ impl Connection {
         let mut builder = PacketBuilder::new(now, SpaceId::Data, path_id, cid, buf, self)?;
         let stats = &mut self.path_stats.for_path(path_id).frame_tx;
         builder.write_frame_with_log_msg(frame, stats, Some("(off-path)"));
+
+        // If we are a client doing NAT traversal, always include a PATH_CHALLENGE with any
+        // off-path PATH_RESPONSE. No need to schedule any retries for this, if NAT
+        // traversal is taking place then this remote already is being probed with
+        // retries, this only speeds up a successful traversal.
+        if self
+            .find_validated_path_on_network_path(network_path)
+            .is_none()
+            && self.n0_nat_traversal.client_side().is_ok()
+        {
+            let token = self.rng.random();
+            let stats = &mut self.path_stats.for_path(path_id).frame_tx;
+            builder.write_frame(frame::PathChallenge(token), stats);
+            let ip_port = (network_path.remote.ip(), network_path.remote.port());
+            self.n0_nat_traversal.mark_probe_sent(ip_port, token);
+        }
+
         // Off-path: not tracked in congestion control. The packet is sent to a
         // different destination than path_id's network path.
         builder.pad_to(MIN_INITIAL_SIZE);
@@ -2094,15 +2108,14 @@ impl Connection {
         builder.finish(self, now);
 
         // Mark as sent after packet build succeeds.
-        self.n0_nat_traversal
-            .mark_probe_sent((remote.ip(), remote.port()), token);
+        self.n0_nat_traversal.mark_probe_sent(remote, token);
 
         let size = buf.len();
         self.path_stats.for_path(path_id).udp_tx.on_sent(1, size);
 
         trace!(dst = ?remote, len = buf.len(), "sending off-path NAT probe");
         Some(Transmit {
-            destination: remote,
+            destination: remote.into(),
             size,
             ecn: None,
             segment_size: None,
@@ -2221,6 +2234,24 @@ impl Connection {
             NewIdentifiers(ids, now, cid_len, cid_lifetime) => {
                 let path_id = ids.first().map(|issued| issued.path_id).unwrap_or_default();
                 debug_assert!(ids.iter().all(|issued| issued.path_id == path_id));
+
+                // Path may have been abandoned while this reply was in flight,
+                // retire the CIDs instead of queuing them.
+                if self.abandoned_paths.contains(&path_id) {
+                    if !self.state.is_drained() {
+                        for issued in &ids {
+                            self.endpoint_events
+                                .push_back(EndpointEventInner::RetireConnectionId(
+                                    now,
+                                    path_id,
+                                    issued.sequence,
+                                    false,
+                                ));
+                        }
+                    }
+                    return;
+                }
+
                 let cid_state = self
                     .local_cid_state
                     .entry(path_id)
@@ -2416,9 +2447,10 @@ impl Connection {
                         }
                     }
                     ConnTimer::NatTraversalProbeRetry => {
-                        if self.n0_nat_traversal.queue_retries(self.is_ipv6()) {
-                            let delay =
-                                RttEstimator::new(self.config.initial_rtt).pto_base() * 2 / 3;
+                        self.n0_nat_traversal.queue_retries(self.is_ipv6());
+                        if let Some(delay) =
+                            self.n0_nat_traversal.retry_delay(self.config.initial_rtt)
+                        {
                             self.timers.set(
                                 Timer::Conn(ConnTimer::NatTraversalProbeRetry),
                                 now + delay,
@@ -3692,7 +3724,10 @@ impl Connection {
         // be reset and will delay detecting the path as idle. However tail-loss probes
         // would still not get acknowledged if the path was broken so eventually the path
         // would still become idle.
-        let is_on_path = *remote == self.path_data(path_id).network_path;
+        let is_on_path = self
+            .path_data(path_id)
+            .network_path
+            .is_probably_same_path(remote);
 
         self.total_authed_packets += 1;
         self.reset_keep_alive(path_id, now);
@@ -4215,18 +4250,29 @@ impl Connection {
                     return;
                 }
             }
-            Ok((packet, number)) => {
+            Ok((packet, pn)) => {
                 // We received an authenticated packet and decrypted it.
-                qlog.header(&packet.header, number, path_id);
-                let span = match number {
+                qlog.header(&packet.header, pn, path_id);
+                let span = match pn {
                     Some(pn) => trace_span!("recv", space = ?packet.header.space(), pn),
                     None => trace_span!("recv", space = ?packet.header.space()),
                 };
                 let _guard = span.enter();
 
-                // Now the packet is authenticated we do the migration during the
-                // handshake. See Handshake::allow_server_migration for details.
-                if self.is_handshaking() && network_path != self.path_data_mut(path_id).network_path
+                // Now the packet is authenticated we do the migration during the handshake,
+                // see Handshake::allow_server_migration for details.  Be careful here to
+                // not yet rely on the path existing however, new paths are accepted and
+                // created later.
+                // Note that we can't do any other migrations yet, for those we need to know
+                // whether this was a probing packet or not. See the end of
+                // Self::process_packet for that.
+                if self.is_handshaking()
+                    && self
+                        .path(path_id)
+                        .map(|path_data| {
+                            !path_data.network_path.is_probably_same_path(&network_path)
+                        })
+                        .unwrap_or(false)
                 {
                     if let Some(hs) = self.state.as_handshake()
                         && hs.allow_server_migration
@@ -4239,7 +4285,11 @@ impl Connection {
                         self.path_data_mut(path_id).network_path = network_path;
                         self.qlog.emit_tuple_assigned(path_id, network_path, now);
                     } else {
-                        debug!("discarding packet with unexpected remote during handshake");
+                        debug!(
+                            recv_path = %network_path,
+                            expected_path = %self.path_data_mut(path_id).network_path,
+                            "discarding packet with unexpected remote during handshake",
+                        );
                         return;
                     }
                 }
@@ -4247,7 +4297,7 @@ impl Connection {
                 let dedup = self.spaces[packet.header.space()]
                     .path_space_mut(path_id)
                     .map(|pns| &mut pns.dedup);
-                if number.zip(dedup).is_some_and(|(n, d)| d.insert(n)) {
+                if pn.zip(dedup).is_some_and(|(n, d)| d.insert(n)) {
                     debug!("discarding possible duplicate packet");
                     self.qlog.emit_packet_received(qlog, now);
                     return;
@@ -4278,7 +4328,7 @@ impl Connection {
 
                         if self.side().is_server() && !self.abandoned_paths.contains(&path_id) {
                             // Only the client is allowed to open paths
-                            self.ensure_path(path_id, network_path, now, number);
+                            self.ensure_path(path_id, network_path, now, pn);
                         }
                         if self.paths.contains_key(&path_id) {
                             self.on_packet_authenticated(
@@ -4286,7 +4336,7 @@ impl Connection {
                                 packet.header.space(),
                                 path_id,
                                 ecn,
-                                number,
+                                pn,
                                 spin,
                                 packet.header.is_1rtt(),
                                 &network_path,
@@ -4298,7 +4348,7 @@ impl Connection {
                         now,
                         network_path,
                         path_id,
-                        number,
+                        pn,
                         packet,
                         &mut qlog,
                     );
@@ -5066,7 +5116,7 @@ impl Connection {
                     }
                     let path_id = path_id.unwrap_or_default();
                     match self.local_cid_state.get_mut(&path_id) {
-                        None => error!(?path_id, "RETIRE_CONNECTION_ID for unknown path"),
+                        None => debug!(?path_id, "RETIRE_CONNECTION_ID for unknown path"),
                         Some(cid_state) => {
                             let allow_more_cids = cid_state
                                 .on_cid_retirement(sequence, self.peer_params.issue_cids_limit())?;
@@ -5272,7 +5322,7 @@ impl Connection {
                     }
 
                     let path = self.path_data_mut(path_id);
-                    if network_path == path.network_path {
+                    if path.network_path.is_probably_same_path(&network_path) {
                         if let Some(updated) = path.update_observed_addr_report(observed)
                             && path.open_status == paths::OpenStatus::Informed
                         {
@@ -5486,12 +5536,15 @@ impl Connection {
 
                     if server_state.current_round() > round_before {
                         // A new round was started, reset the NAT probe retry timer.
-                        let delay = RttEstimator::new(self.config.initial_rtt).pto_base() * 2 / 3;
-                        self.timers.set(
-                            Timer::Conn(ConnTimer::NatTraversalProbeRetry),
-                            now + delay,
-                            self.qlog.with_time(now),
-                        );
+                        if let Some(delay) =
+                            self.n0_nat_traversal.retry_delay(self.config.initial_rtt)
+                        {
+                            self.timers.set(
+                                Timer::Conn(ConnTimer::NatTraversalProbeRetry),
+                                now + delay,
+                                self.qlog.with_time(now),
+                            );
+                        }
                     }
                 }
             }
@@ -6359,11 +6412,15 @@ impl Connection {
             let Some(issued) = space.pending.new_cids.pop() else {
                 break;
             };
-            let retire_prior_to = self
-                .local_cid_state
-                .get(&issued.path_id)
-                .map(|cid_state| cid_state.retire_prior_to())
-                .unwrap_or_else(|| panic!("missing local CID state for path={}", issued.path_id));
+            // Path was discarded after this CID was queued, drop.
+            let Some(cid_state) = self.local_cid_state.get(&issued.path_id) else {
+                debug!(
+                    path = %issued.path_id, seq = issued.sequence,
+                    "dropping queued NEW_CONNECTION_ID for discarded path",
+                );
+                continue;
+            };
+            let retire_prior_to = cid_state.retire_prior_to();
 
             let cid_path_id = match is_multipath_negotiated {
                 true => Some(issued.path_id),
@@ -6612,7 +6669,7 @@ impl Connection {
         }
         self.ack_frequency.peer_max_ack_delay = get_max_ack_delay(&params);
 
-        let mut multipath_enabled = None;
+        let mut multipath_enabled = false;
         if let (Some(local_max_path_id), Some(remote_max_path_id)) = (
             self.config.get_initial_max_path_id(),
             params.initial_max_path_id,
@@ -6622,7 +6679,7 @@ impl Connection {
             self.remote_max_path_id = remote_max_path_id;
             let initial_max_path_id = local_max_path_id.min(remote_max_path_id);
             debug!(%initial_max_path_id, "multipath negotiated");
-            multipath_enabled = Some(initial_max_path_id);
+            multipath_enabled = true;
         }
 
         if let Some((max_locally_allowed_remote_addresses, max_remotely_allowed_remote_addresses)) =
@@ -6630,9 +6687,7 @@ impl Connection {
                 .max_remote_nat_traversal_addresses
                 .zip(params.max_remote_nat_traversal_addresses)
         {
-            if let Some(max_initial_paths) =
-                multipath_enabled.map(|path_id| path_id.saturating_add(1u8))
-            {
+            if multipath_enabled {
                 let max_local_addresses = max_remotely_allowed_remote_addresses.get();
                 let max_remote_addresses = max_locally_allowed_remote_addresses.get();
                 self.n0_nat_traversal = n0_nat_traversal::State::new(
@@ -6644,28 +6699,6 @@ impl Connection {
                     %max_remote_addresses, %max_local_addresses,
                     "n0's nat traversal negotiated"
                 );
-
-                match self.side() {
-                    Side::Client => {
-                        if max_initial_paths.as_u32() < max_remote_addresses as u32 + 1 {
-                            // in this case the client might try to open `max_remote_addresses` new
-                            // paths, but the current multipath configuration will not allow it
-                            debug!(%max_initial_paths, %max_remote_addresses, "local client configuration might cause nat traversal issues")
-                        } else if max_local_addresses as u64
-                            > params.active_connection_id_limit.into_inner()
-                        {
-                            // the server allows us to send at most `params.active_connection_id_limit`
-                            // but they might need at least `max_local_addresses` to effectively send
-                            // `PATH_CHALLENGE` frames to each advertised local address
-                            debug!(%max_local_addresses, remote_cid_limit=%params.active_connection_id_limit.into_inner(), "remote server configuration might cause nat traversal issues")
-                        }
-                    }
-                    Side::Server => {
-                        if (max_initial_paths.as_u32() as u64) < crate::LOCAL_CID_COUNT {
-                            debug!(%max_initial_paths, local_cid_limit=%crate::LOCAL_CID_COUNT, "local server configuration might cause nat traversal issues")
-                        }
-                    }
-                }
             } else {
                 debug!("n0 nat traversal enabled for both endpoints, but multipath is missing")
             }
@@ -7108,8 +7141,7 @@ impl Connection {
         let client_state = self.n0_nat_traversal.client_side_mut()?;
         let (mut reach_out_frames, probed_addrs) =
             client_state.initiate_nat_traversal_round(ipv6)?;
-        if !probed_addrs.is_empty() {
-            let delay = RttEstimator::new(self.config.initial_rtt).pto_base() * 2 / 3;
+        if let Some(delay) = self.n0_nat_traversal.retry_delay(self.config.initial_rtt) {
             self.timers.set(
                 Timer::Conn(ConnTimer::NatTraversalProbeRetry),
                 now + delay,
