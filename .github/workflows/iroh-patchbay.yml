@@ -50,6 +50,14 @@ jobs:
       - name: Patch noq crates in iroh workspace
         working-directory: iroh
         run: |
+          # Delete any pre-existing trailing patch section. This
+          # assumes the patch section is trailing and the only reason
+          # there would be any patch is because of noq. Could be
+          # smarter.
+          mv Cargo.toml Cargo.toml.in
+          awk 'BEGIN { in_patch = 0 }; /\[patch\.crates-io\]/ { in_patch = 1 }; !in_patch { print }' Cargo.toml.in > Cargo.toml
+
+          # Add our own patch section.
           cat >> Cargo.toml <<'EOF'
 
           [patch.crates-io]
