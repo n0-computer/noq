@@ -558,8 +558,8 @@ impl Connection {
 
     /// Wait for the connection to be closed without keeping a strong reference to the connection
     ///
-    /// Returns a future that resolves, once the connection is closed, to a tuple of
-    /// ([`ConnectionError`], [`ConnectionStats`]).
+    /// Returns a future that resolves, once the connection is closed, to a [`Closed`] struct
+    /// describing the close reason and final connection and per-path statistics.
     ///
     /// Calling [`Self::closed`] keeps the connection alive until it is either closed locally via [`Connection::close`]
     /// or closed by the remote peer. This function instead does not keep the connection itself alive,
@@ -568,9 +568,9 @@ impl Connection {
     pub fn on_closed(&self) -> OnClosed {
         let (tx, rx) = oneshot::channel();
         let mut state = self.0.lock_without_waking("on_closed");
-        if let Some(error) = &state.error {
+        if let Some(reason) = state.error.clone() {
             // Connection already closed, send immediately
-            let _ = tx.send((error.clone(), state.inner.stats()));
+            let _ = tx.send(Closed::new(&mut state, reason));
         } else {
             state.on_closed.push(tx);
         }
@@ -1156,11 +1156,63 @@ impl Future for SendDatagram<'_> {
     }
 }
 
+/// State of a [`Connection`] at the moment it was closed.
+///
+/// Returned by the [`OnClosed`] future from [`Connection::on_closed`].
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct Closed {
+    /// The reason the connection was closed.
+    pub reason: ConnectionError,
+    /// Aggregate connection statistics at the moment of close.
+    pub stats: ConnectionStats,
+    /// Per-path statistics for every path the connection knew about at close time.
+    ///
+    /// This includes paths that haven't been discarded at close time, plus any
+    /// already-discarded paths whose final stats had been retained because a [`Path`]
+    /// or [`WeakPathHandle`] handle was kept alive.
+    ///
+    /// [`WeakPathHandle`]: crate::WeakPathHandle
+    pub path_stats: Vec<(PathId, PathStats)>,
+}
+
+impl Closed {
+    /// Snapshot the current connection state into a [`Closed`] value.
+    ///
+    /// Must only be called once `state.error` has been set.
+    pub(crate) fn new(state: &mut State, reason: ConnectionError) -> Self {
+        let stats = state.inner.stats();
+
+        let non_discarded_paths = state.inner.paths();
+        let mut path_stats =
+            Vec::with_capacity(non_discarded_paths.len() + state.final_path_stats.len());
+
+        // Non-discarded paths are tracked by proto::Connection.
+        path_stats.extend(
+            non_discarded_paths
+                .into_iter()
+                .filter_map(|id| state.inner.path_stats(id).map(|stats| (id, stats))),
+        );
+        // Already-discarded paths whose final stats we kept around.
+        path_stats.extend(
+            state
+                .final_path_stats
+                .iter()
+                .map(|(id, stats)| (*id, *stats)),
+        );
+        Self {
+            reason,
+            stats,
+            path_stats,
+        }
+    }
+}
+
 /// Future returned by [`Connection::on_closed`]
 ///
-/// Resolves to a tuple of ([`ConnectionError`], [`ConnectionStats`]).
+/// Resolves to [`Closed`].
 pub struct OnClosed {
-    rx: oneshot::Receiver<(ConnectionError, ConnectionStats)>,
+    rx: oneshot::Receiver<Closed>,
     conn: WeakConnectionHandle,
 }
 
@@ -1180,7 +1232,7 @@ impl Drop for OnClosed {
 }
 
 impl Future for OnClosed {
-    type Output = (ConnectionError, ConnectionStats);
+    type Output = Closed;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
@@ -1380,7 +1432,7 @@ pub(crate) struct State {
     /// last report across all paths.
     pub(crate) observed_external_addr: watch::Sender<Option<SocketAddr>>,
     pub(crate) nat_traversal_updates: tokio::sync::broadcast::Sender<n0_nat_traversal::Event>,
-    on_closed: Vec<oneshot::Sender<(ConnectionError, ConnectionStats)>>,
+    on_closed: Vec<oneshot::Sender<Closed>>,
 }
 
 impl State {
@@ -1700,9 +1752,11 @@ impl State {
         shared.closed.notify_waiters();
 
         // Send to the registered on_closed futures.
-        let stats = self.inner.stats();
-        for tx in self.on_closed.drain(..) {
-            tx.send((reason.clone(), stats.clone())).ok();
+        if !self.on_closed.is_empty() {
+            let closed = Closed::new(self, reason);
+            for tx in self.on_closed.drain(..) {
+                tx.send(closed.clone()).ok();
+            }
         }
     }
 
@@ -1770,12 +1824,13 @@ impl Drop for State {
                 .send((self.handle, proto::EndpointEvent::drained()));
         }
 
-        if !self.on_closed.is_empty() {
+        if !self.on_closed.is_empty()
+            && let Some(reason) = self.error.clone()
+        {
             // Ensure that all on_closed oneshot senders are triggered before dropping.
-            let reason = self.error.as_ref().expect("closed without error reason");
-            let stats = self.inner.stats();
+            let closed = Closed::new(self, reason);
             for tx in self.on_closed.drain(..) {
-                tx.send((reason.clone(), stats.clone())).ok();
+                tx.send(closed.clone()).ok();
             }
         }
     }

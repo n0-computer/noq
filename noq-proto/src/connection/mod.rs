@@ -3709,7 +3709,10 @@ impl Connection {
         // be reset and will delay detecting the path as idle. However tail-loss probes
         // would still not get acknowledged if the path was broken so eventually the path
         // would still become idle.
-        let is_on_path = *remote == self.path_data(path_id).network_path;
+        let is_on_path = self
+            .path_data(path_id)
+            .network_path
+            .is_probably_same_path(remote);
 
         self.total_authed_packets += 1;
         self.reset_keep_alive(path_id, now);
@@ -4232,18 +4235,29 @@ impl Connection {
                     return;
                 }
             }
-            Ok((packet, number)) => {
+            Ok((packet, pn)) => {
                 // We received an authenticated packet and decrypted it.
-                qlog.header(&packet.header, number, path_id);
-                let span = match number {
+                qlog.header(&packet.header, pn, path_id);
+                let span = match pn {
                     Some(pn) => trace_span!("recv", space = ?packet.header.space(), pn),
                     None => trace_span!("recv", space = ?packet.header.space()),
                 };
                 let _guard = span.enter();
 
-                // Now the packet is authenticated we do the migration during the
-                // handshake. See Handshake::allow_server_migration for details.
-                if self.is_handshaking() && network_path != self.path_data_mut(path_id).network_path
+                // Now the packet is authenticated we do the migration during the handshake,
+                // see Handshake::allow_server_migration for details.  Be careful here to
+                // not yet rely on the path existing however, new paths are accepted and
+                // created later.
+                // Note that we can't do any other migrations yet, for those we need to know
+                // whether this was a probing packet or not. See the end of
+                // Self::process_packet for that.
+                if self.is_handshaking()
+                    && self
+                        .path(path_id)
+                        .map(|path_data| {
+                            !path_data.network_path.is_probably_same_path(&network_path)
+                        })
+                        .unwrap_or(false)
                 {
                     if let Some(hs) = self.state.as_handshake()
                         && hs.allow_server_migration
@@ -4256,7 +4270,11 @@ impl Connection {
                         self.path_data_mut(path_id).network_path = network_path;
                         self.qlog.emit_tuple_assigned(path_id, network_path, now);
                     } else {
-                        debug!("discarding packet with unexpected remote during handshake");
+                        debug!(
+                            recv_path = %network_path,
+                            expected_path = %self.path_data_mut(path_id).network_path,
+                            "discarding packet with unexpected remote during handshake",
+                        );
                         return;
                     }
                 }
@@ -4264,7 +4282,7 @@ impl Connection {
                 let dedup = self.spaces[packet.header.space()]
                     .path_space_mut(path_id)
                     .map(|pns| &mut pns.dedup);
-                if number.zip(dedup).is_some_and(|(n, d)| d.insert(n)) {
+                if pn.zip(dedup).is_some_and(|(n, d)| d.insert(n)) {
                     debug!("discarding possible duplicate packet");
                     self.qlog.emit_packet_received(qlog, now);
                     return;
@@ -4295,7 +4313,7 @@ impl Connection {
 
                         if self.side().is_server() && !self.abandoned_paths.contains(&path_id) {
                             // Only the client is allowed to open paths
-                            self.ensure_path(path_id, network_path, now, number);
+                            self.ensure_path(path_id, network_path, now, pn);
                         }
                         if self.paths.contains_key(&path_id) {
                             self.on_packet_authenticated(
@@ -4303,7 +4321,7 @@ impl Connection {
                                 packet.header.space(),
                                 path_id,
                                 ecn,
-                                number,
+                                pn,
                                 spin,
                                 packet.header.is_1rtt(),
                                 &network_path,
@@ -4315,7 +4333,7 @@ impl Connection {
                         now,
                         network_path,
                         path_id,
-                        number,
+                        pn,
                         packet,
                         &mut qlog,
                     );
@@ -5289,7 +5307,7 @@ impl Connection {
                     }
 
                     let path = self.path_data_mut(path_id);
-                    if network_path == path.network_path {
+                    if path.network_path.is_probably_same_path(&network_path) {
                         if let Some(updated) = path.update_observed_addr_report(observed)
                             && path.open_status == paths::OpenStatus::Informed
                         {
@@ -6633,7 +6651,7 @@ impl Connection {
         }
         self.ack_frequency.peer_max_ack_delay = get_max_ack_delay(&params);
 
-        let mut multipath_enabled = None;
+        let mut multipath_enabled = false;
         if let (Some(local_max_path_id), Some(remote_max_path_id)) = (
             self.config.get_initial_max_path_id(),
             params.initial_max_path_id,
@@ -6643,7 +6661,7 @@ impl Connection {
             self.remote_max_path_id = remote_max_path_id;
             let initial_max_path_id = local_max_path_id.min(remote_max_path_id);
             debug!(%initial_max_path_id, "multipath negotiated");
-            multipath_enabled = Some(initial_max_path_id);
+            multipath_enabled = true;
         }
 
         if let Some((max_locally_allowed_remote_addresses, max_remotely_allowed_remote_addresses)) =
@@ -6651,9 +6669,7 @@ impl Connection {
                 .max_remote_nat_traversal_addresses
                 .zip(params.max_remote_nat_traversal_addresses)
         {
-            if let Some(max_initial_paths) =
-                multipath_enabled.map(|path_id| path_id.saturating_add(1u8))
-            {
+            if multipath_enabled {
                 let max_local_addresses = max_remotely_allowed_remote_addresses.get();
                 let max_remote_addresses = max_locally_allowed_remote_addresses.get();
                 self.n0_nat_traversal = n0_nat_traversal::State::new(
@@ -6665,28 +6681,6 @@ impl Connection {
                     %max_remote_addresses, %max_local_addresses,
                     "n0's nat traversal negotiated"
                 );
-
-                match self.side() {
-                    Side::Client => {
-                        if max_initial_paths.as_u32() < max_remote_addresses as u32 + 1 {
-                            // in this case the client might try to open `max_remote_addresses` new
-                            // paths, but the current multipath configuration will not allow it
-                            debug!(%max_initial_paths, %max_remote_addresses, "local client configuration might cause nat traversal issues")
-                        } else if max_local_addresses as u64
-                            > params.active_connection_id_limit.into_inner()
-                        {
-                            // the server allows us to send at most `params.active_connection_id_limit`
-                            // but they might need at least `max_local_addresses` to effectively send
-                            // `PATH_CHALLENGE` frames to each advertised local address
-                            debug!(%max_local_addresses, remote_cid_limit=%params.active_connection_id_limit.into_inner(), "remote server configuration might cause nat traversal issues")
-                        }
-                    }
-                    Side::Server => {
-                        if (max_initial_paths.as_u32() as u64) < crate::LOCAL_CID_COUNT {
-                            debug!(%max_initial_paths, local_cid_limit=%crate::LOCAL_CID_COUNT, "local server configuration might cause nat traversal issues")
-                        }
-                    }
-                }
             } else {
                 debug!("n0 nat traversal enabled for both endpoints, but multipath is missing")
             }
