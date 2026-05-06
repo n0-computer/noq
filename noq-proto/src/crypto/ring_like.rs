@@ -15,7 +15,7 @@ impl crypto::HmacKey for hmac::Key {
     }
 
     fn verify(&self, data: &[u8], signature: &[u8]) -> Result<(), CryptoError> {
-        Ok(hmac::verify(self, data, signature).map_err(|_| CryptoError)?)
+        hmac::verify(self, data, signature).map_err(|_| CryptoError)
     }
 }
 
