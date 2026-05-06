@@ -748,7 +748,7 @@ impl RecoveryMetrics {
                 .map(|rtt| rtt.as_micros() as f32 / 1000.0),
             rtt_variance: updated
                 .rtt_variance
-                .map(|rtt| rtt.as_micros() as f32 / 1000),
+                .map(|rtt| rtt.as_micros() as f32 / 1000.0),
             pto_count: updated
                 .pto_count
                 .map(|count| count.try_into().unwrap_or(u16::MAX)),
