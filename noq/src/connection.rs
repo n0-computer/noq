@@ -24,7 +24,7 @@ use crate::{
     ConnectionEvent, Duration, Instant, Path, VarInt,
     endpoint::ensure_ipv6,
     mutex::{Mutex, MutexGuard},
-    path::OpenPath,
+    path::{OpenPath, PathRef, PathRefOwner},
     recv_stream::RecvStream,
     runtime::{AsyncTimer, Runtime, UdpSender},
     send_stream::SendStream,
@@ -1361,12 +1361,13 @@ pub(crate) struct State {
     open_path: FxHashMap<PathId, watch::Sender<Result<(), PathError>>>,
     /// Tracks reference counts for paths.
     ///
-    /// I.e. how many [`Path`] and [`WeakPathHandle`] structs are alive for a path. Each
-    /// entry's [`PathRef`] holds an [`AtomicUsize`] so that cloning or dropping a [`Path`]
-    /// or [`WeakPathHandle`] does not need to lock this state.
+    /// I.e. how many [`Path`] and [`WeakPathHandle`] structs are alive for a path.
+    /// Each entry's [`PathRefOwner`] holds an [`AtomicUsize`] so that cloning or
+    /// dropping a [`PathRef`] (held by [`Path`] or [`WeakPathHandle`]) does not need
+    /// to lock this state.
     ///
     /// [`WeakPathHandle`]: crate::path::WeakPathHandle
-    pub(crate) path_refs: FxHashMap<PathId, Arc<PathRef>>,
+    pub(crate) path_refs: FxHashMap<PathId, PathRefOwner>,
     /// Final path stats for discarded paths.
     ///
     /// We only insert entries if the discarded path has a non-zero reference count in [`Self::path_refs`].
@@ -1740,32 +1741,16 @@ impl State {
             .or_else(|| self.final_path_stats.get(&path_id).copied())
     }
 
-    /// Acquire a [`PathRef`] for a path id, bumping its reference counter by 1.
+    /// Acquire a new [`PathRef`] for a path id, bumping its reference counter by 1.
     ///
-    /// The returned [`Arc`] is shared with the entry stored in [`Self::path_refs`].
-    /// Callers must own the returned reference for the lifetime of the [`Path`] or
-    /// [`WeakPathHandle`] it backs, and decrement the counter on drop.
+    /// The returned [`PathRef`] is intended to be stored on a [`Path`] or [`WeakPathHandle`].
+    /// Its reference count is automatically increased when cloned. When its owner is dropped,
+    /// [`PathRef::on_drop`] must be called to decrement the refcount.
     ///
     /// [`WeakPathHandle`]: crate::path::WeakPathHandle
-    pub(crate) fn acquire_path_ref(&mut self, path_id: PathId) -> Arc<PathRef> {
-        let path_ref = self.path_refs.entry(path_id).or_default().clone();
-        path_ref.ref_count.fetch_add(1, Ordering::Relaxed);
-        path_ref
+    pub(crate) fn acquire_path_ref(&mut self, path_id: PathId) -> PathRef {
+        self.path_refs.entry(path_id).or_default().acquire(path_id)
     }
-}
-
-/// Reference counter for live [`Path`] and [`WeakPathHandle`] handles for a single path id.
-///
-/// The counter is stored as an [`AtomicUsize`] so that cloning or dropping a [`Path`] or
-/// [`WeakPathHandle`] only needs to bump or decrement an atomic, instead of locking the
-/// connection state. The state lock is taken only when allocating the entry (on first
-/// construction) or when the count drops to zero, so the entry can be removed and any
-/// cached final path stats can be released.
-///
-/// [`WeakPathHandle`]: crate::path::WeakPathHandle
-#[derive(Debug, Default)]
-pub(crate) struct PathRef {
-    pub(crate) ref_count: AtomicUsize,
 }
 
 impl Drop for State {

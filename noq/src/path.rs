@@ -2,7 +2,7 @@ use std::future::Future;
 use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll, ready};
 use std::time::Duration;
 
@@ -13,7 +13,7 @@ use proto::{
 use tokio::sync::watch;
 use tokio_stream::{Stream, wrappers::WatchStream};
 
-use crate::connection::{ConnectionRef, PathRef};
+use crate::connection::ConnectionRef;
 use crate::{Runtime, WeakConnectionHandle};
 
 /// Future produced by [`crate::Connection::open_path`]
@@ -110,31 +110,10 @@ impl Future for OpenPath {
 /// [`PathStats`] for this path are not dropped even after the path is abandoned.
 ///
 /// [`WeakPathHandle`]: crate::path::WeakPathHandle
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Path {
-    id: PathId,
     conn: ConnectionRef,
-    path_ref: Arc<PathRef>,
-}
-
-impl Clone for Path {
-    fn clone(&self) -> Self {
-        self.path_ref.ref_count.fetch_add(1, Ordering::Relaxed);
-        Self {
-            id: self.id,
-            conn: self.conn.clone(),
-            path_ref: self.path_ref.clone(),
-        }
-    }
-}
-
-impl Drop for Path {
-    fn drop(&mut self) {
-        if self.path_ref.ref_count.fetch_sub(1, Ordering::Relaxed) > 1 {
-            return;
-        }
-        clear_path_state(&self.conn, self.id, &self.path_ref);
-    }
+    path_ref: PathRef,
 }
 
 impl Path {
@@ -147,7 +126,6 @@ impl Path {
             state.acquire_path_ref(id)
         };
         Some(Self {
-            id,
             conn: conn.clone(),
             path_ref,
         })
@@ -158,7 +136,7 @@ impl Path {
         let path_ref = conn
             .lock_without_waking("Path::new_unchecked")
             .acquire_path_ref(id);
-        Self { id, conn, path_ref }
+        Self { conn, path_ref }
     }
 
     /// Returns a [`WeakPathHandle`] for this path.
@@ -167,17 +145,15 @@ impl Path {
     /// path's stats are not dropped until the underlying connection is dropped, even if the
     /// path is abandoned.
     pub fn weak_handle(&self) -> WeakPathHandle {
-        self.path_ref.ref_count.fetch_add(1, Ordering::Relaxed);
         WeakPathHandle {
-            id: self.id,
-            conn: self.conn.weak_handle(),
             path_ref: self.path_ref.clone(),
+            conn: self.conn.weak_handle(),
         }
     }
 
     /// The [`PathId`] of this path.
     pub fn id(&self) -> PathId {
-        self.id
+        self.path_ref.id
     }
 
     /// The current local [`PathStatus`] of this path.
@@ -185,7 +161,7 @@ impl Path {
         self.conn
             .lock_without_waking("path status")
             .inner
-            .path_status(self.id)
+            .path_status(self.id())
     }
 
     /// Sets the [`PathStatus`] of this path.
@@ -193,7 +169,7 @@ impl Path {
         self.conn
             .lock_and_wake("set path status")
             .inner
-            .set_path_status(self.id, status)?;
+            .set_path_status(self.id(), status)?;
         Ok(())
     }
 
@@ -209,7 +185,7 @@ impl Path {
         // - Therefore, we always get stats here.
         self.conn
             .lock_without_waking("Path::stats")
-            .path_stats(self.id)
+            .path_stats(self.id())
             .expect("either path stats or discarded path stats are always set as long as Path is not dropped")
     }
 
@@ -222,7 +198,7 @@ impl Path {
         let mut state = self.conn.lock_and_wake("close_path");
         state.inner.close_path(
             crate::Instant::now(),
-            self.id,
+            self.id(),
             TransportErrorCode::APPLICATION_ABANDON_PATH.into(),
         )
     }
@@ -240,7 +216,9 @@ impl Path {
     ) -> Result<Option<Duration>, ClosedPath> {
         let mut state = self.conn.lock_and_wake("path_set_max_idle_timeout");
         let now = state.runtime.now();
-        state.inner.set_path_max_idle_timeout(now, self.id, timeout)
+        state
+            .inner
+            .set_path_max_idle_timeout(now, self.id(), timeout)
     }
 
     /// Sets the keep_alive_interval for a specific path
@@ -255,7 +233,9 @@ impl Path {
         interval: Option<Duration>,
     ) -> Result<Option<Duration>, ClosedPath> {
         let mut state = self.conn.lock_and_wake("path_set_keep_alive_interval");
-        state.inner.set_path_keep_alive_interval(self.id, interval)
+        state
+            .inner
+            .set_path_keep_alive_interval(self.id(), interval)
     }
 
     /// Track changes on our external address as reported by the peer.
@@ -264,9 +244,9 @@ impl Path {
     pub fn observed_external_addr(&self) -> Result<AddressDiscovery, ClosedPath> {
         let state = self.conn.lock_without_waking("per_path_observed_address");
         let path_events = state.path_events.subscribe();
-        let initial_value = state.inner.path_observed_address(self.id)?;
+        let initial_value = state.inner.path_observed_address(self.id())?;
         Ok(AddressDiscovery::new(
-            self.id,
+            self.id(),
             path_events,
             initial_value,
             state.runtime.clone(),
@@ -276,7 +256,7 @@ impl Path {
     /// The peer's UDP address for this path.
     pub fn remote_address(&self) -> Result<SocketAddr, ClosedPath> {
         let state = self.conn.lock_without_waking("per_path_remote_address");
-        Ok(state.inner.network_path(self.id)?.remote())
+        Ok(state.inner.network_path(self.id())?.remote())
     }
 
     /// The local IP used for this path, if known.
@@ -285,19 +265,25 @@ impl Path {
     /// [`noq_udp::RecvMeta::dst_ip`](udp::RecvMeta::dst_ip) for supported platforms.
     pub fn local_ip(&self) -> Result<Option<IpAddr>, ClosedPath> {
         let state = self.conn.lock_without_waking("per_path_local_ip");
-        Ok(state.inner.network_path(self.id)?.local_ip())
+        Ok(state.inner.network_path(self.id())?.local_ip())
     }
 
     /// Ping the remote endpoint over this path.
     pub fn ping(&self) -> Result<(), ClosedPath> {
         let mut state = self.conn.lock_and_wake("ping");
-        state.inner.ping_path(self.id)
+        state.inner.ping_path(self.id())
+    }
+}
+
+impl Drop for Path {
+    fn drop(&mut self) {
+        self.path_ref.on_drop(&self.conn);
     }
 }
 
 impl PartialEq for Path {
     fn eq(&self, other: &Self) -> bool {
-        self.id == other.id && self.conn.stable_id() == other.conn.stable_id()
+        self.id() == other.id() && self.conn.stable_id() == other.conn.stable_id()
     }
 }
 
@@ -309,48 +295,24 @@ impl PartialEq for Path {
 /// The [`WeakPathHandle`] can be upgraded to a [`Path`] as long as its [`Connection`] has not been dropped.
 ///
 /// [`Connection`]: crate::Connection
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct WeakPathHandle {
-    id: PathId,
     conn: WeakConnectionHandle,
-    path_ref: Arc<PathRef>,
-}
-
-impl Clone for WeakPathHandle {
-    fn clone(&self) -> Self {
-        self.path_ref.ref_count.fetch_add(1, Ordering::Relaxed);
-        Self {
-            id: self.id,
-            conn: self.conn.clone(),
-            path_ref: self.path_ref.clone(),
-        }
-    }
+    path_ref: PathRef,
 }
 
 impl PartialEq for WeakPathHandle {
     fn eq(&self, other: &Self) -> bool {
-        self.id == other.id && self.conn.is_same_connection(&other.conn)
+        self.id() == other.id() && self.conn.is_same_connection(&other.conn)
     }
 }
 
 impl Eq for WeakPathHandle {}
 
-impl Drop for WeakPathHandle {
-    fn drop(&mut self) {
-        if self.path_ref.ref_count.fetch_sub(1, Ordering::Relaxed) > 1 {
-            return;
-        }
-        let Some(conn) = self.conn.upgrade_to_ref() else {
-            return;
-        };
-        clear_path_state(&conn, self.id, &self.path_ref);
-    }
-}
-
 impl WeakPathHandle {
     /// Returns the [`PathId`] of this path.
     pub fn id(&self) -> PathId {
-        self.id
+        self.path_ref.id
     }
 
     /// Upgrades to a [`Path`].
@@ -358,27 +320,78 @@ impl WeakPathHandle {
     /// Returns `None` if the connection was dropped.
     pub fn upgrade(&self) -> Option<Path> {
         let conn = self.conn.upgrade_to_ref()?;
-        self.path_ref.ref_count.fetch_add(1, Ordering::Relaxed);
         Some(Path {
-            id: self.id,
             conn,
             path_ref: self.path_ref.clone(),
         })
     }
 }
 
-/// Releases the connection state entries for a path once its reference count hits zero.
-///
-/// Acquires the connection state lock, re-checks the counter under the lock to guard against
-/// a concurrent constructor that bumped it back up between our `fetch_sub` and the lock, and
-/// then drops the [`PathRef`] entry along with any cached final stats.
-fn clear_path_state(conn: &ConnectionRef, id: PathId, path_ref: &Arc<PathRef>) {
-    let mut state = conn.lock_without_waking("clear_path_state");
-    if path_ref.ref_count.load(Ordering::Relaxed) > 0 {
-        return;
+impl Drop for WeakPathHandle {
+    fn drop(&mut self) {
+        if let Some(conn) = self.conn.upgrade_to_ref() {
+            self.path_ref.on_drop(&conn);
+        }
     }
-    state.path_refs.remove(&id);
-    state.final_path_stats.remove(&id);
+}
+
+/// Owner side of a path's reference counter, stored in [`State::path_refs`].
+///
+/// Holds the shared [`AtomicUsize`] but does not itself contribute to the count.
+/// Hands out [`PathRef`] handles via [`Self::acquire`].
+#[derive(Debug, Default)]
+pub(crate) struct PathRefOwner {
+    ref_count: Arc<AtomicUsize>,
+}
+
+impl PathRefOwner {
+    /// Acquire a new [`PathRef`] handle, bumping the reference counter by 1.
+    pub(crate) fn acquire(&self, path_id: PathId) -> PathRef {
+        self.ref_count.fetch_add(1, Ordering::Relaxed);
+        PathRef {
+            id: path_id,
+            ref_count: self.ref_count.clone(),
+        }
+    }
+}
+
+/// Handle side of a path's reference counter, held by [`Path`] and [`WeakPathHandle`].
+///
+/// Cloning bumps the counter, dropping decrements it. The last-dropped handle takes
+/// the connection state lock to clear the corresponding entries from
+/// [`State::path_refs`] and [`State::final_path_stats`].
+///
+/// [`WeakPathHandle`]: crate::path::WeakPathHandle
+#[derive(Debug)]
+pub(crate) struct PathRef {
+    id: PathId,
+    ref_count: Arc<AtomicUsize>,
+}
+
+impl Clone for PathRef {
+    fn clone(&self) -> Self {
+        self.ref_count.fetch_add(1, Ordering::Relaxed);
+        Self {
+            id: self.id,
+            ref_count: self.ref_count.clone(),
+        }
+    }
+}
+
+impl PathRef {
+    fn on_drop(&self, conn: &ConnectionRef) {
+        if self.ref_count.fetch_sub(1, Ordering::Relaxed) > 1 {
+            return;
+        }
+        let mut state = conn.lock_without_waking("PathRef::drop");
+        // Re-check under the lock: a concurrent `Path::new` may have bumped
+        // the counter back up between our `fetch_sub` and the lock.
+        if self.ref_count.load(Ordering::Relaxed) > 0 {
+            return;
+        }
+        state.path_refs.remove(&self.id);
+        state.final_path_stats.remove(&self.id);
+    }
 }
 
 /// Stream produced by [`Path::observed_external_addr`]
