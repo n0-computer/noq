@@ -201,12 +201,12 @@
 <a href=#201 id=201 data-nosnippet>201</a>
 <a href=#202 id=202 data-nosnippet>202</a>    <span class="doccomment">/// Reads the next segments of data.
 <a href=#203 id=203 data-nosnippet>203</a>    ///
-<a href=#204 id=204 data-nosnippet>204</a>    /// Fills `bufs` with the segments of data beginning immediately after the
-<a href=#205 id=205 data-nosnippet>205</a>    /// last data yielded by `read` or `read_chunk`/`read_many_chunks`, or `None` if the stream was
-<a href=#206 id=206 data-nosnippet>206</a>    /// finished.
+<a href=#204 id=204 data-nosnippet>204</a>    /// Fills `bufs` with the segments of data beginning immediately after the last data yielded
+<a href=#205 id=205 data-nosnippet>205</a>    /// by [`read`](Self::read), [`read_chunk`](Self::read_chunk), or
+<a href=#206 id=206 data-nosnippet>206</a>    /// [`read_many_chunks`](Self::read_many_chunks), or `None` if the stream was finished.
 <a href=#207 id=207 data-nosnippet>207</a>    ///
-<a href=#208 id=208 data-nosnippet>208</a>    /// Slightly more efficient than `read` due to not copying. Chunk boundaries
-<a href=#209 id=209 data-nosnippet>209</a>    /// do not correspond to peer writes, and hence cannot be used as framing.
+<a href=#208 id=208 data-nosnippet>208</a>    /// Slightly more efficient than [`read`](Self::read) due to not copying. Chunk boundaries do
+<a href=#209 id=209 data-nosnippet>209</a>    /// not correspond to peer writes, and hence cannot be used as framing.
 <a href=#210 id=210 data-nosnippet>210</a>    ///
 <a href=#211 id=211 data-nosnippet>211</a>    /// This operation is cancel-safe.
 <a href=#212 id=212 data-nosnippet>212</a>    </span><span class="kw">pub async fn </span>read_many_chunks(

@@ -52,11 +52,11 @@ not correspond to peer writes, and hence cannot be used as framing.</p>
     &amp;mut self,
     bufs: &amp;mut [Bytes],
 ) -&gt; <a class="enum" href="https://doc.rust-lang.org/nightly/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;<a class="enum" href="https://doc.rust-lang.org/nightly/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.usize.html">usize</a>&gt;, <a class="enum" href="enum.ReadError.html" title="enum noq::ReadError">ReadError</a>&gt;</h4></section></summary><div class="docblock"><p>Reads the next segments of data.</p>
-<p>Fills <code>bufs</code> with the segments of data beginning immediately after the
-last data yielded by <code>read</code> or <code>read_chunk</code>/<code>read_many_chunks</code>, or <code>None</code> if the stream was
-finished.</p>
-<p>Slightly more efficient than <code>read</code> due to not copying. Chunk boundaries
-do not correspond to peer writes, and hence cannot be used as framing.</p>
+<p>Fills <code>bufs</code> with the segments of data beginning immediately after the last data yielded
+by <a href="struct.RecvStream.html#method.read" title="method noq::RecvStream::read"><code>read</code></a>, <a href="struct.RecvStream.html#method.read_chunk" title="method noq::RecvStream::read_chunk"><code>read_chunk</code></a>, or
+<a href="struct.RecvStream.html#method.read_many_chunks" title="method noq::RecvStream::read_many_chunks"><code>read_many_chunks</code></a>, or <code>None</code> if the stream was finished.</p>
+<p>Slightly more efficient than <a href="struct.RecvStream.html#method.read" title="method noq::RecvStream::read"><code>read</code></a> due to not copying. Chunk boundaries do
+not correspond to peer writes, and hence cannot be used as framing.</p>
 <p>This operation is cancel-safe.</p>
 </div></details><details class="toggle method-toggle" open><summary><section id="method.read_to_end" class="method"><a class="src rightside" href="../src/noq/recv_stream.rs.html#260-269">Source</a><h4 class="code-header">pub async fn <a href="#method.read_to_end" class="fn">read_to_end</a>(
     &amp;mut self,
