@@ -92,30 +92,33 @@ impl SendStream {
     /// # Cancel safety
     ///
     /// This method is cancellation safe. If this does not resolve, no bytes were written.
-    pub async fn write_bytes_many(&mut self, bufs: &mut &mut [Bytes]) -> Result<usize, WriteError> {
+    pub async fn write_many_chunks(
+        &mut self,
+        bufs: &mut &mut [Bytes],
+    ) -> Result<usize, WriteError> {
         poll_fn(|cx| self.execute_poll(cx, |s| s.write_chunks(bufs))).await
     }
 
     /// Write a single [`Bytes`] into this stream in its entirety
     ///
-    /// This method repeatedly calls [`write_bytes_many`](Self::write_bytes_many) until all bytes
+    /// This method repeatedly calls [`write_many_chunks`](Self::write_many_chunks) until all bytes
     /// are written, or an error occurs.
     ///
     /// # Cancel safety
     ///
     /// This method is *not* cancellation safe. Even if this does not resolve, some bytes may have
     /// been written when previously polled.
-    pub async fn write_bytes(&mut self, buf: Bytes) -> Result<(), WriteError> {
+    pub async fn write_chunk(&mut self, buf: Bytes) -> Result<(), WriteError> {
         let mut bufs = &mut [buf][..];
         while !bufs.is_empty() {
-            self.write_bytes_many(&mut bufs).await?;
+            self.write_many_chunks(&mut bufs).await?;
         }
         Ok(())
     }
 
     /// Write a slice of [`Bytes`] into this stream in its entirety
     ///
-    /// This method repeatedly calls [`write_bytes_many`](Self::write_bytes_many) until all bytes
+    /// This method repeatedly calls [`write_many_chunks`](Self::write_many_chunks) until all bytes
     /// are written, or an error occurs.
     ///
     /// # Cancel safety
@@ -125,7 +128,7 @@ impl SendStream {
     pub async fn write_bytes_all(&mut self, bufs: &mut [Bytes]) -> Result<(), WriteError> {
         let mut bufs = &mut bufs[..];
         while !bufs.is_empty() {
-            self.write_bytes_many(&mut bufs).await?;
+            self.write_many_chunks(&mut bufs).await?;
         }
         Ok(())
     }
