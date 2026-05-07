@@ -1042,9 +1042,9 @@ pub enum PathStatus {
 /// Application events about paths
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PathEvent {
-    /// A new path has been opened
-    Opened {
-        /// Which path is now open
+    /// A new path has established connection with the peer.
+    Established {
+        /// The path which can now be used for application data.
         id: PathId,
     },
     /// A path was abandoned and is no longer usable.

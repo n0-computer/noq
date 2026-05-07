@@ -438,12 +438,12 @@ fn open_path() -> TestResult {
     pair.drive();
     assert_matches!(
         pair.poll(Client),
-        Some(Event::Path(crate::PathEvent::Opened { id  })) if id == path_id
+        Some(Event::Path(crate::PathEvent::Established { id  })) if id == path_id
     );
 
     assert_matches!(
         pair.poll(Server),
-        Some(Event::Path(crate::PathEvent::Opened { id  })) if id == path_id
+        Some(Event::Path(crate::PathEvent::Established { id  })) if id == path_id
     );
     Ok(())
 }
@@ -462,12 +462,12 @@ fn open_path_key_update() -> TestResult {
     pair.drive();
     assert_matches!(
         pair.poll(Client),
-        Some(Event::Path(crate::PathEvent::Opened { id  })) if id == path_id
+        Some(Event::Path(crate::PathEvent::Established { id  })) if id == path_id
     );
 
     assert_matches!(
         pair.poll(Server),
-        Some(Event::Path(crate::PathEvent::Opened { id  })) if id == path_id
+        Some(Event::Path(crate::PathEvent::Established { id  })) if id == path_id
     );
     Ok(())
 }
@@ -566,12 +566,12 @@ fn open_path_ensure_after_abandon() -> TestResult {
 
     assert_matches!(
         pair.poll(Client),
-        Some(Event::Path(crate::PathEvent::Opened { id  })) if id == path_id
+        Some(Event::Path(crate::PathEvent::Established { id  })) if id == path_id
     );
 
     assert_matches!(
         pair.poll(Server),
-        Some(Event::Path(crate::PathEvent::Opened { id  })) if id == path_id
+        Some(Event::Path(crate::PathEvent::Established { id  })) if id == path_id
     );
 
     info!("closing path {path_id}");
@@ -613,12 +613,12 @@ fn open_path_ensure_after_abandon() -> TestResult {
     // The path should have been opened:
     assert_matches!(
         pair.poll(Client),
-        Some(Event::Path(crate::PathEvent::Opened { id  })) if id == path_id
+        Some(Event::Path(crate::PathEvent::Established { id  })) if id == path_id
     );
 
     assert_matches!(
         pair.poll(Server),
-        Some(Event::Path(crate::PathEvent::Opened { id  })) if id == path_id
+        Some(Event::Path(crate::PathEvent::Established { id  })) if id == path_id
     );
     Ok(())
 }
@@ -715,7 +715,7 @@ fn per_path_observed_address() -> TestResult {
     );
     assert_matches!(
         pair.poll(Client),
-        Some(Event::Path(PathEvent::Opened { id: PathId(1) }))
+        Some(Event::Path(PathEvent::Established { id: PathId(1) }))
     );
     assert_matches!(
         pair.poll(Client),
@@ -763,11 +763,11 @@ fn mtud_on_two_paths() -> TestResult {
     // Ensure the path opened correctly.
     assert_matches!(
         pair.poll(Client),
-        Some(Event::Path(crate::PathEvent::Opened { id  })) if id == path_id
+        Some(Event::Path(crate::PathEvent::Established { id  })) if id == path_id
     );
     assert_matches!(
         pair.poll(Server),
-        Some(Event::Path(crate::PathEvent::Opened { id  })) if id == path_id
+        Some(Event::Path(crate::PathEvent::Established { id  })) if id == path_id
     );
 
     // MTU should be 1200 for both paths.
@@ -851,7 +851,7 @@ fn network_change_multipath_no_hint_replaces_path() -> TestResult {
     );
     assert_matches!(
         pair.poll(Client),
-        Some(Event::Path(PathEvent::Opened { id: PathId(1) }))
+        Some(Event::Path(PathEvent::Established { id: PathId(1) }))
     );
 
     // The server sees the old path closed with PATH_UNSTABLE_OR_POOR
@@ -866,7 +866,7 @@ fn network_change_multipath_no_hint_replaces_path() -> TestResult {
     // And then sees the new path
     assert_matches!(
         pair.poll(Server),
-        Some(Event::Path(PathEvent::Opened { id: PathId(1) }))
+        Some(Event::Path(PathEvent::Established { id: PathId(1) }))
     );
     // Both client and server see the old path as discarded
     assert_matches!(
@@ -921,11 +921,11 @@ fn network_change_selective_hint() -> TestResult {
 
     assert_matches!(
         pair.poll(Client),
-        Some(Event::Path(PathEvent::Opened { id })) if id == second_path
+        Some(Event::Path(PathEvent::Established { id })) if id == second_path
     );
     assert_matches!(
         pair.poll(Server),
-        Some(Event::Path(PathEvent::Opened { id })) if id == second_path
+        Some(Event::Path(PathEvent::Established { id })) if id == second_path
     );
 
     // A hint that says PathId::ZERO is recoverable but the second path is not
@@ -954,7 +954,7 @@ fn network_change_selective_hint() -> TestResult {
     assert!(
         client_events
             .iter()
-            .any(|e| matches!(e, Event::Path(PathEvent::Opened { .. }))),
+            .any(|e| matches!(e, Event::Path(PathEvent::Established { .. }))),
         "expected an Opened event for the replacement path, got: {client_events:?}"
     );
     // PathId::ZERO should NOT have been closed
@@ -987,11 +987,11 @@ fn network_change_server_two_paths_selective_hint() -> TestResult {
 
     assert_matches!(
         pair.poll(Client),
-        Some(Event::Path(PathEvent::Opened { id })) if id == second_path
+        Some(Event::Path(PathEvent::Established { id })) if id == second_path
     );
     assert_matches!(
         pair.poll(Server),
-        Some(Event::Path(PathEvent::Opened { id })) if id == second_path
+        Some(Event::Path(PathEvent::Established { id })) if id == second_path
     );
 
     // Hint: The provided PathId is recoverable, others are not.
@@ -1090,11 +1090,11 @@ fn network_change_server_no_hint_recovers() -> TestResult {
 
     assert_matches!(
         pair.poll(Client),
-        Some(Event::Path(PathEvent::Opened { id })) if id == second_path
+        Some(Event::Path(PathEvent::Established { id })) if id == second_path
     );
     assert_matches!(
         pair.poll(Server),
-        Some(Event::Path(PathEvent::Opened { id })) if id == second_path
+        Some(Event::Path(PathEvent::Established { id })) if id == second_path
     );
 
     // Signal network change without actually changing the server's local address. This
@@ -1140,7 +1140,7 @@ fn path_open_deadline_is_set_on_send() -> TestResult {
 
     assert_matches!(
         pair.poll(Client),
-        Some(Event::Path(PathEvent::Opened { id })) if id == path_id,
+        Some(Event::Path(PathEvent::Established { id })) if id == path_id,
         "path should open successfully after the challenge is sent"
     );
 
@@ -1216,7 +1216,10 @@ fn server_abandon_last_verified_path() -> TestResult {
         Some(Event::Path(PathEvent::Abandoned { .. }))
     ));
     let evt = pair.poll(Server);
-    assert!(matches!(evt, Some(Event::Path(PathEvent::Opened { .. }))));
+    assert!(matches!(
+        evt,
+        Some(Event::Path(PathEvent::Established { .. }))
+    ));
 
     let evt = pair.poll(Server);
     let Some(Event::Path(PathEvent::Discarded { path_stats, .. })) = evt else {
@@ -1348,7 +1351,7 @@ fn remote_path_abandon_last_path_client_opens_new() -> TestResult {
                 reason: PathAbandonReason::RemoteAbandoned { .. },
                 ..
             }) => saw_abandon = true,
-            Event::Path(PathEvent::Opened { id }) if id == new_path_id => saw_opened = true,
+            Event::Path(PathEvent::Established { id }) if id == new_path_id => saw_opened = true,
             _ => {}
         }
     }
@@ -1717,10 +1720,10 @@ fn test_simple_nat_traveral_opens_path() -> TestResult {
     pair.drive();
 
     let event = pair.poll(Client).expect("should have event");
-    assert_matches!(event, Event::Path(PathEvent::Opened { .. }));
+    assert_matches!(event, Event::Path(PathEvent::Established { .. }));
 
     let event = pair.poll(Server).expect("should have event");
-    assert_matches!(event, Event::Path(PathEvent::Opened { .. }));
+    assert_matches!(event, Event::Path(PathEvent::Established { .. }));
 
     Ok(())
 }
@@ -1772,10 +1775,10 @@ fn test_simple_nat_traversal_challenge_with_response() -> TestResult {
     pair.drive();
 
     let event = pair.poll(Client).expect("should have event");
-    assert_matches!(event, Event::Path(PathEvent::Opened { .. }));
+    assert_matches!(event, Event::Path(PathEvent::Established { .. }));
 
     let event = pair.poll(Server).expect("should have event");
-    assert_matches!(event, Event::Path(PathEvent::Opened { .. }));
+    assert_matches!(event, Event::Path(PathEvent::Established { .. }));
 
     Ok(())
 }

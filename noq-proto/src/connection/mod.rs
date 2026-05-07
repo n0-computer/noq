@@ -550,10 +550,11 @@ impl Connection {
         }
     }
 
-    /// Opens a new path
+    /// Opens a new path.
     ///
-    /// Further errors might occur and they will be emitted in [`PathEvent::Abandoned`] events with this path id.
-    /// When the path is opened it will be reported as an [`PathEvent::Opened`].
+    /// Further errors might occur and they will be emitted in [`PathEvent::Abandoned`]
+    /// events with this path id.  When the path is opened it will be reported as an
+    /// [`PathEvent::Established`].
     pub fn open_path(
         &mut self,
         network_path: FourTuple,
@@ -5022,9 +5023,9 @@ impl Connection {
 
                                 if !was_open {
                                     if is_multipath_negotiated {
-                                        self.events.push_back(Event::Path(PathEvent::Opened {
-                                            id: path_id,
-                                        }));
+                                        self.events.push_back(Event::Path(
+                                            PathEvent::Established { id: path_id },
+                                        ));
                                     }
                                     if let Some(observed) =
                                         path.data.last_observed_addr_report.as_ref()

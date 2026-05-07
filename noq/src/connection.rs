@@ -442,8 +442,8 @@ impl Connection {
     /// carry application data, or if there was an error.
     ///
     /// Dropping the returned future does not cancel the opening of the path, the
-    /// [`PathEvent::Opened`] event will still be emitted from [`Self::path_events`] if the
-    /// path opens.  The [`PathId`] for the events can be extracted from
+    /// [`PathEvent::Established`] event will still be emitted from [`Self::path_events`] if
+    /// the path opens.  The [`PathId`] for the events can be extracted from
     /// [`OpenPath::path_id`].
     ///
     /// Failure to open a path can either occur immediately, before polling the returned
@@ -1639,7 +1639,7 @@ impl State {
                         old != *addr
                     });
                 }
-                Path(ref evt @ PathEvent::Opened { id }) => {
+                Path(ref evt @ PathEvent::Established { id }) => {
                     self.path_events.send(evt.clone()).ok();
                     if let Some(sender) = self.open_path.remove(&id) {
                         sender.send_modify(|value| *value = Ok(()));
