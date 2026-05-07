@@ -79,7 +79,7 @@ impl SendStream {
         Ok(())
     }
 
-    /// Write [`Bytes`] from a slice of buffers into this stream, returning how many bytes were
+    /// Writes [`Bytes`] from a slice of buffers into this stream, returning how many bytes were.
     /// written
     ///
     /// Bytes to try to write are provided to this method as an array of cheaply cloneable chunks.
@@ -103,7 +103,7 @@ impl SendStream {
         poll_fn(|cx| self.execute_poll(cx, |s| s.write_chunks(bufs))).await
     }
 
-    /// Write a single [`Bytes`] into this stream in its entirety
+    /// Writes a single [`Bytes`] into this stream in its entirety.
     ///
     /// Bytes to write are provided to this method as a single cheaply cloneable chunk. This
     /// method repeatedly calls [`write_many_chunks`](Self::write_many_chunks) until all bytes
@@ -117,7 +117,7 @@ impl SendStream {
         self.write_all_chunks(&mut [buf]).await
     }
 
-    /// Write a slice of [`Bytes`] into this stream in its entirety
+    /// Writes a slice of [`Bytes`] into this stream in its entirety.
     ///
     /// Bytes to write are provided to this method as an array of cheaply cloneable chunks. This
     /// method repeatedly calls [`write_many_chunks`](Self::write_many_chunks) until all bytes are
