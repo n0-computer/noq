@@ -128,14 +128,14 @@
 <a href=#128 id=128 data-nosnippet>128</a>
 <a href=#129 id=129 data-nosnippet>129</a>    <span class="kw">for _ in </span><span class="number">0</span>..full_chunks {
 <a href=#130 id=130 data-nosnippet>130</a>        stream
-<a href=#131 id=131 data-nosnippet>131</a>            .write_bytes(bytes_data.clone())
+<a href=#131 id=131 data-nosnippet>131</a>            .write_chunk(bytes_data.clone())
 <a href=#132 id=132 data-nosnippet>132</a>            .<span class="kw">await
 <a href=#133 id=133 data-nosnippet>133</a>            </span>.context(<span class="string">"failed sending data"</span>)<span class="question-mark">?</span>;
 <a href=#134 id=134 data-nosnippet>134</a>    }
 <a href=#135 id=135 data-nosnippet>135</a>
 <a href=#136 id=136 data-nosnippet>136</a>    <span class="kw">if </span>remaining != <span class="number">0 </span>{
 <a href=#137 id=137 data-nosnippet>137</a>        stream
-<a href=#138 id=138 data-nosnippet>138</a>            .write_bytes(bytes_data.slice(<span class="number">0</span>..remaining))
+<a href=#138 id=138 data-nosnippet>138</a>            .write_chunk(bytes_data.slice(<span class="number">0</span>..remaining))
 <a href=#139 id=139 data-nosnippet>139</a>            .<span class="kw">await
 <a href=#140 id=140 data-nosnippet>140</a>            </span>.context(<span class="string">"failed sending data"</span>)<span class="question-mark">?</span>;
 <a href=#141 id=141 data-nosnippet>141</a>    }
