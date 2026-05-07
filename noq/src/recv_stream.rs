@@ -302,7 +302,7 @@ impl RecvStream {
     /// This is the offset of the next byte to be read, i.e. the length of the contiguous
     /// prefix of the stream consumed by the application.
     pub fn bytes_read(&self) -> Result<u64, ClosedStream> {
-        let mut conn = self.conn.state.lock("RecvStream::bytes_read");
+        let mut conn = self.conn.lock_without_waking("RecvStream::bytes_read");
         conn.inner.recv_stream(self.stream).bytes_read()
     }
 
