@@ -648,7 +648,7 @@ async fn echo((mut send, mut recv): (SendStream, RecvStream)) {
         ];
 
         match recv
-            .read_bytes_many(&mut bufs)
+            .read_many_chunks(&mut bufs)
             .await
             .expect("read bytes many")
         {
