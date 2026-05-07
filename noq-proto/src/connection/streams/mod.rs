@@ -227,7 +227,9 @@ impl<'a> SendStream<'a> {
 
     /// Send data on the given stream
     ///
-    /// Returns the number of bytes and chunks successfully written.
+    /// Returns the number of bytes written and advances the provided `Bytes`
+    /// slice, removing all completely written chunks.
+    ///
     /// Note that this method might also write a partial chunk. In this case
     /// the chunk will be advanced and contain only non-written data after the call.
     pub fn write_chunks(&mut self, data: &mut &mut [Bytes]) -> Result<usize, WriteError> {
