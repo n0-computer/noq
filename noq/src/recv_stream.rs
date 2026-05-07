@@ -299,7 +299,7 @@ impl RecvStream {
         self.stream
     }
 
-    /// Returns the number of bytes read from this stream
+    /// Returns the number of bytes read from this stream.
     ///
     /// This is the offset of the next byte to be read, i.e. the length of the contiguous
     /// prefix of the stream consumed by the application.
