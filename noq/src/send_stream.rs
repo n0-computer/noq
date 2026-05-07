@@ -82,12 +82,16 @@ impl SendStream {
     /// Write [`Bytes`] from a slice of buffers into this stream, returning how many bytes were
     /// written
     ///
-    /// Unless this method errors, it waits until some bytes can be written into this stream, and
-    /// then writes as much as it can without waiting again. Due to congestion and flow control,
-    /// this may be less than the total number of bytes.
+    /// Bytes to try to write are provided to this method as an array of cheaply cloneable chunks.
+    /// Unless this method errors, it waits until some amount of those bytes can be written into
+    /// this stream, and then writes as much as it can without waiting again. Due to congestion and
+    /// flow control, this may be less than the total number of bytes.
     ///
-    /// On success, `bufs` is advanced past fully written chunks (and partially written chunks are
-    /// split), and the number of bytes written is returned.
+    /// On success, this method both mutates `bufs` and returns the number of bytes written:
+    ///
+    /// - `bufs` is advanced past chunks that were fully written.
+    /// - If a [`Bytes`] chunk was partially written, the chunk at the new front of `bufs` is
+    ///   [split to](Bytes::split_to) contain only the suffix of bytes that were not written.
     ///
     /// # Cancel safety
     ///
@@ -101,7 +105,8 @@ impl SendStream {
 
     /// Write a single [`Bytes`] into this stream in its entirety
     ///
-    /// This method repeatedly calls [`write_many_chunks`](Self::write_many_chunks) until all bytes
+    /// Bytes to write are provided to this method as a single cheaply cloneable chunk. This
+    /// method repeatedly calls [`write_many_chunks`](Self::write_many_chunks) until all bytes
     /// are written, or an error occurs.
     ///
     /// # Cancel safety
@@ -118,8 +123,9 @@ impl SendStream {
 
     /// Write a slice of [`Bytes`] into this stream in its entirety
     ///
-    /// This method repeatedly calls [`write_many_chunks`](Self::write_many_chunks) until all bytes
-    /// are written, or an error occurs.
+    /// Bytes to write are provided to this method as an array of cheaply cloneable chunks. This
+    /// method repeatedly calls [`write_many_chunks`](Self::write_many_chunks) until all bytes are
+    /// written, or an error occurs.
     ///
     /// # Cancel safety
     ///
