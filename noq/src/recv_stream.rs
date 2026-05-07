@@ -199,7 +199,7 @@ impl RecvStream {
         })
     }
 
-    /// Read the next segments of data
+    /// Reads the next segments of data.
     ///
     /// Fills `bufs` with the segments of data beginning immediately after the
     /// last data yielded by `read` or `read_chunk`/`read_many_chunks`, or `None` if the stream was
