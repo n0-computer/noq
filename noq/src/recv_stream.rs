@@ -156,7 +156,7 @@ impl RecvStream {
         .map(|res| res.map(|_| ()))
     }
 
-    /// Read the next segment of data as zero-copy [`Bytes`]
+    /// Reads the next segment of data as zero-copy [`Bytes`].
     ///
     /// Yields `None` if the stream was finished. Otherwise, yields the next segment of data. The
     /// chunk's offset will be immediately after the last data yielded by [`RecvStream::read`] or
