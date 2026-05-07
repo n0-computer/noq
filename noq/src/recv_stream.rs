@@ -201,12 +201,12 @@ impl RecvStream {
 
     /// Reads the next segments of data.
     ///
-    /// Fills `bufs` with the segments of data beginning immediately after the
-    /// last data yielded by `read` or `read_chunk`/`read_many_chunks`, or `None` if the stream was
-    /// finished.
+    /// Fills `bufs` with the segments of data beginning immediately after the last data yielded
+    /// by [`read`](Self::read), [`read_chunk`](Self::read_chunk), or
+    /// [`read_many_chunks`](Self::read_many_chunks), or `None` if the stream was finished.
     ///
-    /// Slightly more efficient than `read` due to not copying. Chunk boundaries
-    /// do not correspond to peer writes, and hence cannot be used as framing.
+    /// Slightly more efficient than [`read`](Self::read) due to not copying. Chunk boundaries do
+    /// not correspond to peer writes, and hence cannot be used as framing.
     ///
     /// This operation is cancel-safe.
     pub async fn read_many_chunks(
