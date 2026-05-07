@@ -146,3 +146,15 @@ required-features = ["rustls", "ring"]
 [package.metadata.docs.rs]
 # all non-default features except fips (cannot build on docs.rs environment)
 features = ["__all_without_fips"]
+
+[package.metadata.cargo_check_external_types]
+allowed_external_types = [
+    "noq_proto::*",
+    "noq_udp",
+    "noq_udp::*",
+    "bytes::bytes::Bytes",
+    "futures_core::stream::Stream",
+    "rustls",
+    "tokio::io::async_read::AsyncRead",
+    "tokio::io::async_write::AsyncWrite",
+]

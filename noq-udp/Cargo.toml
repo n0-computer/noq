@@ -20,6 +20,11 @@ log = ["dep:log"]
 # Support private Apple APIs to send multiple packets in a single syscall.
 fast-apple-datapath = []
 
+# Internal (PRIVATE!) features used to aid testing.
+# Don't rely on these whatsoever. They may disappear at any time.
+
+__all_without_fips = ["tracing-log", "log", "fast-apple-datapath"]
+
 [dependencies]
 libc = "0.2.175"
 log = { workspace = true, optional = true }

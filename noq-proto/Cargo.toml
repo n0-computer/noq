@@ -50,6 +50,7 @@ rustls-aws-lc-rs = ["rustls", "aws-lc-rs"]
 # Don't rely on these whatsoever. They may disappear at any time.
 
 __rustls-post-quantum-test =  []
+__all_without_fips = ["aws-lc-rs", "rustls", "ring", "platform-verifier", "rustls-log", "qlog", "bench"]
 
 [dependencies]
 aes-gcm = { workspace = true, optional = true }
@@ -107,4 +108,15 @@ workspace = true
 
 [package.metadata.docs.rs]
 # all non-default features except fips (cannot build on docs.rs environment)
-features = ["aws-lc-rs", "rustls", "ring", "platform-verifier", "rustls-log", "qlog", "bench"]
+features = ["__all_without_fips"]
+
+[package.metadata.cargo_check_external_types]
+allowed_external_types = [
+    "arbitrary::Arbitrary", # gated behind `arbitrary` feature
+    "criterion::Criterion", # gated behind `bench` feature
+    "identity_hash::IdentityHashable",
+    "bytes::*",
+    "rustls",
+    "rustls::*",
+    "rustls_pki_types::*",
+]

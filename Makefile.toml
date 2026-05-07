@@ -106,7 +106,6 @@ for crate in noq-udp noq-proto noq; do
   echo "::group::$crate"
   if ! cargo +nightly check-external-types \
       --manifest-path "$crate/Cargo.toml" \
-      --config external-types.toml \
       --features __all_without_fips; \
   then
     fail=1
