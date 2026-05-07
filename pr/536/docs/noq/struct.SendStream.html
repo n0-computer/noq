@@ -28,8 +28,8 @@ may have been written when previously polled.</p>
 written</p>
 <p>Bytes to try to write are provided to this method as an array of cheaply cloneable chunks.
 Unless this method errors, it waits until some amount of those bytes can be written into
-this stream, and then writes as much as it can without waiting again. Due to congestion
-and flow control, this may be less than the total number of bytes.</p>
+this stream, and then writes as much as it can without waiting again. Due to congestion and
+flow control, this may be less than the total number of bytes.</p>
 <p>On success, this method both mutates <code>bufs</code> and returns the number of bytes written:</p>
 <ul>
 <li><code>bufs</code> is advanced past chunks that were fully written.</li>
