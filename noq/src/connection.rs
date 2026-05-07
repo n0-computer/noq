@@ -753,9 +753,20 @@ impl Connection {
         self.0.lock_without_waking("stats").inner.stats()
     }
 
-    /// Returns path statistics
+    /// Returns path statistics.
     pub fn path_stats(&self, path_id: PathId) -> Option<PathStats> {
-        self.0.lock_without_waking("path_stats").path_stats(path_id)
+        self.0
+            .lock_without_waking("path_stats")
+            .path_stats_for_id(path_id)
+    }
+
+    pub(crate) fn path_stats_for_ref<H: ToConnectionHandle>(
+        &self,
+        path_ref: &PathRef<H>,
+    ) -> PathStats {
+        self.0
+            .lock_without_waking("path_stats_for_ref")
+            .path_stats_for_ref(path_ref)
     }
 
     /// Current state of the congestion control algorithm, for debugging purposes
@@ -1377,6 +1388,27 @@ impl WeakConnectionHandle {
     }
 }
 
+/// Internal trait implemented for [`ConnectionRef`] and [`WeakConnectionHandle`].
+///
+/// Used by [`PathRef`] to be generic over strong and weak handles while ensuring cleanup
+/// once the refcount reaches zero.
+pub(crate) trait ToConnectionHandle: Clone {
+    /// Returns a [`ConnectionRef`] if the handle is alive.
+    fn get_or_upgrade(&self) -> Option<ConnectionRef>;
+}
+
+impl ToConnectionHandle for WeakConnectionHandle {
+    fn get_or_upgrade(&self) -> Option<ConnectionRef> {
+        self.upgrade_to_ref()
+    }
+}
+
+impl ToConnectionHandle for ConnectionRef {
+    fn get_or_upgrade(&self) -> Option<ConnectionRef> {
+        Some(self.clone())
+    }
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct Shared {
     handshake_confirmed: Notify,
@@ -1789,10 +1821,32 @@ impl State {
     ///
     /// This gets the stats from [`proto::Connection`]. If that returns `None`
     /// it gets them from `Self::final_path_stats` instead.
-    pub(crate) fn path_stats(&mut self, path_id: PathId) -> Option<PathStats> {
+    pub(crate) fn path_stats_for_id(&mut self, path_id: PathId) -> Option<PathStats> {
         self.inner
             .path_stats(path_id)
             .or_else(|| self.final_path_stats.get(&path_id).copied())
+    }
+
+    /// Returns [`PathStats`] for a path.
+    ///
+    /// Like [`Self::path_stats_for_id`] but takes a [`PathRef`], which lets us return
+    /// the stats unconditionally, because we guarantee that stats for paths for which
+    /// a [`PathRef`] is available are always available.
+    pub(crate) fn path_stats_for_ref<H: ToConnectionHandle>(
+        &mut self,
+        path_ref: &PathRef<H>,
+    ) -> PathStats {
+        // The `expect` is safe:
+        // - `PathRef` can only be created for non-closed paths.
+        // - `Path` and its clones or `WeakPathHandle`s all increment the connection state's `PathRef`
+        //   reference counter on clone
+        // - As long as a path is not abandoned, its stats are available from `proto::Connection`
+        // - If a path is abandoned, the `crate::Connection` stores the final stats as long as
+        //   a PathRef is live
+        // - Therefore, we always get stats here.
+        self.path_stats_for_id(path_ref.id).expect(
+            "either path stats or discarded path stats are always set as long as a PathRef is live",
+        )
     }
 
     /// Acquire a new [`PathRef`] for a path id, bumping its reference counter by 1.
@@ -1802,8 +1856,15 @@ impl State {
     /// [`PathRef::on_drop`] must be called to decrement the refcount.
     ///
     /// [`WeakPathHandle`]: crate::path::WeakPathHandle
-    pub(crate) fn acquire_path_ref(&mut self, path_id: PathId) -> PathRef {
-        self.path_refs.entry(path_id).or_default().acquire(path_id)
+    pub(crate) fn acquire_path_ref<H: ToConnectionHandle>(
+        &mut self,
+        path_id: PathId,
+        handle: H,
+    ) -> PathRef<H> {
+        self.path_refs
+            .entry(path_id)
+            .or_default()
+            .acquire(path_id, handle)
     }
 }
 

@@ -13,8 +13,8 @@ use proto::{
 use tokio::sync::watch;
 use tokio_stream::{Stream, wrappers::WatchStream};
 
-use crate::connection::ConnectionRef;
-use crate::{Runtime, WeakConnectionHandle};
+use crate::connection::{ConnectionRef, ToConnectionHandle};
+use crate::{Connection, Runtime, WeakConnectionHandle};
 
 /// Future produced by [`crate::Connection::open_path`]
 pub struct OpenPath(OpenPathInner);
@@ -25,8 +25,7 @@ enum OpenPathInner {
     /// This might fail later on.
     Ongoing {
         opened: WatchStream<Result<(), PathError>>,
-        path_id: PathId,
-        conn: ConnectionRef,
+        path_ref: StrongPathRef,
     },
     /// Opening a path failed immediately
     Rejected {
@@ -34,10 +33,7 @@ enum OpenPathInner {
         err: PathError,
     },
     /// The path is already open
-    Ready {
-        path_id: PathId,
-        conn: ConnectionRef,
-    },
+    Ready { path_ref: StrongPathRef },
 }
 
 impl OpenPath {
@@ -46,15 +42,20 @@ impl OpenPath {
         opened: watch::Receiver<Result<(), PathError>>,
         conn: ConnectionRef,
     ) -> Self {
+        let path_ref = conn
+            .lock_without_waking("OpenPath::new")
+            .acquire_path_ref(path_id, conn.clone());
         Self(OpenPathInner::Ongoing {
             opened: WatchStream::from_changes(opened),
-            path_id,
-            conn,
+            path_ref,
         })
     }
 
     pub(crate) fn ready(path_id: PathId, conn: ConnectionRef) -> Self {
-        Self(OpenPathInner::Ready { path_id, conn })
+        let path_ref = conn
+            .lock_without_waking("OpenPath::ready")
+            .acquire_path_ref(path_id, conn.clone());
+        Self(OpenPathInner::Ready { path_ref })
     }
 
     pub(crate) fn rejected(err: PathError) -> Self {
@@ -69,9 +70,9 @@ impl OpenPath {
     /// The returned value remains the same for the entire lifetime of this future.
     pub fn path_id(&self) -> Option<PathId> {
         match self.0 {
-            OpenPathInner::Ongoing { path_id, .. } => Some(path_id),
+            OpenPathInner::Ongoing { ref path_ref, .. } => Some(path_ref.id),
             OpenPathInner::Rejected { .. } => None,
-            OpenPathInner::Ready { path_id, .. } => Some(path_id),
+            OpenPathInner::Ready { ref path_ref, .. } => Some(path_ref.id),
         }
     }
 }
@@ -82,12 +83,9 @@ impl Future for OpenPath {
         match self.get_mut().0 {
             OpenPathInner::Ongoing {
                 ref mut opened,
-                path_id,
-                ref mut conn,
+                ref path_ref,
             } => match ready!(Pin::new(opened).poll_next(ctx)) {
-                Some(value) => {
-                    Poll::Ready(value.map(|_| Path::new_unchecked(conn.clone(), path_id)))
-                }
+                Some(value) => Poll::Ready(value.map(|_| Path::new_from_ref(path_ref.clone()))),
                 None => {
                     // This only happens if receiving a notification change failed, this means the
                     // sender was dropped. This generally should not happen so we use a transient
@@ -95,10 +93,9 @@ impl Future for OpenPath {
                     Poll::Ready(Err(PathError::ValidationFailed))
                 }
             },
-            OpenPathInner::Ready {
-                path_id,
-                ref mut conn,
-            } => Poll::Ready(Ok(Path::new_unchecked(conn.clone(), path_id))),
+            OpenPathInner::Ready { ref path_ref } => {
+                Poll::Ready(Ok(Path::new_from_ref(path_ref.clone())))
+            }
             OpenPathInner::Rejected { err } => Poll::Ready(Err(err)),
         }
     }
@@ -112,8 +109,7 @@ impl Future for OpenPath {
 /// [`WeakPathHandle`]: crate::path::WeakPathHandle
 #[derive(Debug, Clone)]
 pub struct Path {
-    conn: ConnectionRef,
-    path_ref: PathRef,
+    path_ref: StrongPathRef,
 }
 
 impl Path {
@@ -123,20 +119,14 @@ impl Path {
             let mut state = conn.lock_without_waking("Path::new");
             // TODO(flub): Using this to know if the path still exists is... hacky.
             state.inner.path_status(id).ok()?;
-            state.acquire_path_ref(id)
+            state.acquire_path_ref(id, conn.clone())
         };
-        Some(Self {
-            conn: conn.clone(),
-            path_ref,
-        })
+        Some(Self::new_from_ref(path_ref))
     }
 
-    /// Returns a [`Path`] for a path id without checking if the path exists or is closed.
-    fn new_unchecked(conn: ConnectionRef, id: PathId) -> Self {
-        let path_ref = conn
-            .lock_without_waking("Path::new_unchecked")
-            .acquire_path_ref(id);
-        Self { conn, path_ref }
+    /// Returns a [`Path`] for a [`PathRef`] without checking if the path exists or is closed.
+    fn new_from_ref(path_ref: StrongPathRef) -> Self {
+        Self { path_ref }
     }
 
     /// Returns a [`WeakPathHandle`] for this path.
@@ -146,8 +136,7 @@ impl Path {
     /// path is abandoned.
     pub fn weak_handle(&self) -> WeakPathHandle {
         WeakPathHandle {
-            path_ref: self.path_ref.clone(),
-            conn: self.conn.weak_handle(),
+            path_ref: self.path_ref.weak_handle(),
         }
     }
 
@@ -158,7 +147,8 @@ impl Path {
 
     /// The current local [`PathStatus`] of this path.
     pub fn status(&self) -> Result<PathStatus, ClosedPath> {
-        self.conn
+        self.path_ref
+            .handle
             .lock_without_waking("path status")
             .inner
             .path_status(self.id())
@@ -168,7 +158,8 @@ impl Path {
     ///
     /// Returns the previous status of the path.
     pub fn set_status(&self, status: PathStatus) -> Result<PathStatus, SetPathStatusError> {
-        self.conn
+        self.path_ref
+            .handle
             .lock_and_wake("set path status")
             .inner
             .set_path_status(self.id(), status)
@@ -176,18 +167,10 @@ impl Path {
 
     /// Returns the [`PathStats`] for this path.
     pub fn stats(&self) -> PathStats {
-        // The `expect` is safe:
-        // - `Path` can only be created for non-closed paths.
-        // - `Path` and its clones or `WeakPathHandle`s all increment the connection state's `path_ref`
-        //   reference counter
-        // - As long as a path is not abandoned, its stats are available from `proto::Connection`
-        // - If a path is abandoned, the `crate::Connection` stores the final stats as long as
-        //   the path's refcount is not 0
-        // - Therefore, we always get stats here.
-        self.conn
+        self.path_ref
+            .handle
             .lock_without_waking("Path::stats")
-            .path_stats(self.id())
-            .expect("either path stats or discarded path stats are always set as long as Path is not dropped")
+            .path_stats_for_ref(&self.path_ref)
     }
 
     /// Closes this path.
@@ -196,7 +179,7 @@ impl Path {
     /// after a short period of time for any in-flight packets, a [`PathEvent::Abandoned`] is
     /// returned.
     pub fn close(&self) -> Result<(), ClosePathError> {
-        let mut state = self.conn.lock_and_wake("close_path");
+        let mut state = self.path_ref.handle.lock_and_wake("close_path");
         state.inner.close_path(
             crate::Instant::now(),
             self.id(),
@@ -215,7 +198,10 @@ impl Path {
         &self,
         timeout: Option<Duration>,
     ) -> Result<Option<Duration>, ClosedPath> {
-        let mut state = self.conn.lock_and_wake("path_set_max_idle_timeout");
+        let mut state = self
+            .path_ref
+            .handle
+            .lock_and_wake("path_set_max_idle_timeout");
         let now = state.runtime.now();
         state
             .inner
@@ -233,7 +219,10 @@ impl Path {
         &self,
         interval: Option<Duration>,
     ) -> Result<Option<Duration>, ClosedPath> {
-        let mut state = self.conn.lock_and_wake("path_set_keep_alive_interval");
+        let mut state = self
+            .path_ref
+            .handle
+            .lock_and_wake("path_set_keep_alive_interval");
         state
             .inner
             .set_path_keep_alive_interval(self.id(), interval)
@@ -243,7 +232,10 @@ impl Path {
     ///
     /// If the address-discovery extension is not negotiated, the stream will never return.
     pub fn observed_external_addr(&self) -> Result<AddressDiscovery, ClosedPath> {
-        let state = self.conn.lock_without_waking("per_path_observed_address");
+        let state = self
+            .path_ref
+            .handle
+            .lock_without_waking("per_path_observed_address");
         let path_events = state.path_events.subscribe();
         let initial_value = state.inner.path_observed_address(self.id())?;
         Ok(AddressDiscovery::new(
@@ -256,7 +248,10 @@ impl Path {
 
     /// The peer's UDP address for this path.
     pub fn remote_address(&self) -> Result<SocketAddr, ClosedPath> {
-        let state = self.conn.lock_without_waking("per_path_remote_address");
+        let state = self
+            .path_ref
+            .handle
+            .lock_without_waking("per_path_remote_address");
         Ok(state.inner.network_path(self.id())?.remote())
     }
 
@@ -265,26 +260,24 @@ impl Path {
     /// Returns `Ok(None)` for clients or when the platform does not expose this information; see
     /// [`noq_udp::RecvMeta::dst_ip`](udp::RecvMeta::dst_ip) for supported platforms.
     pub fn local_ip(&self) -> Result<Option<IpAddr>, ClosedPath> {
-        let state = self.conn.lock_without_waking("per_path_local_ip");
+        let state = self
+            .path_ref
+            .handle
+            .lock_without_waking("per_path_local_ip");
         Ok(state.inner.network_path(self.id())?.local_ip())
     }
 
     /// Ping the remote endpoint over this path.
     pub fn ping(&self) -> Result<(), ClosedPath> {
-        let mut state = self.conn.lock_and_wake("ping");
+        let mut state = self.path_ref.handle.lock_and_wake("ping");
         state.inner.ping_path(self.id())
-    }
-}
-
-impl Drop for Path {
-    fn drop(&mut self) {
-        self.path_ref.on_drop(&self.conn);
     }
 }
 
 impl PartialEq for Path {
     fn eq(&self, other: &Self) -> bool {
-        self.id() == other.id() && self.conn.stable_id() == other.conn.stable_id()
+        self.id() == other.id()
+            && self.path_ref.handle.stable_id() == other.path_ref.handle.stable_id()
     }
 }
 
@@ -298,13 +291,16 @@ impl PartialEq for Path {
 /// [`Connection`]: crate::Connection
 #[derive(Debug, Clone)]
 pub struct WeakPathHandle {
-    conn: WeakConnectionHandle,
-    path_ref: PathRef,
+    path_ref: WeakPathRef,
 }
 
 impl PartialEq for WeakPathHandle {
     fn eq(&self, other: &Self) -> bool {
-        self.id() == other.id() && self.conn.is_same_connection(&other.conn)
+        self.id() == other.id()
+            && self
+                .path_ref
+                .handle
+                .is_same_connection(&other.path_ref.handle)
     }
 }
 
@@ -320,19 +316,24 @@ impl WeakPathHandle {
     ///
     /// Returns `None` if the connection was dropped.
     pub fn upgrade(&self) -> Option<Path> {
-        let conn = self.conn.upgrade_to_ref()?;
         Some(Path {
-            conn,
-            path_ref: self.path_ref.clone(),
+            path_ref: self.path_ref.upgrade()?,
         })
     }
-}
 
-impl Drop for WeakPathHandle {
-    fn drop(&mut self) {
-        if let Some(conn) = self.conn.upgrade_to_ref() {
-            self.path_ref.on_drop(&conn);
-        }
+    /// Returns the path statistics for this path.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `conn` is not the [`Connection`] this path belongs to. If you
+    /// cannot ensure this invariant, use [`Self::upgrade`] and then [`Path::stats`]
+    /// instead.
+    pub fn stats(&self, conn: &Connection) -> PathStats {
+        assert!(
+            conn.weak_handle().is_same_connection(&self.path_ref.handle),
+            "WeakPathHandle::stats called with wrong Connection"
+        );
+        conn.path_stats_for_ref(&self.path_ref)
     }
 }
 
@@ -349,55 +350,81 @@ pub(crate) struct PathRefOwner {
 
 impl PathRefOwner {
     /// Acquire a new [`PathRef`] handle, bumping the reference counter by 1.
-    pub(crate) fn acquire(&self, path_id: PathId) -> PathRef {
+    pub(crate) fn acquire<H: ToConnectionHandle>(&self, path_id: PathId, handle: H) -> PathRef<H> {
         self.ref_count.fetch_add(1, Ordering::Relaxed);
         PathRef {
             id: path_id,
             ref_count: self.ref_count.clone(),
+            handle,
         }
     }
 }
 
-/// Handle side of a path's reference counter, held by [`Path`] and [`WeakPathHandle`].
+/// Handle to a path's reference counter and either a strong or weak connection handle.
 ///
-/// Cloning bumps the counter automatically. When dropping a `PathRef`, holders must call
-/// [`Self::on_drop`] to decrement the counter and clear the corresponding entries
-/// from the connection state if the counter reaches zero.
+/// Held by [`Path`] and [`WeakPathHandle`].
 ///
-/// [`WeakPathHandle`]: crate::path::WeakPathHandle
+/// Cloning bumps the counter automatically, dropping decrements the reference counter,
+/// and once the count reaches zero, uses the inner handle to clear the corresponding
+/// entries from the connection state.
 #[derive(Debug)]
-pub(crate) struct PathRef {
-    id: PathId,
+pub(crate) struct PathRef<H: ToConnectionHandle> {
+    pub(crate) id: PathId,
+    handle: H,
     ref_count: Arc<AtomicUsize>,
 }
 
-impl Clone for PathRef {
+impl<H: ToConnectionHandle> Clone for PathRef<H> {
     fn clone(&self) -> Self {
         self.ref_count.fetch_add(1, Ordering::Relaxed);
         Self {
             id: self.id,
+            handle: self.handle.clone(),
             ref_count: self.ref_count.clone(),
         }
     }
 }
 
-impl PathRef {
-    /// Decreases the refcount and clears state once the counter reaches zero.
-    ///
-    /// This must be called before dropping a [`PathRef`], i.e. in the [`Drop`] impl
-    /// of its holder.
-    fn on_drop(&self, conn: &ConnectionRef) {
+impl<H: ToConnectionHandle> Drop for PathRef<H> {
+    fn drop(&mut self) {
         if self.ref_count.fetch_sub(1, Ordering::Relaxed) > 1 {
             return;
         }
-        let mut state = conn.lock_without_waking("PathRef::drop");
-        // Re-check under the lock: a concurrent `Path::new` may have bumped
-        // the counter back up between our `fetch_sub` and the lock.
-        if self.ref_count.load(Ordering::Relaxed) > 0 {
-            return;
+        if let Some(conn) = self.handle.get_or_upgrade() {
+            let mut state = conn.lock_without_waking("PathRef::drop");
+            // Re-check under the lock: a concurrent `Path::new` may have bumped
+            // the counter back up between our `fetch_sub` and the lock.
+            if self.ref_count.load(Ordering::Relaxed) > 0 {
+                return;
+            }
+            state.path_refs.remove(&self.id);
+            state.final_path_stats.remove(&self.id);
         }
-        state.path_refs.remove(&self.id);
-        state.final_path_stats.remove(&self.id);
+    }
+}
+
+pub(crate) type StrongPathRef = PathRef<ConnectionRef>;
+
+impl StrongPathRef {
+    pub(crate) fn weak_handle(&self) -> WeakPathRef {
+        PathRef {
+            id: self.id,
+            ref_count: self.ref_count.clone(),
+            handle: self.handle.weak_handle(),
+        }
+    }
+}
+
+pub(crate) type WeakPathRef = PathRef<WeakConnectionHandle>;
+
+impl WeakPathRef {
+    pub(crate) fn upgrade(&self) -> Option<StrongPathRef> {
+        let handle = self.handle.upgrade_to_ref()?;
+        Some(PathRef {
+            id: self.id,
+            ref_count: self.ref_count.clone(),
+            handle,
+        })
     }
 }
 
