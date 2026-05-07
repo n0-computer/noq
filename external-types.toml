@@ -1,0 +1,30 @@
+# List of types from foreign crates allowed to appear in our public APIs.
+#
+# This can be used with `cargo check-external-types` to ensure that no other
+# items than the ones allow-listed here appear in our public APIs. A semver-breaking
+# update to any crate listed here automatically becomes a semver-breaking update
+# to one of our workspace crates.
+#
+# `cargo make check-external-types` runs this over all workspace crates, and a CI job
+# `check_external_types` makes sure we don't sneak in anything unapproved.
+
+allowed_external_types = [
+    # workspace crates
+    "noq_proto",
+    "noq_proto::*",
+    "noq_udp",
+    "noq_udp::*",
+
+    # 1.0 crates that we deem fine to be part of the public API
+    "bytes::*",
+    "rustls_pki_types::*",
+    "tokio::*",
+
+    # non-1.0 crates that we decided to accept in the public API
+    "rustls",
+    "rustls::*",
+    "futures_core::stream::Stream",
+    "identity_hash::IdentityHashable",
+    # gated behind the "arbitrary" feature,
+    "arbitrary::*",
+]

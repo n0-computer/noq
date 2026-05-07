@@ -96,3 +96,22 @@ env = { "PROPTEST_CASES" = "10000" }
 description = "Run proptests in regression-only mode (runs for <5 seconds)"
 command = "cargo"
 args = ["nextest", "run", "--package=noq-proto", "-P", "proptests", "--no-fail-fast", "${@}"]
+
+[tasks.check-external-types]
+description = "Run cargo check-external-types on all workspace crates"
+script = '''
+set -e
+fail=0
+for crate in noq-udp noq-proto noq; do
+  echo "::group::$crate"
+  if ! cargo +nightly check-external-types \
+      --manifest-path "$crate/Cargo.toml" \
+      --config external-types.toml \
+      --features __all_without_fips; \
+  then
+    fail=1
+  fi
+  echo "::endgroup::"
+done
+exit $fail
+'''
