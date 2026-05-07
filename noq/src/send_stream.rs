@@ -125,7 +125,7 @@ impl SendStream {
     ///
     /// This method is *not* cancellation safe. Even if this does not resolve, some bytes may have
     /// been written when previously polled.
-    pub async fn write_bytes_all(&mut self, bufs: &mut [Bytes]) -> Result<(), WriteError> {
+    pub async fn write_all_chunks(&mut self, bufs: &mut [Bytes]) -> Result<(), WriteError> {
         let mut bufs = &mut bufs[..];
         while !bufs.is_empty() {
             self.write_many_chunks(&mut bufs).await?;
