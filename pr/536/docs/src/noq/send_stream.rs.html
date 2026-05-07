@@ -79,7 +79,7 @@
 <a href=#79 id=79 data-nosnippet>79</a>        <span class="prelude-val">Ok</span>(())
 <a href=#80 id=80 data-nosnippet>80</a>    }
 <a href=#81 id=81 data-nosnippet>81</a>
-<a href=#82 id=82 data-nosnippet>82</a>    <span class="doccomment">/// Write [`Bytes`] from a slice of buffers into this stream, returning how many bytes were
+<a href=#82 id=82 data-nosnippet>82</a>    <span class="doccomment">/// Writes [`Bytes`] from a slice of buffers into this stream, returning how many bytes were.
 <a href=#83 id=83 data-nosnippet>83</a>    /// written
 <a href=#84 id=84 data-nosnippet>84</a>    ///
 <a href=#85 id=85 data-nosnippet>85</a>    /// Bytes to try to write are provided to this method as an array of cheaply cloneable chunks.
@@ -103,7 +103,7 @@
 <a href=#103 id=103 data-nosnippet>103</a>        poll_fn(|cx| <span class="self">self</span>.execute_poll(cx, |s| s.write_chunks(bufs))).<span class="kw">await
 <a href=#104 id=104 data-nosnippet>104</a>    </span>}
 <a href=#105 id=105 data-nosnippet>105</a>
-<a href=#106 id=106 data-nosnippet>106</a>    <span class="doccomment">/// Write a single [`Bytes`] into this stream in its entirety
+<a href=#106 id=106 data-nosnippet>106</a>    <span class="doccomment">/// Writes a single [`Bytes`] into this stream in its entirety.
 <a href=#107 id=107 data-nosnippet>107</a>    ///
 <a href=#108 id=108 data-nosnippet>108</a>    /// Bytes to write are provided to this method as a single cheaply cloneable chunk. This
 <a href=#109 id=109 data-nosnippet>109</a>    /// method repeatedly calls [`write_many_chunks`](Self::write_many_chunks) until all bytes
@@ -117,7 +117,7 @@
 <a href=#117 id=117 data-nosnippet>117</a>        <span class="self">self</span>.write_all_chunks(<span class="kw-2">&amp;mut </span>[buf]).<span class="kw">await
 <a href=#118 id=118 data-nosnippet>118</a>    </span>}
 <a href=#119 id=119 data-nosnippet>119</a>
-<a href=#120 id=120 data-nosnippet>120</a>    <span class="doccomment">/// Write a slice of [`Bytes`] into this stream in its entirety
+<a href=#120 id=120 data-nosnippet>120</a>    <span class="doccomment">/// Writes a slice of [`Bytes`] into this stream in its entirety.
 <a href=#121 id=121 data-nosnippet>121</a>    ///
 <a href=#122 id=122 data-nosnippet>122</a>    /// Bytes to write are provided to this method as an array of cheaply cloneable chunks. This
 <a href=#123 id=123 data-nosnippet>123</a>    /// method repeatedly calls [`write_many_chunks`](Self::write_many_chunks) until all bytes are
