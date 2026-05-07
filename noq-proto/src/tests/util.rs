@@ -1,12 +1,10 @@
 use std::{
     cmp,
     collections::{HashMap, HashSet, VecDeque},
-    env,
     io::{self, Write},
     mem,
-    net::{Ipv6Addr, SocketAddr, UdpSocket},
+    net::{Ipv6Addr, SocketAddr},
     num::{NonZeroU32, NonZeroUsize},
-    ops::RangeFrom,
     str,
     sync::{Arc, LazyLock, Mutex},
 };
@@ -44,11 +42,26 @@ pub(super) struct Pair {
     pub(super) spins: u64,
     /// The routing table used for resolving addresses observed for incoming packets
     /// and determining whether they should get lost.
-    pub(super) routes: Option<RoutingTable>,
+    pub(super) routes: Option<Box<dyn PairRoutingTable>>,
     last_spin: bool,
 }
 
 impl Pair {
+    /// The default client address of the pair.
+    ///
+    /// IPv6 address `::1:1`. This is a normal unicast address.
+    /// - `::1:1` is for the first client address.
+    /// - `::1:0/112` is the subnet used for all client addresses.
+    pub(super) const CLIENT_ADDR: SocketAddr =
+        SocketAddr::new(IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 1, 1)), 1);
+    /// The default server address of the pair.
+    ///
+    /// IPv6 address `::2:1`. This is a normal unicast address.
+    /// - `::2:1` is for the first server address.
+    /// - `::2:0/112` is the subnet used for all server addresses.
+    pub(super) const SERVER_ADDR: SocketAddr =
+        SocketAddr::new(IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 2, 1)), 1);
+
     /// Creates an endpoint pair that'll run deterministically with hardcoded addresses.
     pub(super) fn seeded(seed: [u8; 32]) -> Self {
         let mut rng = StdRng::from_seed(seed);
@@ -103,18 +116,10 @@ impl Pair {
     }
 
     pub(super) fn new_from_endpoint(client: Endpoint, server: Endpoint) -> Self {
-        let server_addr = SocketAddr::new(
-            Ipv6Addr::LOCALHOST.into(),
-            SERVER_PORTS.lock().unwrap().next().unwrap(),
-        );
-        let client_addr = SocketAddr::new(
-            Ipv6Addr::LOCALHOST.into(),
-            CLIENT_PORTS.lock().unwrap().next().unwrap(),
-        );
         let now = Instant::now();
         Self {
-            server: TestEndpoint::new(server, server_addr),
-            client: TestEndpoint::new(client, client_addr),
+            server: TestEndpoint::new(server, Self::SERVER_ADDR),
+            client: TestEndpoint::new(client, Self::CLIENT_ADDR),
             epoch: now,
             time: now,
             mtu: DEFAULT_MTU,
@@ -129,6 +134,29 @@ impl Pair {
     /// Returns whether the connection is not idle
     pub(super) fn step(&mut self) -> bool {
         self.blackhole_step(false, false)
+    }
+
+    /// Drive both endpoints once, optionally preventing them from receiving traffic.
+    ///
+    /// Returns `false` if the connection is idle after the step.
+    pub(super) fn blackhole_step(
+        &mut self,
+        server_blackhole: bool,
+        client_blackhole: bool,
+    ) -> bool {
+        self.drive_client();
+        if server_blackhole {
+            self.server.inbound.clear();
+        }
+        self.drive_server();
+        if client_blackhole {
+            self.client.inbound.clear();
+        }
+        if self.client.is_idle() && self.server.is_idle() {
+            return false;
+        }
+
+        self.advance_time()
     }
 
     /// Advance time until both connections are idle
@@ -165,11 +193,8 @@ impl Pair {
                 self.spins += (spin == self.last_spin) as u64;
                 self.last_spin = spin;
             }
-            if let Some(ref socket) = self.client.socket {
-                socket.send_to(&buffer, packet.destination).unwrap();
-            }
-            let client_addr = match &self.routes {
-                Some(table) => table.resolve_client_to_server(packet.destination),
+            let client_addr = match self.routes.as_mut() {
+                Some(table) => table.route_client_to_server(&packet),
                 None => (self.server.addr == packet.destination).then_some(self.client.addr),
             };
             if let Some(client_addr) = client_addr {
@@ -182,7 +207,7 @@ impl Pair {
                     dst_ip: Some(packet.destination.ip()),
                 });
             } else {
-                debug!(?packet.destination, "no route from server to client for packet");
+                debug!(?packet.destination, "no route from client to server for packet");
             }
         }
     }
@@ -197,11 +222,8 @@ impl Pair {
                 info!(packet_size, "dropping packet (max size exceeded)");
                 continue;
             }
-            if let Some(ref socket) = self.server.socket {
-                socket.send_to(&buffer, packet.destination).unwrap();
-            }
-            let server_addr = match &self.routes {
-                Some(table) => table.resolve_server_to_client(packet.destination),
+            let server_addr = match self.routes.as_mut() {
+                Some(table) => table.route_server_to_client(&packet),
                 None => (self.client.addr == packet.destination).then_some(self.server.addr),
             };
             if let Some(server_addr) = server_addr {
@@ -217,29 +239,6 @@ impl Pair {
                 debug!(?packet.destination, "no route from server to client for packet");
             }
         }
-    }
-
-    /// Drive both endpoints once, optionally preventing them from receiving traffic.
-    ///
-    /// Returns `false` if the connection is idle after the step.
-    pub(super) fn blackhole_step(
-        &mut self,
-        server_blackhole: bool,
-        client_blackhole: bool,
-    ) -> bool {
-        self.drive_client();
-        if server_blackhole {
-            self.server.inbound.clear();
-        }
-        self.drive_server();
-        if client_blackhole {
-            self.client.inbound.clear();
-        }
-        if self.client.is_idle() && self.server.is_idle() {
-            return false;
-        }
-
-        self.advance_time()
     }
 
     pub(super) fn advance_time(&mut self) -> bool {
@@ -373,6 +372,26 @@ impl Pair {
             remote: self.client.addr,
             local_ip: Some(self.server.addr.ip()),
         }
+    }
+
+    /// Helper to get access to the test-specific routing table.
+    pub(super) fn downcast_routes_ref<T: PairRoutingTable>(&self) -> Option<&T> {
+        let routes: &dyn std::any::Any = self.routes.as_ref()?.as_ref();
+        Some(
+            routes
+                .downcast_ref::<T>()
+                .expect("downcast type does not match"),
+        )
+    }
+
+    /// Helper to get mutable access to the test-specific routing table.
+    pub(super) fn downcast_routes_mut<T: PairRoutingTable>(&mut self) -> Option<&mut T> {
+        let routes: &mut dyn std::any::Any = self.routes.as_mut()?.as_mut();
+        Some(
+            routes
+                .downcast_mut::<T>()
+                .expect("downcast type does not match"),
+        )
     }
 }
 
@@ -513,6 +532,25 @@ impl ConnPair {
         self.conn_mut(side).close_path(now, path_id, error_code)
     }
 
+    /// Simulate receiving a remote PATH_ABANDON for the last path.
+    ///
+    /// This bypasses the local LastOpenPath guard. In real usage this happens
+    /// when a remote peer (possibly a different implementation) sends
+    /// PATH_ABANDON for the last shared path.
+    #[track_caller]
+    pub(super) fn force_remote_abandon(&mut self, side: Side, path_id: PathId) {
+        let now = self.pair.time;
+        self.conn_mut(side)
+            .close_path_inner(
+                now,
+                path_id,
+                PathAbandonReason::RemoteAbandoned {
+                    error_code: 0u8.into(),
+                },
+            )
+            .expect("remote abandon should succeed for last path");
+    }
+
     pub(super) fn paths(&self, side: Side) -> Vec<PathId> {
         self.conn(side).paths()
     }
@@ -552,8 +590,9 @@ impl ConnPair {
         path_id: PathId,
         timeout: Option<Duration>,
     ) -> Result<Option<Duration>, ClosedPath> {
+        let now = self.pair.time;
         self.conn_mut(side)
-            .set_path_max_idle_timeout(path_id, timeout)
+            .set_path_max_idle_timeout(now, path_id, timeout)
     }
 
     pub(super) fn set_path_keep_alive_interval(
@@ -584,8 +623,10 @@ impl ConnPair {
         self.conn_mut(side).handle_timeout(now)
     }
 
-    pub(super) fn close(&mut self, side: Side, now: Instant, error_code: VarInt, reason: Bytes) {
-        self.conn_mut(side).close(now, error_code, reason)
+    pub(super) fn close(&mut self, side: Side, error_code: u32, reason: &[u8]) {
+        let now = self.pair.time;
+        self.conn_mut(side)
+            .close(now, error_code.into(), Bytes::copy_from_slice(reason))
     }
 
     pub(super) fn datagrams(&mut self, side: Side) -> Datagrams<'_> {
@@ -782,19 +823,6 @@ impl Default for Pair {
 pub(super) struct TestEndpoint {
     pub(super) endpoint: Endpoint,
     pub(super) addr: SocketAddr,
-    /// A real bound socket for the endpoint, if `SSLKEYLOGFILE` is set.
-    ///
-    /// Whether this socket exists or not does not affect how the datagrams are routed
-    /// between the [`TestEndpoint`]s. The datagrams always route through [`Self::outbound`]
-    /// and [`Self::Inbound`].
-    ///
-    /// If the socket *is* bound a copy of the datagram is sent over it so that it can be
-    /// intercepted using OS-level mechanisms. The receiving side drains the socket from
-    /// received datagrams, but does not process these as they are mere copies.
-    ///
-    /// Unless the `SSLKEYLOGFILE` is set an actual socket is not bound and this will be
-    /// left as `None`.
-    socket: Option<UdpSocket>,
     timeout: Option<Instant>,
     pub(super) outbound: VecDeque<(Transmit, Bytes)>,
     delayed: VecDeque<(Transmit, Bytes)>,
@@ -835,19 +863,9 @@ pub(super) fn validate_incoming(incoming: &Incoming) -> IncomingConnectionBehavi
 
 impl TestEndpoint {
     fn new(endpoint: Endpoint, addr: SocketAddr) -> Self {
-        let socket = if env::var_os("SSLKEYLOGFILE").is_some() {
-            let socket = UdpSocket::bind(addr).expect("failed to bind UDP socket");
-            socket
-                .set_read_timeout(Some(Duration::from_millis(10)))
-                .unwrap();
-            Some(socket)
-        } else {
-            None
-        };
         Self {
             endpoint,
             addr,
-            socket,
             timeout: None,
             outbound: VecDeque::new(),
             delayed: VecDeque::new(),
@@ -869,16 +887,6 @@ impl TestEndpoint {
     }
 
     pub(super) fn drive_incoming(&mut self, now: Instant) {
-        if let Some(ref socket) = self.socket {
-            // Drain packets from the socket. They are duplicates and live in Self::inbound
-            // as well where we process them from.
-            loop {
-                let mut buf = [0; 8192];
-                if socket.recv_from(&mut buf).is_err() {
-                    break;
-                }
-            }
-        }
         let buffer_size = self.endpoint.config().get_max_udp_payload_size() as usize;
         let mut buf = Vec::with_capacity(buffer_size);
 
@@ -1258,10 +1266,6 @@ fn set_congestion_experienced(
     })
 }
 
-pub(crate) static SERVER_PORTS: LazyLock<Mutex<RangeFrom<u16>>> =
-    LazyLock::new(|| Mutex::new(4433..));
-pub(crate) static CLIENT_PORTS: LazyLock<Mutex<RangeFrom<u16>>> =
-    LazyLock::new(|| Mutex::new(44433..));
 pub(crate) static CERTIFIED_KEY: LazyLock<rcgen::CertifiedKey<rcgen::KeyPair>> =
     LazyLock::new(|| rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap());
 
@@ -1281,6 +1285,22 @@ impl TokenLog for SimpleTokenLog {
             Err(TokenReuseError)
         }
     }
+}
+
+/// Generic router interface for the [`Pair::routes`].
+///
+/// This allows implementing different routing strategies.
+pub(super) trait PairRoutingTable: std::any::Any {
+    /// Routes a datagram from client to server.
+    ///
+    /// Returns the address the server will observe as the sender of the datagram. Or `None`
+    /// if there is no open link.
+    fn route_client_to_server(&mut self, transmit: &Transmit) -> Option<SocketAddr>;
+    /// Routes a datagram from server to client.
+    ///
+    /// Returns the address the client will observe as the sender of the datagram. Or `None`
+    /// if there is no open link.
+    fn route_server_to_client(&mut self, transmit: &Transmit) -> Option<SocketAddr>;
 }
 
 /// Set of uni-directional links between interfaces of a client and server.
@@ -1342,32 +1362,6 @@ impl RoutingTable {
         }
     }
 
-    /// Returns the client address a server would see on an incoming packet if
-    /// sent to given server address.
-    ///
-    /// Returns none if the packet would not find a route and get lost.
-    fn resolve_client_to_server(&self, server_addr: SocketAddr) -> Option<SocketAddr> {
-        let (_, client_addr_idx) = self
-            .server_routes
-            .iter()
-            .find(|(addr, _)| *addr == server_addr)?;
-        let (client_addr, _) = self.client_routes.get(*client_addr_idx)?;
-        Some(*client_addr)
-    }
-
-    /// Returns the server address a client would see on an incoming packet if
-    /// sent to given client address.
-    ///
-    /// Returns none if the packet would not find a route and get lost.
-    fn resolve_server_to_client(&self, client_addr: SocketAddr) -> Option<SocketAddr> {
-        let (_, server_addr_idx) = self
-            .client_routes
-            .iter()
-            .find(|(addr, _)| *addr == client_addr)?;
-        let (server_addr, _) = self.server_routes.get(*server_addr_idx)?;
-        Some(*server_addr)
-    }
-
     /// Adds a new route from an existing server address (identified by index) to a new client address.
     pub(super) fn add_client_route(&mut self, client_addr: SocketAddr, server_addr_idx: usize) {
         assert!(server_addr_idx < self.server_routes.len());
@@ -1408,5 +1402,198 @@ impl RoutingTable {
         let route = self.server_routes.get_mut(route_idx)?;
         route.0 = modify_fn(route.0);
         Some(route.0)
+    }
+}
+
+impl PairRoutingTable for RoutingTable {
+    fn route_client_to_server(&mut self, transmit: &Transmit) -> Option<SocketAddr> {
+        let (_, client_addr_idx) = self
+            .server_routes
+            .iter()
+            .find(|(addr, _)| *addr == transmit.destination)?;
+        let (client_addr, _) = self.client_routes.get(*client_addr_idx)?;
+        Some(*client_addr)
+    }
+
+    fn route_server_to_client(&mut self, transmit: &Transmit) -> Option<SocketAddr> {
+        let (_, server_addr_idx) = self
+            .client_routes
+            .iter()
+            .find(|(addr, _)| *addr == transmit.destination)?;
+        let (server_addr, _) = self.server_routes.get(*server_addr_idx)?;
+        Some(*server_addr)
+    }
+}
+
+/// A routing table with one open and one firewalled interface.
+///
+/// This essentially behaves like a Destination Endpoint Independent NAT with address and
+/// port filtering. But without having to simulate the public side of the network.
+///
+/// This is pretty simplistic, but tests the basics.
+///
+/// The client and server both have 2 interfaces:
+///
+/// 1. One "direct" interface, which has a link to the peer's "direct" interface.
+/// 2. One "nat" interface, which has a link to the peer's "nat" interface. This link
+///    however does not allow an incoming packet unless it has seen an outgoing packet
+///    first.
+///
+/// When an outgoing transmit has no `src_ip` is set, the source IP is set based on the
+/// destination. This is the same as the kernel selecting the correct outbound interface. If
+/// an outgoing transmit has an `src_ip` of an interface that is not linked to the interface
+/// of the destination IP then a transmit is dropped.
+#[derive(Debug)]
+pub(super) struct SimpleFirewallRoutingTable {
+    /// Whether the client has sent a packet from `client_nat` to `server_nat`.
+    ///
+    /// If so packets from `server_nat` to `client_nat` will be allowed. If not they will be
+    /// dropped.
+    client_firewall_open: bool,
+    /// Whether the server has sent a packet from `server_nat` to `client_nat`.
+    server_firewall_open: bool,
+}
+
+impl SimpleFirewallRoutingTable {
+    /// The address of the client's non-firewalled interface.
+    ///
+    /// IPv6 address `::1:1`. This is a normal unicast address.
+    /// - `::1:1` is for the first client address.
+    /// - `::1:0/112` is the subnet used for all client addresses.
+    pub(super) const CLIENT_DIRECT_ADDR: SocketAddr = Pair::CLIENT_ADDR;
+    /// The address of the server's non-firewalled interface.
+    ///
+    /// IPv6 address `::2:1`. This is a normal unicast address.
+    /// - `::2:1` is for the first server address.
+    /// - `::2:0/112` is the subnet used for all server addresses.
+    pub(super) const SERVER_DIRECT_ADDR: SocketAddr = Pair::SERVER_ADDR;
+    /// The address of the client's firewalled interface.
+    ///
+    /// IPv6 address `::1:2`. This is a normal IPv6 unicast address.
+    /// - `::1:2` is for the second client address.
+    /// - `::1:0/112` is the subnet used for all client addresses.
+    pub(super) const CLIENT_FW_ADDR: SocketAddr =
+        SocketAddr::new(IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 1, 2)), 1);
+    /// The address of the server's firewalled interface.
+    ///
+    /// IPv6 address `::2:2`. This is a normal IPv6 unicast address.
+    /// - `::2:1` is for the second server address.
+    /// - `::2:0/112` is the subnet used for all server addresses.
+    pub(super) const SERVER_FW_ADDR: SocketAddr =
+        SocketAddr::new(IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 2, 2)), 1);
+
+    pub(super) fn new() -> Self {
+        Self {
+            client_firewall_open: false,
+            server_firewall_open: false,
+        }
+    }
+}
+
+impl PairRoutingTable for SimpleFirewallRoutingTable {
+    /// Routes a datagram from client to server.
+    ///
+    /// Returns the address the server will observe as the sender of the datagram. Or `None`
+    /// if there is no open link.
+    ///
+    /// If there is no [`Transmit::src_ip`] then this routing table selects one based on the
+    /// destination, if reachable. Otherwise if the `src_ip` does not match an open link the
+    /// datagram is blocked.
+    fn route_client_to_server(&mut self, transmit: &Transmit) -> Option<SocketAddr> {
+        // Find the address this datagram SHOULD have been sent on to be able to reach the
+        // destination.
+        let link_src = if transmit.destination == Self::SERVER_DIRECT_ADDR {
+            Self::CLIENT_DIRECT_ADDR
+        } else if transmit.destination == Self::SERVER_FW_ADDR {
+            Self::CLIENT_FW_ADDR
+        } else {
+            debug!(
+                ?transmit.src_ip,
+                ?transmit.destination,
+                "transmit dropped: unknown destination (network unreachable)",
+            );
+            return None;
+        };
+
+        // If the datagram is NOT sent from this source then it can't be sent.
+        if transmit.src_ip.unwrap_or_else(|| link_src.ip()) != link_src.ip() {
+            debug!(
+                ?transmit.src_ip,
+                ?transmit.destination,
+                "transmit dropped: sent from wrong source (network unreachable)",
+            );
+            return None;
+        }
+
+        // Open the local firewall for outgoing packet.
+        if link_src == Self::CLIENT_FW_ADDR && !self.client_firewall_open {
+            info!("client firewall opened");
+            self.client_firewall_open = true;
+        }
+
+        if transmit.destination == Self::SERVER_FW_ADDR && !self.server_firewall_open {
+            debug!(
+                ?transmit.src_ip,
+                ?transmit.destination,
+                "transmit dropped: blocked by server firewall",
+            );
+            return None;
+        }
+
+        // Allow the datagram to be delivered.
+        Some(link_src)
+    }
+
+    /// Routes a datagram from server to client.
+    ///
+    /// Returns the address the client will observe as the sender of the datagram. Or `None`
+    /// if there is no open link.
+    ///
+    /// If there is no [`Transmit::src_ip`] then this routing table selects one based on the
+    /// destination, if reachable. Otherwise if the `src_ip` does not match an open link the
+    /// datagram is blocked.
+    fn route_server_to_client(&mut self, transmit: &Transmit) -> Option<SocketAddr> {
+        // Find the address this datagram SHOULD have been sent on to be able to reach the
+        // destination.
+        let link_src = if transmit.destination == Self::CLIENT_DIRECT_ADDR {
+            Self::SERVER_DIRECT_ADDR
+        } else if transmit.destination == Self::CLIENT_FW_ADDR {
+            Self::SERVER_FW_ADDR
+        } else {
+            debug!(
+                ?transmit.src_ip,
+                ?transmit.destination,
+                "transmit dropped: unknown destination (network unreachable)",
+            );
+            return None;
+        };
+
+        // If the datagram is NOT sent from this source then it can't be sent.
+        if transmit.src_ip.unwrap_or_else(|| link_src.ip()) != link_src.ip() {
+            debug!(
+                ?transmit.src_ip,
+                ?transmit.destination,
+                "transmit dropped: sent from wrong source (network unreachable)",
+            );
+            return None;
+        }
+
+        // Open the local firewall for outgoing packet.
+        if link_src == Self::SERVER_FW_ADDR && !self.server_firewall_open {
+            info!("server firewall opened");
+            self.server_firewall_open = true;
+        }
+
+        if transmit.destination == Self::CLIENT_FW_ADDR && !self.client_firewall_open {
+            debug!(
+                ?transmit.src_ip,
+                ?transmit.destination,
+                "transmit dropped: blocked by client firewall",
+            );
+            return None;
+        }
+
+        // Allow the datagram to be delivered.
+        Some(link_src)
     }
 }

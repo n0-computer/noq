@@ -10,25 +10,39 @@ use testresult::TestResult;
 use tracing::info;
 
 use crate::tests::RoutingTable;
-use crate::tests::util::{CLIENT_PORTS, ConnPair, SERVER_PORTS};
+use crate::tests::util::ConnPair;
 use crate::{
-    ClientConfig, ClosePathError, ConnectionId, ConnectionIdGenerator, Endpoint, EndpointConfig,
-    FourTuple, LOCAL_CID_COUNT, NetworkChangeHint, PathId, PathStatus, RandomConnectionIdGenerator,
+    ClientConfig, ConnectionId, ConnectionIdGenerator, Endpoint, EndpointConfig, FourTuple,
+    LOCAL_CID_COUNT, NetworkChangeHint, PathId, PathStatus, RandomConnectionIdGenerator,
     ServerConfig, Side::*, TransportConfig, cid_queue::CidQueue,
 };
-use crate::{Dir, Event, PathAbandonReason, PathEvent, StreamEvent, TransportErrorCode};
+use crate::{
+    ClosePathError, Dir, Event, PathAbandonReason, PathEvent, StreamEvent, TransportErrorCode,
+    n0_nat_traversal,
+};
 
 use super::util::{min_opt, subscribe};
-use super::{Pair, client_config, server_config};
+use super::{Pair, SimpleFirewallRoutingTable, client_config, server_config};
 
 const MAX_PATHS: u32 = 3;
 
 /// Returns a connected client-server pair with multipath enabled
 fn multipath_pair() -> ConnPair {
+    multipath_pair_with_nat_traversal(false)
+}
+
+fn multipath_pair_with_nat_traversal(nat_traversal: bool) -> ConnPair {
     let mut cfg = TransportConfig::default();
     cfg.max_concurrent_multipath_paths(MAX_PATHS);
+
+    // Use this to not get distracting MTU discovery probes in the logs.
+    // cfg.mtu_discovery_config(None);
+
     // Assume a low-latency connection so pacing doesn't interfere with the test
     cfg.initial_rtt(Duration::from_millis(10));
+    if nat_traversal {
+        cfg.max_remote_nat_traversal_addresses(8);
+    }
     #[cfg(feature = "qlog")]
     cfg.qlog_from_env("multipath_test");
 
@@ -70,7 +84,7 @@ fn non_zero_length_cids() {
     }
 
     let mut ep_config = EndpointConfig::default();
-    ep_config.cid_generator(|| Box::new(ZeroLenCidGenerator));
+    ep_config.cid_generator(Arc::new(|| Box::new(ZeroLenCidGenerator)));
     let client = Endpoint::new(Arc::new(ep_config), None, true);
 
     let mut pair = Pair::new_from_endpoint(client, server);
@@ -139,10 +153,16 @@ fn path_close_last_path() {
     let _guard = subscribe();
     let mut pair = multipath_pair();
 
+    // Closing the last path via the local API is not allowed.
+    // Use Connection::close() to end the connection instead.
     assert_matches!(
         pair.close_path(Client, PathId::ZERO, 0u8.into()),
         Err(ClosePathError::LastOpenPath)
     );
+
+    // Connection should still be alive
+    assert!(!pair.is_closed(Client));
+    assert!(!pair.is_closed(Server));
 }
 
 #[test]
@@ -461,12 +481,11 @@ fn open_path_validation_fails_server_side() -> TestResult {
     let mut pair = multipath_pair();
 
     let different_addr = FourTuple {
-        remote: SocketAddr::new(
-            [9, 8, 7, 6].into(),
-            SERVER_PORTS.lock()?.next().ok_or("no port")?,
-        ),
+        remote: SocketAddr::new([9, 8, 7, 6].into(), 5),
         local_ip: None,
     };
+    assert_ne!(different_addr.remote, Pair::SERVER_ADDR);
+    assert_ne!(different_addr.remote, Pair::CLIENT_ADDR);
     let path_id = pair.open_path(Client, different_addr, PathStatus::Available)?;
 
     // block the server from receiving anything
@@ -489,10 +508,9 @@ fn open_path_validation_fails_client_side() -> TestResult {
     let mut pair = multipath_pair();
 
     // make sure the new path cannot be validated using the existing path
-    pair.client.addr = SocketAddr::new(
-        [9, 8, 7, 6].into(),
-        CLIENT_PORTS.lock()?.next().ok_or("no port")?,
-    );
+    pair.client.addr = SocketAddr::new([9, 8, 7, 6].into(), 5);
+    assert_ne!(pair.client.addr, Pair::SERVER_ADDR);
+    assert_ne!(pair.client.addr, Pair::CLIENT_ADDR);
 
     let addr = pair.server.addr;
     let network_path = FourTuple {
@@ -504,6 +522,8 @@ fn open_path_validation_fails_client_side() -> TestResult {
     // Make sure the client's path open makes it through to the server and is processed.
     pair.drive_client();
     pair.drive_server();
+
+    info!("dropping client inbound queue");
     pair.client.inbound.clear();
 
     // Sever the connection and run it to idle.
@@ -530,10 +550,10 @@ fn open_path_ensure_after_abandon() -> TestResult {
     let mut second_server_addr = pair.server.addr;
     second_client_addr.set_port(second_client_addr.port() + 1);
     second_server_addr.set_port(second_server_addr.port() + 1);
-    pair.routes = Some(RoutingTable::simple_symmetric(
+    pair.routes = Some(Box::new(RoutingTable::simple_symmetric(
         [pair.client.addr, second_client_addr],
         [pair.server.addr, second_server_addr],
-    ));
+    )));
 
     let second_path = FourTuple {
         local_ip: Some(second_client_addr.ip()),
@@ -952,6 +972,146 @@ fn network_change_selective_hint() -> TestResult {
     Ok(())
 }
 
+/// Server-side network change with two paths and a selective hint.
+///
+/// The non-recoverable path is abandoned, leaving only the recoverable one.
+#[test]
+fn network_change_server_two_paths_selective_hint() -> TestResult {
+    let _guard = subscribe();
+    let mut pair = multipath_pair();
+
+    // Open a second path from the client side.
+    let server_addr = pair.addrs_to_server();
+    let second_path = pair.open_path(Client, server_addr, PathStatus::Available)?;
+    pair.drive();
+
+    assert_matches!(
+        pair.poll(Client),
+        Some(Event::Path(PathEvent::Opened { id })) if id == second_path
+    );
+    assert_matches!(
+        pair.poll(Server),
+        Some(Event::Path(PathEvent::Opened { id })) if id == second_path
+    );
+
+    // Hint: The provided PathId is recoverable, others are not.
+    #[derive(Debug)]
+    struct SelectiveHint(PathId);
+    impl NetworkChangeHint for SelectiveHint {
+        fn is_path_recoverable(&self, path_id: PathId, _network_path: FourTuple) -> bool {
+            path_id == self.0
+        }
+    }
+
+    // Signal network change without actually changing the server's local address. This
+    // means the client will not see an actual network change and keep accepting the packets
+    // from the server. If the server's address would change it would discard the server's
+    // packets since the server may not migrate.
+    pair.handle_network_change(Server, Some(&SelectiveHint(second_path)));
+
+    pair.drive();
+
+    // The non-recoverable path is abandoned on the server. No replacement opens because
+    // servers cannot call open_path.
+    assert_matches!(
+        pair.poll(Server),
+        Some(Event::Path(PathEvent::Abandoned {
+            id,
+            reason: PathAbandonReason::UnusableAfterNetworkChange,
+        })) if id == PathId::ZERO
+    );
+    assert_matches!(
+        pair.poll(Server),
+        Some(Event::Path(PathEvent::Discarded { id, .. })) if id == PathId::ZERO
+    );
+    assert_matches!(pair.poll(Server), None);
+
+    // The client sees PathId::ZERO abandoned by the remote, then discards it.
+    assert_matches!(
+        pair.poll(Client),
+        Some(Event::Path(PathEvent::Abandoned {
+            id: PathId::ZERO,
+            reason: PathAbandonReason::RemoteAbandoned { .. },
+        }))
+    );
+    assert_matches!(
+        pair.poll(Client),
+        Some(Event::Path(PathEvent::Discarded {
+            id: PathId::ZERO,
+            ..
+        }))
+    );
+    assert_matches!(pair.poll(Client), None);
+
+    Ok(())
+}
+
+/// Server-side network change with a single path and a non-recoverable hint.
+///
+/// The path cannot be closed because it is the last one.
+#[test]
+fn network_change_server_single_path_non_recoverable_falls_back() -> TestResult {
+    let _guard = subscribe();
+    let mut pair = multipath_pair();
+
+    // Hint that says all paths are non-recoverable
+    #[derive(Debug)]
+    struct NonRecoverableHint;
+    impl NetworkChangeHint for NonRecoverableHint {
+        fn is_path_recoverable(&self, _path_id: PathId, _network_path: FourTuple) -> bool {
+            false
+        }
+    }
+
+    // Signal network change without actually changing the server's local address. This
+    // means the client will not see an actual network change and keep accepting the packets
+    // from the server. If the server's address would change it would discard the server's
+    // packets since the server may not migrate.
+    pair.handle_network_change(Server, Some(&NonRecoverableHint));
+    pair.drive();
+
+    // The path should NOT be abandoned. The last open path cannot be closed.
+    assert_matches!(pair.poll(Server), None);
+    assert_matches!(pair.poll(Client), None);
+
+    Ok(())
+}
+
+/// Server-side network change with no hint defaults to recoverable. Both paths stay open.
+#[test]
+fn network_change_server_no_hint_recovers() -> TestResult {
+    let _guard = subscribe();
+    let mut pair = multipath_pair();
+
+    // Open a second path from the client side.
+    let server_addr = pair.addrs_to_server();
+    let second_path = pair.open_path(Client, server_addr, PathStatus::Available)?;
+    pair.drive();
+
+    assert_matches!(
+        pair.poll(Client),
+        Some(Event::Path(PathEvent::Opened { id })) if id == second_path
+    );
+    assert_matches!(
+        pair.poll(Server),
+        Some(Event::Path(PathEvent::Opened { id })) if id == second_path
+    );
+
+    // Signal network change without actually changing the server's local address. This
+    // means the client will not see an actual network change and keep accepting the packets
+    // from the server. If the server's address would change it would discard the server's
+    // packets since the server may not migrate.
+    pair.handle_network_change(Server, None);
+    pair.drive();
+
+    // No path events: the server defaults to recoverable when no hint is provided.
+    // Neither path should be abandoned.
+    assert_matches!(pair.poll(Server), None);
+    assert_matches!(pair.poll(Client), None);
+
+    Ok(())
+}
+
 /// Checks that the deadline given before a path fails to be considered open start only when the
 /// first packet is sent.
 ///
@@ -1023,6 +1183,599 @@ fn path_scheduling_path_status() -> TestResult {
     info!("assert");
     assert!((stats_path0_t1.udp_tx.datagrams - stats_path0_t0.udp_tx.datagrams) == 0);
     assert!((stats_path1_t1.udp_tx.datagrams - stats_path1_t0.udp_tx.datagrams) > 0);
+
+    Ok(())
+}
+
+#[test]
+fn server_abandon_last_verified_path() -> TestResult {
+    // The client abandons the last verified path the server has. The server is expected to
+    // send PATH_ABANDON on the abandoned path itself in this case.
+
+    let _guard = subscribe();
+    let mut pair = multipath_pair();
+
+    // Passively migrate the client and immediately open a second path. This way the client
+    // will assume the 2nd path is validated but to the server it will be
+    // un-validated. Otherwise the client would not allow closing path 0 since there would
+    // be no validated path left over.
+    pair.passive_migration(Client);
+    let route = FourTuple {
+        remote: pair.server.addr,
+        local_ip: None,
+    };
+    pair.open_path(Client, route, PathStatus::Available)?;
+    pair.close_path(Client, PathId::ZERO, 0u8.into())?;
+    pair.drive();
+
+    // We need to move past the Abandoned and Open events, we really only care about getting
+    // the stats from the abandoned path.
+    let evt = pair.poll(Server);
+    assert!(matches!(
+        evt,
+        Some(Event::Path(PathEvent::Abandoned { .. }))
+    ));
+    let evt = pair.poll(Server);
+    assert!(matches!(evt, Some(Event::Path(PathEvent::Opened { .. }))));
+
+    let evt = pair.poll(Server);
+    let Some(Event::Path(PathEvent::Discarded { path_stats, .. })) = evt else {
+        panic!("did not get path discarded event");
+    };
+
+    assert_eq!(path_stats.frame_tx.path_abandon, 1);
+
+    Ok(())
+}
+
+/// Remote abandons a non-last path: error code is propagated in the event.
+#[test]
+fn remote_path_abandon_with_remaining_path() -> TestResult {
+    let _guard = subscribe();
+    let mut pair = multipath_pair();
+
+    let server_addr = pair.addrs_to_server();
+    let _path_id = pair.open_path(Client, server_addr, PathStatus::Available)?;
+    pair.drive();
+    while pair.poll(Client).is_some() {}
+    while pair.poll(Server).is_some() {}
+
+    pair.close_path(Server, PathId::ZERO, 42u8.into())?;
+    pair.drive();
+
+    assert_matches!(
+        pair.poll(Client),
+        Some(Event::Path(PathEvent::Abandoned {
+            id: PathId::ZERO,
+            reason: PathAbandonReason::RemoteAbandoned { error_code }
+        })) if error_code == 42u8.into()
+    );
+    assert!(!pair.is_closed(Client));
+    assert!(!pair.is_closed(Server));
+
+    Ok(())
+}
+
+/// Remote abandons the last path, no new path opened: connection closes after grace period.
+#[test]
+fn remote_path_abandon_last_path_closes_connection() -> TestResult {
+    let _guard = subscribe();
+    let mut pair = multipath_pair();
+
+    // Open a second path so we can close path 0 normally
+    let server_addr = pair.addrs_to_server();
+    let _path1 = pair.open_path(Client, server_addr, PathStatus::Available)?;
+    pair.drive();
+    while pair.poll(Client).is_some() {}
+    while pair.poll(Server).is_some() {}
+
+    // Close path 0 normally (path 1 remains)
+    pair.close_path(Client, PathId::ZERO, 0u8.into())?;
+    pair.drive();
+    while pair.poll(Client).is_some() {}
+    while pair.poll(Server).is_some() {}
+
+    // Simulate remote abandoning path 1 (now the client's last path)
+    // We use force_remote_abandon because in a real scenario the PATH_ABANDON
+    // arrives via a packet on the same path, which auto-creates the path on
+    // the receiver if it doesn't exist, making packet-dropping approaches
+    // unable to create a true last-path scenario in tests.
+    pair.force_remote_abandon(Client, PathId::from(1u8));
+    pair.drive();
+
+    // After the grace period (no new path opened), the client should be closed.
+    assert!(
+        pair.is_closed(Client),
+        "client should be closed after grace period expired"
+    );
+
+    // Verify the client saw the abandon and connection close events.
+    let mut saw_abandon = false;
+    let mut saw_close = false;
+    while let Some(event) = pair.poll(Client) {
+        match event {
+            Event::Path(PathEvent::Abandoned {
+                reason: PathAbandonReason::RemoteAbandoned { .. },
+                ..
+            }) => saw_abandon = true,
+            Event::ConnectionLost { .. } => saw_close = true,
+            _ => {}
+        }
+    }
+    assert!(
+        saw_abandon,
+        "client should see path abandon event for last path"
+    );
+    assert!(saw_close, "client should see connection lost event");
+
+    Ok(())
+}
+
+/// Remote abandons the last path, client opens a new path within grace period: connection survives.
+#[test]
+fn remote_path_abandon_last_path_client_opens_new() -> TestResult {
+    let _guard = subscribe();
+    let mut pair = multipath_pair();
+
+    // Open path 1, close path 0 normally
+    let server_addr = pair.addrs_to_server();
+    let _path1 = pair.open_path(Client, server_addr, PathStatus::Available)?;
+    pair.drive();
+    while pair.poll(Client).is_some() {}
+    while pair.poll(Server).is_some() {}
+
+    pair.close_path(Client, PathId::ZERO, 0u8.into())?;
+    pair.drive();
+    while pair.poll(Client).is_some() {}
+    while pair.poll(Server).is_some() {}
+
+    // Simulate remote abandoning path 1 (client's last path)
+    pair.force_remote_abandon(Client, PathId::from(1u8));
+
+    // Client opens a new path within the grace period
+    let new_path = pair.addrs_to_server();
+    let new_path_id = pair.open_path(Client, new_path, PathStatus::Available)?;
+    pair.drive();
+
+    assert!(!pair.is_closed(Client), "client should survive");
+    assert!(!pair.is_closed(Server), "server should survive");
+
+    let mut saw_abandon = false;
+    let mut saw_opened = false;
+    while let Some(event) = pair.poll(Client) {
+        match event {
+            Event::Path(PathEvent::Abandoned {
+                reason: PathAbandonReason::RemoteAbandoned { .. },
+                ..
+            }) => saw_abandon = true,
+            Event::Path(PathEvent::Opened { id }) if id == new_path_id => saw_opened = true,
+            _ => {}
+        }
+    }
+    assert!(saw_abandon, "client should see abandon for last path");
+    assert!(saw_opened, "client should see new path opened");
+
+    Ok(())
+}
+
+#[test]
+fn abandon_path_data_continues() -> TestResult {
+    let _guard = subscribe();
+    let mut pair = multipath_pair();
+
+    // Open a second path
+    let server_addr = pair.addrs_to_server();
+    let path1 = pair.open_path(Client, server_addr, PathStatus::Available)?;
+    pair.drive();
+
+    // Drain open events
+    while pair.poll(Client).is_some() {}
+    while pair.poll(Server).is_some() {}
+
+    // Client abandons path 0 (picoquic: `picoquic_abandon_path(cnx_client, 0, 0, "test", time)`)
+    info!("client abandons path 0");
+    pair.close_path(Client, PathId::ZERO, 0u8.into())?;
+    pair.drive();
+
+    // Drain abandon + discard events
+    while pair.poll(Client).is_some() {}
+    while pair.poll(Server).is_some() {}
+
+    // Picoquic verification: both sides should have exactly 1 path remaining.
+    // In noq, we check that path 0 is abandoned and path 1 is still alive.
+    assert!(
+        pair.path_status(Client, path1).is_ok(),
+        "client should still have path 1"
+    );
+    assert!(
+        pair.path_status(Server, path1).is_ok(),
+        "server should still have path 1"
+    );
+
+    // Data should still flow on the remaining path (picoquic sends test_scenario_multipath)
+    let s = pair.streams(Client).open(Dir::Uni).unwrap();
+    const MSG: &[u8] = b"data after path abandon";
+    pair.send_stream(Client, s).write(MSG).unwrap();
+    pair.send_stream(Client, s).finish().unwrap();
+    pair.drive();
+
+    assert_matches!(
+        pair.poll(Server),
+        Some(Event::Stream(StreamEvent::Opened { dir: Dir::Uni }))
+    );
+    assert_matches!(pair.streams(Server).accept(Dir::Uni), Some(stream) if stream == s);
+    let mut recv = pair.recv_stream(Server, s);
+    let mut chunks = recv.read(false).unwrap();
+    assert_matches!(
+        chunks.next(usize::MAX),
+        Ok(Some(chunk)) if chunk.bytes == MSG
+    );
+    let _ = chunks.finalize();
+
+    // Connection alive
+    assert!(!pair.is_closed(Client));
+    assert!(!pair.is_closed(Server));
+
+    Ok(())
+}
+
+/// Regression test: a NewIdentifiers reply arriving after a path is abandoned
+/// must not result in the frames being queued for transmission in
+/// `pending.new_cids`.
+#[test]
+fn new_identifiers_after_abandon_does_not_panic() -> TestResult {
+    use crate::shared::{ConnectionEvent, ConnectionEventInner, IssuedCid};
+    use crate::token::ResetToken;
+
+    let _guard = subscribe();
+    let mut pair = multipath_pair();
+
+    // A second path is needed so close_path(0) is not the last open path.
+    let server_addr = pair.addrs_to_server();
+    let _path1 = pair.open_path(Client, server_addr, PathStatus::Available)?;
+    pair.drive();
+
+    let cid_seq_before = pair.conn(Client).active_local_path_cid_seq(0);
+
+    pair.close_path(Client, PathId::ZERO, 0u8.into())?;
+    pair.drive_client();
+    pair.drive_server();
+    pair.drive_client();
+
+    // Inject a NewIdentifiers reply for the just-abandoned path.
+    let synthetic_seq = cid_seq_before.1 + 1;
+    let issued = vec![IssuedCid {
+        path_id: PathId::ZERO,
+        sequence: synthetic_seq,
+        id: ConnectionId::new(&[0xAAu8; 8]),
+        reset_token: ResetToken::from([0u8; crate::RESET_TOKEN_SIZE]),
+    }];
+    let late_event = ConnectionEvent(ConnectionEventInner::NewIdentifiers(
+        issued, pair.time, 8, None,
+    ));
+    pair.handle_event(Client, late_event);
+
+    // The CID must not have been added to local_cid_state, otherwise it would be
+    // queued in `pending.new_cids` and later sent as a NEW_CONNECTION_ID frame
+    // for an abandoned path.
+    let cid_seq_after = pair.conn(Client).active_local_path_cid_seq(0);
+    assert_eq!(cid_seq_before, cid_seq_after);
+
+    Ok(())
+}
+
+/// Ported from picoquic `multipath_test_ab1`. Abandon + reopen cycle, 3 rounds.
+#[test]
+fn abandon_cycle() -> TestResult {
+    let _guard = subscribe();
+
+    let mut cfg = TransportConfig::default();
+    cfg.max_concurrent_multipath_paths(6);
+    cfg.initial_rtt(Duration::from_millis(10));
+
+    let mut pair = ConnPair::with_transport_cfg(cfg.clone(), cfg);
+    pair.drive();
+
+    // Set up addresses for multiple paths
+    let mut addrs_client = vec![pair.client.addr];
+    let mut addrs_server = vec![pair.server.addr];
+    for i in 1..6u16 {
+        let mut ca = pair.client.addr;
+        ca.set_port(ca.port() + i);
+        addrs_client.push(ca);
+        let mut sa = pair.server.addr;
+        sa.set_port(sa.port() + i);
+        addrs_server.push(sa);
+    }
+    pair.routes = Some(Box::new(RoutingTable::simple_symmetric(
+        addrs_client.clone(),
+        addrs_server.clone(),
+    )));
+
+    // Cycle: open a second path, abandon path 0, verify cleanup, repeat with new paths.
+    // Each cycle uses a fresh pair of addresses.
+    let mut current_path = PathId::ZERO;
+    for cycle in 0..3u16 {
+        let addr_idx = (cycle as usize) + 1;
+        let new_path_net = FourTuple {
+            local_ip: Some(addrs_client[addr_idx].ip()),
+            remote: addrs_server[addr_idx],
+        };
+
+        info!("cycle {cycle}: opening new path on addr index {addr_idx}");
+        let new_path = pair.open_path(Client, new_path_net, PathStatus::Available)?;
+        pair.drive();
+
+        // Drain events
+        while pair.poll(Client).is_some() {}
+        while pair.poll(Server).is_some() {}
+
+        info!("cycle {cycle}: abandoning path {current_path}");
+        pair.close_path(Client, current_path, 0u8.into())?;
+        pair.drive();
+
+        // Drain events (abandon + discard)
+        while pair.poll(Client).is_some() {}
+        while pair.poll(Server).is_some() {}
+
+        // Verify the abandoned path is gone and the new path remains
+        assert!(
+            pair.path_status(Client, current_path).is_err(),
+            "cycle {cycle}: abandoned path should be gone"
+        );
+        assert!(
+            pair.path_status(Client, new_path).is_ok(),
+            "cycle {cycle}: new path should be alive"
+        );
+
+        // Verify connection is alive
+        assert!(
+            !pair.is_closed(Client),
+            "cycle {cycle}: client should be alive"
+        );
+        assert!(
+            !pair.is_closed(Server),
+            "cycle {cycle}: server should be alive"
+        );
+
+        // Picoquic verifies CID stash has >= 2 entries; we verify data still works.
+        let s = pair.streams(Client).open(Dir::Uni).unwrap();
+        let msg = format!("cycle {cycle}");
+        pair.send_stream(Client, s).write(msg.as_bytes()).unwrap();
+        pair.send_stream(Client, s).finish().unwrap();
+        pair.drive();
+
+        // Server should receive the data
+        assert_matches!(
+            pair.poll(Server),
+            Some(Event::Stream(StreamEvent::Opened { dir: Dir::Uni }))
+        );
+        assert_matches!(pair.streams(Server).accept(Dir::Uni), Some(stream) if stream == s);
+        let mut recv = pair.recv_stream(Server, s);
+        let mut chunks = recv.read(false).unwrap();
+        assert_matches!(
+            chunks.next(usize::MAX),
+            Ok(Some(chunk)) if chunk.bytes == msg.as_bytes()
+        );
+        let _ = chunks.finalize();
+
+        current_path = new_path;
+    }
+
+    Ok(())
+}
+
+/// NAT traversal round revalidates an existing path via new PATH_CHALLENGE.
+#[test]
+fn nat_traversal_revalidates_existing_path() -> TestResult {
+    let _guard = subscribe();
+    let mut pair = multipath_pair_with_nat_traversal(true);
+
+    let server_addr = pair.server.addr;
+    let client_addr = pair.client.addr;
+
+    pair.add_nat_traversal_address(Server, server_addr)?;
+    pair.add_nat_traversal_address(Client, client_addr)?;
+    pair.drive();
+
+    let probed = pair.initiate_nat_traversal_round(Client)?;
+    assert_eq!(probed.len(), 1);
+    assert_eq!(probed[0], server_addr);
+    pair.drive();
+
+    assert_eq!(
+        pair.path_status(Client, PathId::ZERO)?,
+        PathStatus::Available
+    );
+
+    let challenges_before = pair.stats(Client).frame_tx.path_challenge;
+
+    // Second round with the same addresses should trigger revalidation
+    let probed = pair.initiate_nat_traversal_round(Client)?;
+    assert_eq!(probed.len(), 1);
+    pair.drive_bounded(20);
+
+    let challenges_after = pair.stats(Client).frame_tx.path_challenge;
+    assert!(
+        challenges_after > challenges_before,
+        "expected new PATH_CHALLENGE for existing path \
+         (before={challenges_before}, after={challenges_after})"
+    );
+
+    Ok(())
+}
+
+/// After a silent gap, PTO backs off exponentially and can reach minutes.
+/// The 2s PTO cap ensures recovery happens promptly once connectivity returns.
+#[test]
+fn path_recovers_after_silent_gap_via_keepalive() -> TestResult {
+    let _guard = subscribe();
+
+    let mut cfg = TransportConfig::default();
+    cfg.max_concurrent_multipath_paths(MAX_PATHS);
+    cfg.initial_rtt(Duration::from_millis(10));
+    cfg.default_path_max_idle_timeout(Some(Duration::from_secs(60)));
+
+    let mut pair = ConnPair::with_transport_cfg(cfg.clone(), cfg);
+    pair.drive();
+
+    while pair.poll(Client).is_some() {}
+    while pair.poll(Server).is_some() {}
+
+    let s = pair.streams(Server).open(Dir::Uni).unwrap();
+    pair.send_stream(Server, s).write(&[42u8; 5000]).unwrap();
+    pair.drive();
+
+    assert_matches!(
+        pair.poll(Client),
+        Some(Event::Stream(StreamEvent::Opened { dir: Dir::Uni }))
+    );
+    assert_matches!(pair.streams(Client).accept(Dir::Uni), Some(stream) if stream == s);
+    let mut recv = pair.recv_stream(Client, s);
+    let mut chunks = recv.read(false).unwrap();
+    let mut total_read = 0;
+    while let Ok(Some(chunk)) = chunks.next(usize::MAX) {
+        total_read += chunk.bytes.len();
+    }
+    let _ = chunks.finalize();
+    info!("read {total_read} bytes before gap");
+    assert!(total_read > 0, "should have received initial data");
+
+    while pair.poll(Client).is_some() {}
+    while pair.poll(Server).is_some() {}
+
+    pair.send_stream(Server, s).write(&[43u8; 5000]).unwrap();
+
+    info!("starting silent gap");
+    let gap_start = pair.time;
+    for _ in 0..10 {
+        if !pair.blackhole_step(true, true) {
+            break;
+        }
+    }
+    let gap_duration = pair.time - gap_start;
+    info!("gap lasted {:?}", gap_duration);
+
+    pair.send_stream(Server, s).write(b"after gap").unwrap();
+    pair.send_stream(Server, s).finish().unwrap();
+
+    info!("gap ended, driving to recovery");
+    let mut received_post_gap = false;
+    for i in 0..50 {
+        if pair.is_closed(Client) || pair.is_closed(Server) {
+            info!("connection died at step {i}");
+            break;
+        }
+        pair.step();
+
+        while let Some(event) = pair.poll(Client) {
+            if matches!(&event, Event::Stream(StreamEvent::Readable { .. })) {
+                info!("client received data at step {i}");
+                received_post_gap = true;
+            }
+        }
+        if received_post_gap {
+            break;
+        }
+    }
+
+    assert!(!pair.is_closed(Client), "client should survive the gap");
+    assert!(!pair.is_closed(Server), "server should survive the gap");
+    assert!(
+        received_post_gap,
+        "client should receive data after the gap recovers"
+    );
+
+    Ok(())
+}
+
+/// Tests NAT traversal manages to open a 2nd path.
+#[test]
+fn test_simple_nat_traveral_opens_path() -> TestResult {
+    let _guard = subscribe();
+    let mut pair = multipath_pair_with_nat_traversal(true);
+
+    info!("setting routes, adding addrs");
+    pair.routes = Some(Box::new(SimpleFirewallRoutingTable::new()));
+    pair.add_nat_traversal_address(Server, SimpleFirewallRoutingTable::SERVER_FW_ADDR)?;
+    pair.add_nat_traversal_address(Client, SimpleFirewallRoutingTable::CLIENT_FW_ADDR)?;
+    pair.drive();
+
+    let event = pair.poll(Client).expect("should have event");
+    assert_matches!(
+        event,
+        Event::NatTraversal(n0_nat_traversal::Event::AddressAdded(_))
+    );
+
+    info!("init NAT traversal");
+    pair.initiate_nat_traversal_round(Client)?;
+
+    // Ensure we have no more events queued
+    assert_matches!(pair.poll(Client), None);
+    assert_matches!(pair.poll(Server), None);
+
+    pair.drive();
+
+    let event = pair.poll(Client).expect("should have event");
+    assert_matches!(event, Event::Path(PathEvent::Opened { .. }));
+
+    let event = pair.poll(Server).expect("should have event");
+    assert_matches!(event, Event::Path(PathEvent::Opened { .. }));
+
+    Ok(())
+}
+
+/// Test that a PATH_CHALLENGE is added to a PATH_RESPONSE for NAT traversal.
+#[test]
+fn test_simple_nat_traversal_challenge_with_response() -> TestResult {
+    let _guard = subscribe();
+    let mut pair = multipath_pair_with_nat_traversal(true);
+
+    info!("setting routes, adding addrs");
+    pair.routes = Some(Box::new(SimpleFirewallRoutingTable::new()));
+    pair.add_nat_traversal_address(Server, SimpleFirewallRoutingTable::SERVER_FW_ADDR)?;
+    pair.add_nat_traversal_address(Client, SimpleFirewallRoutingTable::CLIENT_FW_ADDR)?;
+    pair.drive();
+
+    let event = pair.poll(Client).expect("should have event");
+    assert_matches!(
+        event,
+        Event::NatTraversal(n0_nat_traversal::Event::AddressAdded(_))
+    );
+
+    info!("init NAT traversal");
+    pair.initiate_nat_traversal_round(Client)?;
+
+    // Ensure we have no more events queued
+    assert_matches!(pair.poll(Client), None);
+    assert_matches!(pair.poll(Server), None);
+
+    // Client sends probe (blocked) + REACH_OUT, server send probe. Both firewalls open.
+    pair.step();
+
+    // Client receives probe, includes its own challenge with the response.
+    let stats0 = pair.stats(Client);
+    pair.step();
+    let stats1 = pair.stats(Client);
+
+    // Without the challenge-with-response only a PATH_RESPONSE would have been sent.
+    assert_eq!(
+        stats1.frame_tx.path_response - stats0.frame_tx.path_response,
+        1
+    );
+    assert_eq!(
+        stats1.frame_tx.path_challenge - stats0.frame_tx.path_challenge,
+        1
+    );
+
+    // Continue till the end.
+    pair.drive();
+
+    let event = pair.poll(Client).expect("should have event");
+    assert_matches!(event, Event::Path(PathEvent::Opened { .. }));
+
+    let event = pair.poll(Server).expect("should have event");
+    assert_matches!(event, Event::Path(PathEvent::Opened { .. }));
 
     Ok(())
 }

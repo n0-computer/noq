@@ -1,6 +1,6 @@
 [package]
 name = "noq-udp"
-version = "0.9.0"
+version = "0.10.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -17,7 +17,7 @@ default = ["tracing", "tracing-log"]
 # Configure `tracing` to log events via `log` if no `tracing` subscriber exists.
 tracing-log = ["tracing/log"]
 log = ["dep:log"]
-# Use private Apple APIs to send multiple packets in a single syscall.
+# Support private Apple APIs to send multiple packets in a single syscall.
 fast-apple-datapath = []
 
 [dependencies]

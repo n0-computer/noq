@@ -196,7 +196,9 @@ fn server_stateless_reset() {
     rng.fill_bytes(&mut key_material);
 
     let mut endpoint_config = EndpointConfig::new(Arc::new(reset_key));
-    endpoint_config.cid_generator(move || Box::new(HashedConnectionIdGenerator::from_key(0)));
+    endpoint_config.cid_generator(Arc::new(move || {
+        Box::new(HashedConnectionIdGenerator::from_key(0))
+    }));
     let endpoint_config = Arc::new(endpoint_config);
 
     let mut pair = Pair::new(endpoint_config.clone(), server_config());
@@ -225,7 +227,9 @@ fn client_stateless_reset() {
     rng.fill_bytes(&mut key_material);
 
     let mut endpoint_config = EndpointConfig::new(Arc::new(reset_key));
-    endpoint_config.cid_generator(move || Box::new(HashedConnectionIdGenerator::from_key(0)));
+    endpoint_config.cid_generator(Arc::new(move || {
+        Box::new(HashedConnectionIdGenerator::from_key(0))
+    }));
     let endpoint_config = Arc::new(endpoint_config);
 
     let mut pair = Pair::new(endpoint_config.clone(), server_config());
@@ -253,7 +257,9 @@ fn stateless_reset_limit() {
     let _guard = subscribe();
     let remote = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 42);
     let mut endpoint_config = EndpointConfig::default();
-    endpoint_config.cid_generator(move || Box::new(RandomConnectionIdGenerator::new(8)));
+    endpoint_config.cid_generator(Arc::new(move || {
+        Box::new(RandomConnectionIdGenerator::new(8))
+    }));
     let endpoint_config = Arc::new(endpoint_config);
     let mut endpoint = Endpoint::new(
         endpoint_config.clone(),
@@ -552,10 +558,9 @@ fn zero_rtt_happypath() {
         .close(pair.time, VarInt(0), [][..].into());
     pair.drive();
 
-    pair.client.addr = SocketAddr::new(
-        Ipv6Addr::LOCALHOST.into(),
-        CLIENT_PORTS.lock().unwrap().next().unwrap(),
-    );
+    pair.client.addr = SocketAddr::new(Ipv6Addr::LOCALHOST.into(), 1);
+    assert_ne!(pair.client.addr, Pair::CLIENT_ADDR);
+    assert_ne!(pair.client.addr, Pair::SERVER_ADDR);
     info!("resuming session");
     let client_ch = pair.begin_connect(config);
     assert!(pair.client_conn_mut(client_ch).has_0rtt());
@@ -733,10 +738,9 @@ fn test_zero_rtt_incoming_limit<F: FnOnce(&mut ServerConfig)>(configure_server: 
         .close(pair.time, VarInt(0), [][..].into());
     pair.drive();
 
-    pair.client.addr = SocketAddr::new(
-        Ipv6Addr::LOCALHOST.into(),
-        CLIENT_PORTS.lock().unwrap().next().unwrap(),
-    );
+    pair.client.addr = SocketAddr::new(Ipv6Addr::LOCALHOST.into(), 1);
+    assert_ne!(pair.client.addr, Pair::CLIENT_ADDR);
+    assert_ne!(pair.client.addr, Pair::SERVER_ADDR);
     info!("resuming session");
     pair.server.handle_incoming = Box::new(|_| IncomingConnectionBehavior::Wait);
     let client_ch = pair.begin_connect(config);
@@ -746,6 +750,7 @@ fn test_zero_rtt_incoming_limit<F: FnOnce(&mut ServerConfig)>(configure_server: 
         .write(&vec![0; CLIENT_WRITES])
         .unwrap();
     pair.drive();
+    info!("accepting connection");
     let incoming = pair.server.waiting_incoming.pop().unwrap();
     assert!(pair.server.waiting_incoming.is_empty());
     let _ = pair.server.try_accept(incoming, pair.time);
@@ -1035,6 +1040,69 @@ fn stream_id_limit() {
 }
 
 #[test]
+fn streams_blocked() {
+    let _guard = subscribe();
+    let server = ServerConfig {
+        transport: Arc::new(TransportConfig {
+            max_concurrent_uni_streams: 1u32.into(),
+            ..TransportConfig::default()
+        }),
+        ..server_config()
+    };
+    let mut pair = Pair::new(Default::default(), server);
+    let (client_ch, server_ch) = pair.connect();
+
+    // Use up the only stream slot, then try to open another
+    let s = pair
+        .client_streams(client_ch)
+        .open(Dir::Uni)
+        .expect("first uni stream");
+    assert_eq!(pair.client_streams(client_ch).open(Dir::Uni), None);
+
+    // Send data so the STREAMS_BLOCKED piggybacks on an outgoing packet
+    pair.client_send(client_ch, s).write(b"hi").unwrap();
+    pair.drive();
+
+    assert_eq!(
+        pair.client_conn_mut(client_ch)
+            .stats()
+            .frame_tx
+            .streams_blocked_uni,
+        1
+    );
+    assert_eq!(
+        pair.server_conn_mut(server_ch)
+            .stats()
+            .frame_rx
+            .streams_blocked_uni,
+        1
+    );
+}
+
+#[test]
+fn streams_blocked_not_sent_under_limit() {
+    let _guard = subscribe();
+    let mut pair = Pair::default();
+    let (client_ch, _server_ch) = pair.connect();
+
+    // Default config allows many streams; opening one should not trigger STREAMS_BLOCKED
+    let s = pair
+        .client_streams(client_ch)
+        .open(Dir::Uni)
+        .expect("open stream");
+    pair.client_send(client_ch, s).write(b"hi").unwrap();
+    pair.drive();
+
+    assert_eq!(
+        pair.client_conn_mut(client_ch)
+            .stats()
+            .frame_tx
+            .streams_blocked_uni,
+        0
+    );
+}
+
+#[test]
 fn key_update_simple() {
     let _guard = subscribe();
     let mut pair = Pair::default();
@@ -1171,6 +1239,7 @@ fn initial_retransmit() {
     let mut pair = Pair::default();
     let client_ch = pair.begin_connect(client_config());
     pair.client.drive(pair.time);
+    info!("clearing client outbound");
     pair.client.outbound.clear(); // Drop initial
     pair.drive();
     assert_matches!(
@@ -1332,6 +1401,39 @@ fn connection_close_sends_acks() {
     );
 }
 
+/// Client closes the connection at the same time it experience a passive migration.
+#[test]
+fn close_from_migrated_address() {
+    let _guard = subscribe();
+    let mut pair = ConnPair::default();
+    pair.drive();
+
+    // Change client address - server will see this as migration
+    pair.client.addr = SocketAddr::new(Ipv4Addr::new(127, 0, 0, 1).into(), 1);
+    assert_ne!(pair.client.addr, Pair::CLIENT_ADDR);
+    assert_ne!(pair.client.addr, Pair::SERVER_ADDR);
+
+    // Client closes connection from the NEW address.  The server will see the migration and
+    // close the connection on the new address.
+    // TODO(flub): Potentially the server should also send the CONNECTION_CLOSE to the old
+    //    address. Because the new one has not yet been validated.
+    pair.close(Client, 0, b"bye");
+    pair.drive();
+
+    let server_stats = pair.stats(Server);
+    assert_eq!(server_stats.frame_tx.connection_close, 1);
+
+    assert_matches!(
+        pair.poll(Server),
+        Some(Event::ConnectionLost {
+            reason: ConnectionError::ApplicationClosed(_)
+        })
+    );
+
+    let path = pair.conn(Server).network_path(PathId::ZERO).unwrap();
+    assert_eq!(path.remote(), pair.client.addr);
+}
+
 #[test]
 fn server_hs_retransmit() {
     let _guard = subscribe();
@@ -1361,10 +1463,9 @@ fn migration() {
 
     let client_stats_after_connect = pair.client_conn_mut(client_ch).stats();
 
-    pair.client.addr = SocketAddr::new(
-        Ipv4Addr::new(127, 0, 0, 1).into(),
-        CLIENT_PORTS.lock().unwrap().next().unwrap(),
-    );
+    pair.client.addr = SocketAddr::new(Ipv4Addr::new(127, 0, 0, 1).into(), 1);
+    assert_ne!(pair.client.addr, Pair::CLIENT_ADDR);
+    assert_ne!(pair.client.addr, Pair::SERVER_ADDR);
     pair.client_conn_mut(client_ch).ping();
 
     // Assert that just receiving the ping message is accounted into the servers
@@ -2592,10 +2693,9 @@ fn migrate_detects_new_mtu_and_respects_original_peer_max_udp_payload_size() {
 
     // Migrate client to a different port (and simulate a higher path MTU)
     pair.mtu = 1500;
-    pair.client.addr = SocketAddr::new(
-        Ipv4Addr::new(127, 0, 0, 1).into(),
-        CLIENT_PORTS.lock().unwrap().next().unwrap(),
-    );
+    pair.client.addr = SocketAddr::new(Ipv4Addr::new(127, 0, 0, 1).into(), 1);
+    assert_ne!(pair.client.addr, Pair::CLIENT_ADDR);
+    assert_ne!(pair.client.addr, Pair::SERVER_ADDR);
     pair.client_conn_mut(client_ch).ping();
     pair.drive();
 
@@ -3682,10 +3782,9 @@ fn address_discovery_zero_rtt_accepted() {
         .close(pair.time, VarInt(0), [][..].into());
     pair.drive();
 
-    pair.client.addr = SocketAddr::new(
-        Ipv6Addr::LOCALHOST.into(),
-        CLIENT_PORTS.lock().unwrap().next().unwrap(),
-    );
+    pair.client.addr = SocketAddr::new(Ipv6Addr::LOCALHOST.into(), 1);
+    assert_ne!(pair.client.addr, Pair::CLIENT_ADDR);
+    assert_ne!(pair.client.addr, Pair::SERVER_ADDR);
     info!("resuming session");
     let client_ch = pair.begin_connect(alt_client_cfg);
     assert!(pair.client_conn_mut(client_ch).has_0rtt());
@@ -3904,7 +4003,7 @@ fn network_change_single_path_recovery() {
     pair.passive_migration(Client);
     pair.handle_network_change(Client, None);
 
-    // The path should NOT be closed — there should be no path events
+    // The path should NOT be closed and there should be no path events
     pair.drive();
     assert_matches!(pair.poll(Client), None);
 

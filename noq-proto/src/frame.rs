@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     fmt::{self, Display},
     mem,
     net::{IpAddr, SocketAddr},
@@ -215,6 +216,44 @@ pub(super) enum EncodableFrame<'a> {
     MaxData(MaxData),
     MaxStreamData(MaxStreamData),
     MaxStreams(MaxStreams),
+    StreamsBlocked(StreamsBlocked),
+}
+
+impl<'a> EncodableFrame<'a> {
+    /// Whether this is an ACK-eliciting frame.
+    pub(crate) fn is_ack_eliciting(&self) -> bool {
+        match self {
+            EncodableFrame::PathAck(_) | EncodableFrame::Ack(_) | EncodableFrame::Close(_) => false,
+            EncodableFrame::PathResponse(_)
+            | EncodableFrame::HandshakeDone(_)
+            | EncodableFrame::ReachOut(_)
+            | EncodableFrame::ObservedAddr(_)
+            | EncodableFrame::Ping(_)
+            | EncodableFrame::ImmediateAck(_)
+            | EncodableFrame::AckFrequency(_)
+            | EncodableFrame::PathChallenge(_)
+            | EncodableFrame::Crypto(_)
+            | EncodableFrame::PathAbandon(_)
+            | EncodableFrame::PathStatusAvailable(_)
+            | EncodableFrame::PathStatusBackup(_)
+            | EncodableFrame::MaxPathId(_)
+            | EncodableFrame::PathsBlocked(_)
+            | EncodableFrame::PathCidsBlocked(_)
+            | EncodableFrame::ResetStream(_)
+            | EncodableFrame::StopSending(_)
+            | EncodableFrame::NewConnectionId(_)
+            | EncodableFrame::RetireConnectionId(_)
+            | EncodableFrame::Datagram(_)
+            | EncodableFrame::NewToken(_)
+            | EncodableFrame::AddAddress(_)
+            | EncodableFrame::RemoveAddress(_)
+            | EncodableFrame::StreamMeta(_)
+            | EncodableFrame::MaxData(_)
+            | EncodableFrame::MaxStreamData(_)
+            | EncodableFrame::MaxStreams(_)
+            | EncodableFrame::StreamsBlocked(_) => true,
+        }
+    }
 }
 
 impl<'a> Encodable for EncodableFrame<'a> {
@@ -781,6 +820,7 @@ impl Encodable for RetireConnectionId {
 
 #[cfg_attr(test, derive(Arbitrary))]
 #[derive(Clone, Debug, derive_more::Display)]
+#[display("CONNECTION_CLOSE error_code={} reason='{}'", self.error_code(), self.reason())]
 pub(crate) enum Close {
     Connection(ConnectionClose),
     Application(ApplicationClose),
@@ -796,6 +836,20 @@ impl Close {
 
     pub(crate) fn is_transport_layer(&self) -> bool {
         matches!(*self, Self::Connection(_))
+    }
+
+    fn error_code(&self) -> u64 {
+        match self {
+            Self::Connection(ConnectionClose { error_code, .. }) => u64::from(*error_code),
+            Self::Application(ApplicationClose { error_code, .. }) => u64::from(*error_code),
+        }
+    }
+
+    fn reason(&self) -> Cow<'_, str> {
+        match self {
+            Self::Connection(ConnectionClose { reason, .. }) => String::from_utf8_lossy(reason),
+            Self::Application(ApplicationClose { reason, .. }) => String::from_utf8_lossy(reason),
+        }
     }
 }
 
@@ -953,8 +1007,7 @@ impl proptest::arbitrary::Arbitrary for PathAck {
         (
             any::<PathId>(),
             varint_u64(),
-            any::<ArrayRangeSet>()
-                .prop_filter("ranges must be non empty", |ranges| !ranges.is_empty()),
+            any::<ArrayRangeSet>(),
             any::<Option<EcnCounts>>(),
         )
             .prop_map(|(path_id, delay, ranges, ecn)| Self {
@@ -1082,8 +1135,7 @@ impl proptest::arbitrary::Arbitrary for Ack {
         use proptest::prelude::*;
         (
             varint_u64(),
-            any::<ArrayRangeSet>()
-                .prop_filter("ranges must be non empty", |ranges| !ranges.is_empty()),
+            any::<ArrayRangeSet>(),
             any::<Option<EcnCounts>>(),
         )
             .prop_map(|(delay, ranges, ecn)| Self {
@@ -2318,7 +2370,8 @@ impl Encodable for AddAddress {
     }
 }
 
-/// Conjunction of the information contained in the reach out frames
+/// Conjunction of the information contained in the reach out frames.
+///
 /// ([`FrameType::ReachOutAtIpv4`], [`FrameType::ReachOutAtIpv6`])
 #[derive(Debug, PartialEq, Eq, Clone, derive_more::Display)]
 #[display("REACH_OUT round: {round} local_addr: {}", self.socket_addr())]
@@ -2332,21 +2385,7 @@ pub(crate) struct ReachOut {
     pub(crate) port: u16,
 }
 
-// TODO(@divma): remove
-#[allow(dead_code)]
 impl ReachOut {
-    /// Smallest number of bytes this type of frame is guaranteed to fit within
-    pub(crate) const SIZE_BOUND: usize = Self {
-        round: VarInt::MAX,
-        ip: IpAddr::V6(std::net::Ipv6Addr::LOCALHOST),
-        port: u16::MAX,
-    }
-    .size();
-
-    pub(crate) const fn new(round: VarInt, (ip, port): (IpAddr, u16)) -> Self {
-        Self { round, ip, port }
-    }
-
     /// Get the [`FrameType`] for this frame
     pub(crate) const fn get_type(&self) -> FrameType {
         if self.ip.is_ipv6() {

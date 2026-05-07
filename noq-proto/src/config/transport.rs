@@ -14,22 +14,6 @@ use crate::{
 #[cfg(feature = "qlog")]
 use crate::{QlogFactory, QlogFileFactory};
 
-/// When multipath is required and has not been explicitly enabled, this value will be used for
-/// [`TransportConfig::max_concurrent_multipath_paths`].
-const DEFAULT_CONCURRENT_MULTIPATH_PATHS_WHEN_ENABLED_: NonZeroU32 = {
-    match NonZeroU32::new(12) {
-        Some(v) => v,
-        None => panic!("to enable multipath this must be positive, which clearly it is"),
-    }
-};
-
-/// When multipath is required and has not been explicitly enabled, this value will be used for
-///
-/// [`TransportConfig::max_concurrent_multipath_paths`].
-#[cfg(doc)]
-pub const DEFAULT_CONCURRENT_MULTIPATH_PATHS_WHEN_ENABLED: NonZeroU32 =
-    DEFAULT_CONCURRENT_MULTIPATH_PATHS_WHEN_ENABLED_;
-
 /// Parameters governing the core QUIC state machine
 ///
 /// Default values should be suitable for most internet applications. Applications protocols which
@@ -60,6 +44,7 @@ pub struct TransportConfig {
     pub(crate) mtu_discovery_config: Option<MtuDiscoveryConfig>,
     pub(crate) pad_to_mtu: bool,
     pub(crate) ack_frequency_config: Option<AckFrequencyConfig>,
+    pub(crate) max_outgoing_bytes_per_second: Option<u64>,
 
     pub(crate) persistent_congestion_threshold: u32,
     pub(crate) keep_alive_interval: Option<Duration>,
@@ -272,6 +257,14 @@ impl TransportConfig {
         self
     }
 
+    /// Configures an outbound rate limit (in bytes per second) for each connection.
+    ///
+    /// Defaults to `None`, which disables rate limiting.
+    pub fn max_outgoing_bytes_per_second(&mut self, value: Option<u64>) -> &mut Self {
+        self.max_outgoing_bytes_per_second = value;
+        self
+    }
+
     /// Number of consecutive PTOs after which network is considered to be experiencing persistent congestion.
     pub fn persistent_congestion_threshold(&mut self, value: u32) -> &mut Self {
         self.persistent_congestion_threshold = value;
@@ -455,14 +448,11 @@ impl TransportConfig {
     /// <https://www.ietf.org/archive/id/draft-seemann-quic-nat-traversal-02.html>
     ///
     /// This implementation expects the multipath extension to be enabled as well. if not yet
-    /// enabled via [`Self::max_concurrent_multipath_paths`], a default value of
-    /// [`DEFAULT_CONCURRENT_MULTIPATH_PATHS_WHEN_ENABLED`] will be used.
-    pub fn set_max_remote_nat_traversal_addresses(&mut self, max_addresses: u8) -> &mut Self {
+    /// enabled via [`Self::max_concurrent_multipath_paths`], then that setting is set to 8.
+    pub fn max_remote_nat_traversal_addresses(&mut self, max_addresses: u8) -> &mut Self {
         self.max_remote_nat_traversal_addresses = NonZeroU8::new(max_addresses);
         if max_addresses != 0 && self.max_concurrent_multipath_paths.is_none() {
-            self.max_concurrent_multipath_paths(
-                DEFAULT_CONCURRENT_MULTIPATH_PATHS_WHEN_ENABLED_.get(),
-            );
+            self.max_concurrent_multipath_paths(8);
         }
         self
     }
@@ -558,6 +548,7 @@ impl Default for TransportConfig {
             mtu_discovery_config: Some(MtuDiscoveryConfig::default()),
             pad_to_mtu: false,
             ack_frequency_config: None,
+            max_outgoing_bytes_per_second: None,
 
             persistent_congestion_threshold: 3,
             keep_alive_interval: None,
@@ -606,6 +597,7 @@ impl fmt::Debug for TransportConfig {
             mtu_discovery_config,
             pad_to_mtu,
             ack_frequency_config,
+            max_outgoing_bytes_per_second,
             persistent_congestion_threshold,
             keep_alive_interval,
             crypto_buffer_size,
@@ -641,6 +633,10 @@ impl fmt::Debug for TransportConfig {
             .field("mtu_discovery_config", mtu_discovery_config)
             .field("pad_to_mtu", pad_to_mtu)
             .field("ack_frequency_config", ack_frequency_config)
+            .field(
+                "max_outgoing_bytes_per_second",
+                max_outgoing_bytes_per_second,
+            )
             .field(
                 "persistent_congestion_threshold",
                 persistent_congestion_threshold,

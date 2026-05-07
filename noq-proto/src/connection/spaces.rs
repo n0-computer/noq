@@ -2,7 +2,6 @@ use std::{
     cmp,
     collections::{BTreeMap, BTreeSet, VecDeque},
     mem,
-    net::IpAddr,
     ops::{Bound, Index, IndexMut},
 };
 
@@ -85,8 +84,6 @@ impl PacketSpace {
 
     /// Queue data for a tail loss probe (or anti-amplification deadlock prevention) packet
     ///
-    /// Does nothing if no tail loss probe needs to be sent.
-    ///
     /// Probes are sent similarly to normal packets when an expected ACK has not arrived. We never
     /// deem a packet lost until we receive an ACK that should have included it, but if a trailing
     /// run of packets (or their ACKs) are lost, this might not happen in a timely fashion. We send
@@ -97,29 +94,25 @@ impl PacketSpace {
     /// waiting to be sent, then we retransmit in-flight data to reduce odds of loss. If there's no
     /// in-flight data either, we're probably a client guarding against a handshake
     /// anti-amplification deadlock and we just make something up.
-    pub(super) fn maybe_queue_probe(
+    pub(super) fn queue_tail_loss_probe(
         &mut self,
         path_id: PathId,
         request_immediate_ack: bool,
         streams: &StreamsState,
     ) {
-        if self.for_path(path_id).loss_probes == 0 {
-            return;
-        }
-
         if request_immediate_ack {
             // The probe should be ACKed without delay (should only be used in the Data space and
             // when the peer supports the acknowledgement frequency extension)
             self.for_path(path_id).immediate_ack_pending = true;
         }
 
-        // Retransmit the data of the oldest in-flight packet
+        // We prefer to send new data to make most efficient use of bandwidth.
         if !self.pending.is_empty(streams) {
             // There's real data to send here, no need to make something up
             return;
         }
 
-        // We use retransmits from any path.
+        // Retransmit data from the oldest in-flight data from any path
         for packet in self
             .number_spaces
             .values_mut()
@@ -157,7 +150,7 @@ impl PacketSpace {
             .number_spaces
             .get(&path_id)
             .is_some_and(|s| s.ping_pending || s.immediate_ack_pending);
-        let other = !self.pending.is_empty(streams) || space_specific;
+        let other = !self.pending.is_empty(streams);
         SendableFrames {
             acks,
             close: false,
@@ -218,19 +211,31 @@ impl IndexMut<SpaceKind> for [PacketSpace; 3] {
     }
 }
 
-/// The per-path packet number space to support multipath.
+/// The state of a single packet number space.
 ///
-/// This contains the data specific to a per-path packet number space.  You should access
-/// this via [`PacketSpace::for_path`].
+/// In RFC9000 there are 3 packet number spaces: Initial, Handshake and Data. In QUIC
+/// Multipath there are multiple packet number spaces for Data, each identified by a
+/// [`PathId`].
+///
+/// This contains the state for a packet number space which is not specific to the 4-tuple
+/// this space is currently using. The 4-tuple specific state, like congestion controller,
+/// pacing, ECN, MTU etc, is stored in [`PathData`].
+///
+/// Note that the `Initial`, `Handshake` and `Data(PathId(0))` space all share the same
+/// [`PathData`].
+///
+/// You should access this via [`PacketSpace::for_path`].
+///
+/// [`PathData`]: super::paths::PathData
 pub(super) struct PacketNumberSpace {
     /// Highest received packet number, if any
-    pub(super) rx_packet: Option<u64>,
+    pub(super) largest_received_packet_number: Option<u64>,
     /// The packet number of the next packet that will be sent, if any. In the Data space, the
     /// packet number stored here is sometimes skipped by [`PacketNumberFilter`] logic.
     pub(super) next_packet_number: u64,
     /// The largest packet number the remote peer acknowledged in an ACK frame.
-    pub(super) largest_acked_packet: Option<u64>,
-    pub(super) largest_acked_packet_sent: Instant,
+    pub(super) largest_acked_packet_pn: Option<u64>,
+    pub(super) largest_acked_packet_send_time: Instant,
     /// The highest-numbered ACK-eliciting packet we've sent
     pub(super) largest_ack_eliciting_sent: u64,
     /// Number of packets in `sent_packets` with numbers above `largest_ack_eliciting_sent`
@@ -284,10 +289,10 @@ impl PacketNumberSpace {
             SpaceId::Data => Some(PacketNumberFilter::new(rng)),
         };
         Self {
-            rx_packet: None,
+            largest_received_packet_number: None,
             next_packet_number: 0,
-            largest_acked_packet: None,
-            largest_acked_packet_sent: now,
+            largest_acked_packet_pn: None,
+            largest_acked_packet_send_time: now,
             largest_ack_eliciting_sent: 0,
             unacked_non_ack_eliciting_tail: 0,
             sent_packets: SortedIndexBuffer::new(),
@@ -312,10 +317,10 @@ impl PacketNumberSpace {
             SpaceId::Data => Some(PacketNumberFilter::disabled()),
         };
         Self {
-            rx_packet: None,
+            largest_received_packet_number: None,
             next_packet_number: 0,
-            largest_acked_packet: None,
-            largest_acked_packet_sent: now,
+            largest_acked_packet_pn: None,
+            largest_acked_packet_send_time: now,
             largest_ack_eliciting_sent: 0,
             unacked_non_ack_eliciting_tail: 0,
             sent_packets: SortedIndexBuffer::new(),
@@ -506,6 +511,7 @@ pub(super) struct LostPacket {
 pub struct Retransmits {
     pub(super) max_data: bool,
     pub(super) max_stream_id: [bool; 2],
+    pub(super) streams_blocked: [bool; 2],
     pub(super) reset_stream: Vec<(StreamId, VarInt)>,
     pub(super) stop_sending: Vec<frame::StopSending>,
     pub(super) max_stream_data: FxHashSet<StreamId>,
@@ -551,7 +557,7 @@ pub struct Retransmits {
     /// Address IDs to remove in `REMOVE_ADDRESS` frames
     pub(super) remove_address: BTreeSet<RemoveAddress>,
     /// Round and local addresses to advertise in `REACH_OUT` frames
-    pub(super) reach_out: Option<(VarInt, FxHashSet<(IpAddr, u16)>)>,
+    pub(super) reach_out: PendingReachOutFrames,
 }
 
 impl Retransmits {
@@ -559,6 +565,7 @@ impl Retransmits {
         let Self {
             max_data,
             max_stream_id,
+            streams_blocked,
             reset_stream,
             stop_sending,
             max_stream_data,
@@ -580,6 +587,7 @@ impl Retransmits {
         } = &self;
         !max_data
             && !max_stream_id.iter().any(|x| *x)
+            && !streams_blocked.iter().any(|x| *x)
             && reset_stream.is_empty()
             && stop_sending.is_empty()
             && max_stream_data
@@ -599,7 +607,7 @@ impl Retransmits {
             && path_cids_blocked.is_empty()
             && add_address.is_empty()
             && remove_address.is_empty()
-            && reach_out.is_none()
+            && reach_out.is_empty()
     }
 }
 
@@ -608,6 +616,7 @@ impl ::std::ops::BitOrAssign for Retransmits {
         let Self {
             max_data,
             max_stream_id,
+            streams_blocked,
             reset_stream,
             stop_sending,
             max_stream_data,
@@ -625,7 +634,7 @@ impl ::std::ops::BitOrAssign for Retransmits {
             mut path_cids_blocked,
             add_address,
             remove_address,
-            reach_out,
+            mut reach_out,
         } = rhs;
 
         // We reduce in-stream head-of-line blocking by queueing retransmits before other data for
@@ -633,6 +642,7 @@ impl ::std::ops::BitOrAssign for Retransmits {
         self.max_data |= max_data;
         for dir in Dir::iter() {
             self.max_stream_id[dir as usize] |= max_stream_id[dir as usize];
+            self.streams_blocked[dir as usize] |= streams_blocked[dir as usize];
         }
         self.reset_stream.extend_from_slice(&reset_stream);
         self.stop_sending.extend_from_slice(&stop_sending);
@@ -653,22 +663,7 @@ impl ::std::ops::BitOrAssign for Retransmits {
         self.path_cids_blocked.append(&mut path_cids_blocked);
         self.add_address.extend(add_address.iter().copied());
         self.remove_address.extend(remove_address.iter().copied());
-        if let Some((rhs_round, rhs_addrs)) = reach_out {
-            match self.reach_out.as_mut() {
-                // Use RHS if there is no recorded round.
-                None => self.reach_out = Some((rhs_round, rhs_addrs)),
-                // Use RHS if newer.
-                Some((lhs_round, _lhs_addrs)) if rhs_round > *lhs_round => {
-                    self.reach_out = Some((rhs_round, rhs_addrs));
-                }
-                // If both rounds are the same, merge them.
-                Some((lhs_round, lhs_addrs)) if rhs_round == *lhs_round => {
-                    lhs_addrs.extend(rhs_addrs);
-                }
-                // LHS round is newer, ignore RHS
-                Some(_) => {}
-            }
-        }
+        self.reach_out.append(&mut reach_out);
     }
 }
 
@@ -738,6 +733,73 @@ impl PendingNewCids {
         F: FnMut(&IssuedCid) -> bool,
     {
         self.cids.retain(f);
+    }
+}
+
+/// Logically a Vec of REACH_OUT frames queued for transmit.
+///
+/// This keeps track of the highest round ID and automatically drops frames with a lower
+/// round ID.
+///
+/// The API is directly modelled on [`Vec`].
+#[derive(Debug, Default, Clone)]
+pub(crate) struct PendingReachOutFrames {
+    /// The round ID of the REACH_OUT frames currently pending.
+    round: VarInt,
+    /// The REACH_OUT frames, always all having the same round ID.
+    frames: Vec<frame::ReachOut>,
+}
+
+impl PendingReachOutFrames {
+    pub(crate) fn len(&self) -> usize {
+        self.frames.len()
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.frames.is_empty()
+    }
+
+    pub(crate) fn push(&mut self, frame: frame::ReachOut) {
+        if frame.round < self.round {
+            return;
+        } else if frame.round > self.round {
+            self.round = frame.round;
+            self.frames.clear();
+        }
+        self.frames.push(frame);
+    }
+
+    pub(crate) fn append(&mut self, other: &mut Self) {
+        if other.round < self.round {
+            other.frames.clear();
+            return;
+        } else if other.round > self.round {
+            self.round = other.round;
+            self.frames.clear();
+        }
+        self.frames.append(&mut other.frames);
+    }
+
+    pub(crate) fn pop_if(
+        &mut self,
+        predicate: impl FnOnce(&mut frame::ReachOut) -> bool,
+    ) -> Option<frame::ReachOut> {
+        self.frames.pop_if(predicate)
+    }
+}
+
+impl FromIterator<frame::ReachOut> for PendingReachOutFrames {
+    fn from_iter<T: IntoIterator<Item = frame::ReachOut>>(iter: T) -> Self {
+        let iter = iter.into_iter();
+        let size_hint = iter.size_hint();
+        let mut this = Self {
+            round: Default::default(),
+            frames: Vec::with_capacity(size_hint.1.unwrap_or(size_hint.0)),
+        };
+        for frame in iter {
+            this.push(frame);
+        }
+        this
     }
 }
 
