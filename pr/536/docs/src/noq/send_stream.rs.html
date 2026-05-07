@@ -125,7 +125,7 @@
 <a href=#125 id=125 data-nosnippet>125</a>    ///
 <a href=#126 id=126 data-nosnippet>126</a>    /// This method is *not* cancellation safe. Even if this does not resolve, some bytes may have
 <a href=#127 id=127 data-nosnippet>127</a>    /// been written when previously polled.
-<a href=#128 id=128 data-nosnippet>128</a>    </span><span class="kw">pub async fn </span>write_bytes_all(<span class="kw-2">&amp;mut </span><span class="self">self</span>, bufs: <span class="kw-2">&amp;mut </span>[Bytes]) -&gt; <span class="prelude-ty">Result</span>&lt;(), WriteError&gt; {
+<a href=#128 id=128 data-nosnippet>128</a>    </span><span class="kw">pub async fn </span>write_all_chunks(<span class="kw-2">&amp;mut </span><span class="self">self</span>, bufs: <span class="kw-2">&amp;mut </span>[Bytes]) -&gt; <span class="prelude-ty">Result</span>&lt;(), WriteError&gt; {
 <a href=#129 id=129 data-nosnippet>129</a>        <span class="kw">let </span><span class="kw-2">mut </span>bufs = <span class="kw-2">&amp;mut </span>bufs[..];
 <a href=#130 id=130 data-nosnippet>130</a>        <span class="kw">while </span>!bufs.is_empty() {
 <a href=#131 id=131 data-nosnippet>131</a>            <span class="self">self</span>.write_many_chunks(<span class="kw-2">&amp;mut </span>bufs).<span class="kw">await</span><span class="question-mark">?</span>;
