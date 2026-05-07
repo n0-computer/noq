@@ -312,13 +312,19 @@ impl QlogSink {
                 ConnTimer::KeyDiscard => Some(TimerType::custom("key_discard")),
                 ConnTimer::KeepAlive => Some(TimerType::custom("keep_alive")),
                 ConnTimer::PushNewCid => Some(TimerType::custom("push_new_cid")),
+                ConnTimer::NoAvailablePath => Some(TimerType::custom("no_available_path")),
+                ConnTimer::NatTraversalProbeRetry => {
+                    Some(TimerType::custom("nat_traversal_probe_retry"))
+                }
             },
             Timer::PerPath(_, path_timer) => match path_timer {
                 PathTimer::LossDetection => Some(QlogTimerType::LossTimeout.into()),
                 PathTimer::PathIdle => Some(TimerType::custom("path_idle")),
                 PathTimer::PathValidationFailed => Some(QlogTimerType::PathValidation.into()),
                 PathTimer::PathChallengeLost => Some(TimerType::custom("path_challenge_lost")),
-                PathTimer::PathOpenFailed => Some(TimerType::custom("path_open")),
+                PathTimer::AbandonFromValidation => {
+                    Some(TimerType::custom("abandon_from_validation"))
+                }
                 PathTimer::PathKeepAlive => Some(TimerType::custom("path_keep_alive")),
                 PathTimer::Pacing => Some(TimerType::custom("pacing")),
                 PathTimer::MaxAckDelay => Some(QlogTimerType::Ack.into()),
@@ -718,6 +724,17 @@ impl ToQlog for frame::MaxStreams {
         QuicFrame::MaxStreams {
             maximum: self.count,
             stream_type: self.dir.into(),
+            raw: None,
+        }
+    }
+}
+
+#[cfg(feature = "qlog")]
+impl ToQlog for frame::StreamsBlocked {
+    fn to_qlog(&self) -> QuicFrame {
+        QuicFrame::StreamsBlocked {
+            stream_type: self.dir.into(),
+            limit: self.limit,
             raw: None,
         }
     }

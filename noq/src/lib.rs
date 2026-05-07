@@ -44,6 +44,7 @@ use std::sync::Arc;
 
 mod connection;
 mod endpoint;
+mod event_stream;
 mod incoming;
 mod mutex;
 mod path;
@@ -60,13 +61,14 @@ pub(crate) use web_time::{Duration, Instant};
 #[cfg(feature = "bloom")]
 pub use proto::BloomTokenLog;
 pub use proto::{
-    AckFrequencyConfig, ApplicationClose, Chunk, ClientConfig, ClosedStream, ConfigError,
-    ConnectError, ConnectionClose, ConnectionError, ConnectionId, ConnectionIdGenerator,
-    ConnectionStats, Dir, EcnCodepoint, EndpointConfig, FrameStats, FrameType, IdleTimeout,
-    InvalidCid, MtuDiscoveryConfig, NetworkChangeHint, NoneTokenLog, NoneTokenStore, PathId,
-    PathStats, ServerConfig, Side, StdSystemTime, StreamId, TimeSource, TokenLog, TokenMemoryCache,
-    TokenReuseError, TokenStore, Transmit, TransportConfig, TransportErrorCode, UdpStats,
-    ValidationTokenConfig, VarInt, VarIntBoundsExceeded, Written, congestion, crypto,
+    AckFrequencyConfig, ApplicationClose, Chunk, ClientConfig, ClosePathError, ClosedPath,
+    ClosedStream, ConfigError, ConnectError, ConnectionClose, ConnectionError, ConnectionId,
+    ConnectionIdGenerator, ConnectionStats, DecryptedInitial, Dir, EcnCodepoint, EndpointConfig,
+    FrameStats, FrameType, IdleTimeout, InvalidCid, MtuDiscoveryConfig, NetworkChangeHint,
+    NoneTokenLog, NoneTokenStore, PathError, PathEvent, PathId, PathStats, PathStatus,
+    ServerConfig, SetPathStatusError, Side, StdSystemTime, StreamId, TimeSource, TokenLog,
+    TokenMemoryCache, TokenReuseError, TokenStore, Transmit, TransportConfig, TransportErrorCode,
+    UdpStats, ValidationTokenConfig, VarInt, VarIntBoundsExceeded, Written, congestion, crypto,
 };
 #[cfg(feature = "qlog")]
 pub use proto::{QlogConfig, QlogFactory, QlogFileFactory};
@@ -75,10 +77,11 @@ pub use rustls;
 pub use udp;
 
 pub use crate::connection::{
-    AcceptBi, AcceptUni, Connecting, Connection, OnClosed, OpenBi, OpenUni, ReadDatagram,
+    AcceptBi, AcceptUni, Closed, Connecting, Connection, OnClosed, OpenBi, OpenUni, ReadDatagram,
     SendDatagram, SendDatagramError, WeakConnectionHandle, ZeroRttAccepted,
 };
 pub use crate::endpoint::{Accept, Endpoint, EndpointStats};
+pub use crate::event_stream::{Lagged, NatTraversalUpdates, ObservedExternalAddr, PathEvents};
 pub use crate::incoming::{Incoming, IncomingFuture, RetryError};
 pub use crate::path::{AddressDiscovery, OpenPath, Path, WeakPathHandle};
 pub use crate::recv_stream::{

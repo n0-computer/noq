@@ -27,15 +27,26 @@ pub(crate) enum ConnTimer {
     KeepAlive = 3,
     /// When to invalidate old CID and proactively push new one via NEW_CONNECTION_ID frame
     PushNewCid = 4,
+    /// Grace period after the remote abandoned the last path.
+    ///
+    /// If no new path is opened before this fires, close the connection.
+    /// See <https://www.ietf.org/archive/id/draft-ietf-quic-multipath-21.html#section-3.4-8>
+    NoAvailablePath = 5,
+    /// When to retry NAT traversal probes.
+    ///
+    /// Fires at initial PTO intervals to retransmit probes that got no PATH_RESPONSE.
+    NatTraversalProbeRetry = 6,
 }
 
 impl ConnTimer {
-    const VALUES: [Self; 5] = [
+    const VALUES: [Self; 7] = [
         Self::Idle,
         Self::Close,
         Self::KeyDiscard,
         Self::KeepAlive,
         Self::PushNewCid,
+        Self::NoAvailablePath,
+        Self::NatTraversalProbeRetry,
     ];
 }
 
@@ -49,12 +60,15 @@ pub(crate) enum PathTimer {
     PathValidationFailed = 2,
     /// When to resend an on-path path challenge deemed lost
     PathChallengeLost = 3,
-    /// When we give up opening a path.
+    /// When to abandon a path due to failed validation.
     ///
-    /// When opening a path we validate it according to RFC9000 §8.2 as required by the
-    /// multipath spec. If validation fails we will abandon the path again. This timer fires
-    /// when we want to give up on this path validation of opening the path.
-    PathOpenFailed = 4,
+    /// There are two situations in which we give up a path from validation.
+    /// 1. When opening a path we validate it according to RFC9000 §8.2 as required by the
+    ///    multipath spec. This timer is armed to time-bound that validation.
+    /// 2. When validating an already opened multipath path for various reasons in which we
+    ///    expect the path to either work or not work and want to respond correspondingly in
+    ///    a timely manner.
+    AbandonFromValidation = 4,
     /// When to send a `PING` frame to keep the path alive
     PathKeepAlive = 5,
     /// When pacing will allow us to send a packet
@@ -71,7 +85,7 @@ impl PathTimer {
         Self::PathIdle,
         Self::PathValidationFailed,
         Self::PathChallengeLost,
-        Self::PathOpenFailed,
+        Self::AbandonFromValidation,
         Self::PathKeepAlive,
         Self::Pacing,
         Self::MaxAckDelay,
@@ -149,7 +163,6 @@ where
         self.heap.as_mut().and_then(|h| h.remove(key))
     }
 
-    #[cfg(test)]
     fn get(&self, key: &K) -> Option<&V> {
         for (k, v) in self.stack.iter().filter_map(|v| v.as_ref()) {
             if k == key {
@@ -234,6 +247,10 @@ impl PathTimerTable {
         self.timers[timer as usize] = Some(time);
     }
 
+    fn get(&self, timer: PathTimer) -> Option<Instant> {
+        self.timers[timer as usize]
+    }
+
     fn stop(&mut self, timer: PathTimer) {
         self.timers[timer as usize] = None;
     }
@@ -273,6 +290,13 @@ impl TimerTable {
             },
         }
         qlog.emit_timer_set(timer, time);
+    }
+
+    pub(super) fn get(&self, timer: Timer) -> Option<Instant> {
+        match timer {
+            Timer::Conn(timer) => self.generic[timer as usize],
+            Timer::PerPath(path_id, timer) => self.path_timers.get(&path_id)?.get(timer),
+        }
     }
 
     pub(super) fn set_or_stop(
