@@ -158,13 +158,15 @@ impl RecvStream {
 
     /// Read the next segment of data as zero-copy [`Bytes`]
     ///
-    /// Yields `None` if the stream was finished. Otherwise, yields the next segment of data.
-    /// Use [`bytes_read()`](Self::bytes_read) before reading to determine the offset if needed.
+    /// Yields `None` if the stream was finished. Otherwise, yields the next segment of data. The
+    /// chunk's offset will be immediately after the last data yielded by [`RecvStream::read`] or
+    /// [`RecvStream::read_chunk`]; use [`bytes_read()`](Self::bytes_read) to query that offset
+    /// explicitly.
     ///
     /// For unordered reads, convert the stream into an unordered stream using [`Self::into_unordered`].
     ///
-    /// Slightly more efficient than [`RecvStream::read`] due to not copying. Segment boundaries
-    /// do not correspond to peer writes, and hence cannot be used as framing.
+    /// Slightly more efficient than [`RecvStream::read`] due to not copying. Chunk boundaries do
+    /// not correspond to peer writes, and hence cannot be used as framing.
     ///
     /// This operation is cancel-safe.
     pub async fn read_chunk(&mut self, max_length: usize) -> Result<Option<Bytes>, ReadError> {
