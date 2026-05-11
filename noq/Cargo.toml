@@ -57,7 +57,7 @@ rustls-aws-lc-rs = ["rustls", "aws-lc-rs"]
 # Don't rely on these whatsoever. They may disappear at any time.
 
 __rustls-post-quantum-test =  ["rustls/prefer-post-quantum", "rustls", "aws-lc-rs", "proto/__rustls-post-quantum-test"]
-__all_without_fips = ["lock_tracking", "aws-lc-rs", "rustls", "ring", "runtime-tokio", "runtime-smol", "tracing-log", "rustls-log"]
+__all_without_fips = ["lock_tracking", "aws-lc-rs", "rustls", "ring", "runtime-tokio", "runtime-smol", "tracing-log", "rustls-log", "bloom", "platform-verifier", "qlog", "fast-apple-datapath"]
 
 [dependencies]
 async-io = { workspace = true, optional = true }

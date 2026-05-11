@@ -101,16 +101,28 @@ args = ["nextest", "run", "--package=noq-proto", "-P", "proptests", "--no-fail-f
 description = "Run cargo check-external-types on all workspace crates"
 script = '''
 set -e
+
+# check-external-types needs a specific nightly version
+# See https://github.com/awslabs/cargo-check-external-types#how-to-use
+TOOLCHAIN="${TOOLCHAIN:-nightly-2025-10-18}"
+
+# Disable -Dwarnings, we don't want to fail on unrelated errors here
+RUSTDOCFLAGS=""
+
+# Install the required toolchain
+rustup -q toolchain install $TOOLCHAIN -c rustc,cargo,rust-std
+
+# Run for each crate
 fail=0
 for crate in noq-udp noq-proto noq; do
-  echo "::group::$crate"
-  if ! cargo +nightly check-external-types \
+  echo "=== $crate ==="
+  if ! cargo +$TOOLCHAIN check-external-types \
       --manifest-path "$crate/Cargo.toml" \
       --features __all_without_fips; \
   then
     fail=1
   fi
-  echo "::endgroup::"
 done
+
 exit $fail
 '''

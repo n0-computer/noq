@@ -23,7 +23,7 @@ fast-apple-datapath = []
 # Internal (PRIVATE!) features used to aid testing.
 # Don't rely on these whatsoever. They may disappear at any time.
 
-__all_without_fips = ["tracing-log", "log", "fast-apple-datapath"]
+__all_without_fips = ["tracing-log", "tracing", "log", "fast-apple-datapath"]
 
 [dependencies]
 libc = "0.2.175"

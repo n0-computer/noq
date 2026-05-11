@@ -50,7 +50,7 @@ rustls-aws-lc-rs = ["rustls", "aws-lc-rs"]
 # Don't rely on these whatsoever. They may disappear at any time.
 
 __rustls-post-quantum-test =  []
-__all_without_fips = ["aws-lc-rs", "rustls", "ring", "platform-verifier", "rustls-log", "qlog", "bench"]
+__all_without_fips = ["arbitrary", "aws-lc-rs", "rustls", "ring", "platform-verifier", "rustls-log", "qlog", "bench", "bloom", "tracing-log"]
 
 [dependencies]
 aes-gcm = { workspace = true, optional = true }
