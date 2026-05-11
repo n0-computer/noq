@@ -442,8 +442,8 @@
 <a href=#442 id=442 data-nosnippet>442</a>    /// carry application data, or if there was an error.
 <a href=#443 id=443 data-nosnippet>443</a>    ///
 <a href=#444 id=444 data-nosnippet>444</a>    /// Dropping the returned future does not cancel the opening of the path, the
-<a href=#445 id=445 data-nosnippet>445</a>    /// [`PathEvent::Opened`] event will still be emitted from [`Self::path_events`] if the
-<a href=#446 id=446 data-nosnippet>446</a>    /// path opens.  The [`PathId`] for the events can be extracted from
+<a href=#445 id=445 data-nosnippet>445</a>    /// [`PathEvent::Established`] event will still be emitted from [`Self::path_events`] if
+<a href=#446 id=446 data-nosnippet>446</a>    /// the path opens.  The [`PathId`] for the events can be extracted from
 <a href=#447 id=447 data-nosnippet>447</a>    /// [`OpenPath::path_id`].
 <a href=#448 id=448 data-nosnippet>448</a>    ///
 <a href=#449 id=449 data-nosnippet>449</a>    /// Failure to open a path can either occur immediately, before polling the returned
@@ -1639,7 +1639,7 @@
 <a href=#1639 id=1639 data-nosnippet>1639</a>                        old != <span class="kw-2">*</span>addr
 <a href=#1640 id=1640 data-nosnippet>1640</a>                    });
 <a href=#1641 id=1641 data-nosnippet>1641</a>                }
-<a href=#1642 id=1642 data-nosnippet>1642</a>                Path(<span class="kw-2">ref </span>evt @ PathEvent::Opened { id }) =&gt; {
+<a href=#1642 id=1642 data-nosnippet>1642</a>                Path(<span class="kw-2">ref </span>evt @ PathEvent::Established { id }) =&gt; {
 <a href=#1643 id=1643 data-nosnippet>1643</a>                    <span class="self">self</span>.path_events.send(evt.clone()).ok();
 <a href=#1644 id=1644 data-nosnippet>1644</a>                    <span class="kw">if let </span><span class="prelude-val">Some</span>(sender) = <span class="self">self</span>.open_path.remove(<span class="kw-2">&amp;</span>id) {
 <a href=#1645 id=1645 data-nosnippet>1645</a>                        sender.send_modify(|value| <span class="kw-2">*</span>value = <span class="prelude-val">Ok</span>(()));

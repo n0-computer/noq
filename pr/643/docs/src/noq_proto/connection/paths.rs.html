@@ -1042,9 +1042,9 @@
 <a href=#1042 id=1042 data-nosnippet>1042</a><span class="doccomment">/// Application events about paths
 <a href=#1043 id=1043 data-nosnippet>1043</a></span><span class="attr">#[derive(Debug, Clone, PartialEq, Eq)]
 <a href=#1044 id=1044 data-nosnippet>1044</a></span><span class="kw">pub enum </span>PathEvent {
-<a href=#1045 id=1045 data-nosnippet>1045</a>    <span class="doccomment">/// A new path has been opened
-<a href=#1046 id=1046 data-nosnippet>1046</a>    </span>Opened {
-<a href=#1047 id=1047 data-nosnippet>1047</a>        <span class="doccomment">/// Which path is now open
+<a href=#1045 id=1045 data-nosnippet>1045</a>    <span class="doccomment">/// A new path has established connection with the peer.
+<a href=#1046 id=1046 data-nosnippet>1046</a>    </span>Established {
+<a href=#1047 id=1047 data-nosnippet>1047</a>        <span class="doccomment">/// The path which can now be used for application data.
 <a href=#1048 id=1048 data-nosnippet>1048</a>        </span>id: PathId,
 <a href=#1049 id=1049 data-nosnippet>1049</a>    },
 <a href=#1050 id=1050 data-nosnippet>1050</a>    <span class="doccomment">/// A path was abandoned and is no longer usable.

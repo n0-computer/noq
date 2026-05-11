@@ -38,8 +38,8 @@ waiting on the <a href="struct.RecvStream.html" title="struct noq::RecvStream"><
 <p>The returned future completes once the path is either fully opened and ready to
 carry application data, or if there was an error.</p>
 <p>Dropping the returned future does not cancel the opening of the path, the
-<a href="enum.PathEvent.html#variant.Opened" title="variant noq::PathEvent::Opened"><code>PathEvent::Opened</code></a> event will still be emitted from <a href="struct.Connection.html#method.path_events" title="method noq::Connection::path_events"><code>Self::path_events</code></a> if the
-path opens.  The <a href="struct.PathId.html" title="struct noq::PathId"><code>PathId</code></a> for the events can be extracted from
+<a href="enum.PathEvent.html#variant.Established" title="variant noq::PathEvent::Established"><code>PathEvent::Established</code></a> event will still be emitted from <a href="struct.Connection.html#method.path_events" title="method noq::Connection::path_events"><code>Self::path_events</code></a> if
+the path opens.  The <a href="struct.PathId.html" title="struct noq::PathId"><code>PathId</code></a> for the events can be extracted from
 <a href="struct.OpenPath.html#method.path_id" title="method noq::OpenPath::path_id"><code>OpenPath::path_id</code></a>.</p>
 <p>Failure to open a path can either occur immediately, before polling the returned
 future, or at a later time.  If the failure is immediate <a href="struct.OpenPath.html#method.path_id" title="method noq::OpenPath::path_id"><code>OpenPath::path_id</code></a> will
