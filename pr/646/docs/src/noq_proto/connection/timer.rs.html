@@ -93,9 +93,9 @@
 <a href=#93 id=93 data-nosnippet>93</a>    ];
 <a href=#94 id=94 data-nosnippet>94</a>}
 <a href=#95 id=95 data-nosnippet>95</a>
-<a href=#96 id=96 data-nosnippet>96</a><span class="doccomment">/// Newtype around [`PathId`] that implements [`IdentiryHashable`].
+<a href=#96 id=96 data-nosnippet>96</a><span class="doccomment">/// Newtype around [`PathId`] that implements [`IdentityHashable`].
 <a href=#97 id=97 data-nosnippet>97</a></span><span class="attr">#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Default)]
-<a href=#98 id=98 data-nosnippet>98</a></span><span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">struct </span>PathIdKey(<span class="kw">pub</span>(<span class="kw">super</span>) PathId);
+<a href=#98 id=98 data-nosnippet>98</a></span><span class="kw">struct </span>PathIdKey(PathId);
 <a href=#99 id=99 data-nosnippet>99</a>
 <a href=#100 id=100 data-nosnippet>100</a><span class="kw">impl </span>IdentityHashable <span class="kw">for </span>PathIdKey {}
 <a href=#101 id=101 data-nosnippet>101</a>
