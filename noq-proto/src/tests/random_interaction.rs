@@ -104,7 +104,7 @@ pub(super) struct State {
 }
 
 impl TestOp {
-    fn run(self, pair: &mut Pair, client: &mut State, server: &mut State) -> Option<()> {
+    pub(crate) fn run(self, pair: &mut Pair, client: &mut State, server: &mut State) -> Option<()> {
         let now = pair.time;
         match self {
             Self::Drive { side: Side::Client } => pair.drive_client(),
@@ -285,7 +285,7 @@ impl StreamOp {
 }
 
 impl State {
-    fn new(side: Side, handle: ConnectionHandle) -> Self {
+    pub(crate) fn new(side: Side, handle: ConnectionHandle) -> Self {
         Self {
             send_streams: Vec::new(),
             recv_streams: Vec::new(),
