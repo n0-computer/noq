@@ -553,8 +553,8 @@
 <a href=#553 id=553 data-nosnippet>553</a>    <span class="doccomment">/// Opens a new path.
 <a href=#554 id=554 data-nosnippet>554</a>    ///
 <a href=#555 id=555 data-nosnippet>555</a>    /// Further errors might occur and they will be emitted in [`PathEvent::Abandoned`]
-<a href=#556 id=556 data-nosnippet>556</a>    /// events with this path id.  When the path is opened it will be reported as an
-<a href=#557 id=557 data-nosnippet>557</a>    /// [`PathEvent::Established`].
+<a href=#556 id=556 data-nosnippet>556</a>    /// events with this path id.  Once the path is opened and can carry application data it
+<a href=#557 id=557 data-nosnippet>557</a>    /// will be reported using a [`PathEvent::Established`] event.
 <a href=#558 id=558 data-nosnippet>558</a>    </span><span class="kw">pub fn </span>open_path(
 <a href=#559 id=559 data-nosnippet>559</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
 <a href=#560 id=560 data-nosnippet>560</a>        network_path: FourTuple,
