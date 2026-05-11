@@ -32,8 +32,6 @@ impl std::hash::Hash for PathId {
     }
 }
 
-impl identity_hash::IdentityHashable for PathId {}
-
 impl Decodable for PathId {
     fn decode<B: bytes::Buf>(r: &mut B) -> coding::Result<Self> {
         let v = VarInt::decode(r)?;
