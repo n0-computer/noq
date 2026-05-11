@@ -6,7 +6,10 @@ use std::{
     net::{IpAddr, SocketAddr},
     num::NonZeroUsize,
     pin::Pin,
-    sync::{Arc, Weak},
+    sync::{
+        Arc, Weak,
+        atomic::{AtomicUsize, Ordering},
+    },
     task::{Context, Poll, Waker, ready},
 };
 
@@ -21,7 +24,7 @@ use crate::{
     ConnectionEvent, Duration, Instant, Path, VarInt,
     endpoint::ensure_ipv6,
     mutex::{Mutex, MutexGuard},
-    path::OpenPath,
+    path::{OpenPath, PathRef, PathRefOwner},
     recv_stream::RecvStream,
     runtime::{AsyncTimer, Runtime, UdpSender},
     send_stream::SendStream,
@@ -183,13 +186,13 @@ impl Connecting {
     ///
     /// Will panic if called after `poll` has returned `Ready`.
     pub fn local_ip(&self) -> Option<IpAddr> {
-        let conn = self.conn.as_ref().unwrap();
+        let conn = self.conn.as_ref().expect("used after yielding Ready");
         let inner = conn.lock_without_waking("local_ip");
 
         inner
             .inner
             .network_path(PathId::ZERO)
-            .expect("path exists when connecting")
+            .expect("PathId::ZERO is the only path during the handshake")
             .local_ip()
     }
 
@@ -198,12 +201,11 @@ impl Connecting {
     /// Will panic if called after `poll` has returned `Ready`.
     pub fn remote_address(&self) -> SocketAddr {
         let conn_ref: &ConnectionRef = self.conn.as_ref().expect("used after yielding Ready");
-        // TODO: another unwrap
         conn_ref
             .lock_without_waking("remote_address")
             .inner
             .network_path(PathId::ZERO)
-            .expect("path exists when connecting")
+            .expect("PathId::ZERO is the only path during the handshake")
             .remote()
     }
 }
@@ -440,8 +442,8 @@ impl Connection {
     /// carry application data, or if there was an error.
     ///
     /// Dropping the returned future does not cancel the opening of the path, the
-    /// [`PathEvent::Opened`] event will still be emitted from [`Self::path_events`] if the
-    /// path opens.  The [`PathId`] for the events can be extracted from
+    /// [`PathEvent::Established`] event will still be emitted from [`Self::path_events`] if
+    /// the path opens.  The [`PathId`] for the events can be extracted from
     /// [`OpenPath::path_id`].
     ///
     /// Failure to open a path can either occur immediately, before polling the returned
@@ -556,8 +558,8 @@ impl Connection {
 
     /// Wait for the connection to be closed without keeping a strong reference to the connection
     ///
-    /// Returns a future that resolves, once the connection is closed, to a tuple of
-    /// ([`ConnectionError`], [`ConnectionStats`]).
+    /// Returns a future that resolves, once the connection is closed, to a [`Closed`] struct
+    /// describing the close reason and final connection and per-path statistics.
     ///
     /// Calling [`Self::closed`] keeps the connection alive until it is either closed locally via [`Connection::close`]
     /// or closed by the remote peer. This function instead does not keep the connection itself alive,
@@ -566,9 +568,9 @@ impl Connection {
     pub fn on_closed(&self) -> OnClosed {
         let (tx, rx) = oneshot::channel();
         let mut state = self.0.lock_without_waking("on_closed");
-        if let Some(error) = &state.error {
+        if let Some(reason) = state.error.clone() {
             // Connection already closed, send immediately
-            let _ = tx.send((error.clone(), state.inner.stats()));
+            let _ = tx.send(Closed::new(&mut state, reason));
         } else {
             state.on_closed.push(tx);
         }
@@ -579,9 +581,14 @@ impl Connection {
         }
     }
 
-    /// If the connection is closed, the reason why.
+    /// Whether the connection is closed, and why.
     ///
-    /// Returns `None` if the connection is still open.
+    /// The close_reason is always set to `Some(ConnectionError)` when a socket is
+    /// closed; whether it was closed manually by calling [`Connection::close()`] or due to
+    /// an internal error (such as an idle timeout or the peer closing the
+    /// connection).
+    ///
+    /// Note: when the connection is closed, `connection.close_reason().is_some()` will always be true.
     pub fn close_reason(&self) -> Option<ConnectionError> {
         self.0.lock_without_waking("close_reason").error.clone()
     }
@@ -734,51 +741,6 @@ impl Connection {
     /// The side of the connection (client or server)
     pub fn side(&self) -> Side {
         self.0.lock_without_waking("side").inner.side()
-    }
-
-    /// The peer's UDP address
-    ///
-    /// If [`ServerConfig::migration`] is `true`, clients may change addresses at will,
-    /// e.g. when switching to a cellular internet connection.
-    ///
-    /// If [`multipath`] is enabled this will return the address of *any*
-    /// path, and may not be consistent. Prefer [`Path::remote_address`] instead.
-    ///
-    /// [`ServerConfig::migration`]: crate::ServerConfig::migration
-    /// [`multipath`]: crate::TransportConfig::max_concurrent_multipath_paths
-    pub fn remote_address(&self) -> SocketAddr {
-        // TODO: an unwrap again
-        let state = self.0.lock_without_waking("remote_address");
-        state
-            .inner
-            .paths()
-            .iter()
-            .filter_map(|id| state.inner.network_path(*id).ok())
-            .next()
-            .unwrap()
-            .remote()
-    }
-
-    /// The local IP address which was used when the peer established
-    /// the connection
-    ///
-    /// This can be different from the address the endpoint is bound to, in case
-    /// the endpoint is bound to a wildcard address like `0.0.0.0` or `::`.
-    ///
-    /// This will return `None` for clients, or when the platform does not expose this
-    /// information. See [`noq_udp::RecvMeta::dst_ip`](udp::RecvMeta::dst_ip) for a list of
-    /// supported platforms when using [`noq_udp`](udp) for I/O, which is the default.
-    pub fn local_ip(&self) -> Option<IpAddr> {
-        // TODO: an unwrap again
-        let state = self.0.lock_without_waking("remote_address");
-        state
-            .inner
-            .paths()
-            .iter()
-            .filter_map(|id| state.inner.network_path(*id).ok())
-            .next()
-            .unwrap()
-            .local_ip()
     }
 
     /// Current best estimate of this connection's latency (round-trip-time)
@@ -1194,11 +1156,63 @@ impl Future for SendDatagram<'_> {
     }
 }
 
+/// State of a [`Connection`] at the moment it was closed.
+///
+/// Returned by the [`OnClosed`] future from [`Connection::on_closed`].
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct Closed {
+    /// The reason the connection was closed.
+    pub reason: ConnectionError,
+    /// Aggregate connection statistics at the moment of close.
+    pub stats: ConnectionStats,
+    /// Per-path statistics for every path the connection knew about at close time.
+    ///
+    /// This includes paths that haven't been discarded at close time, plus any
+    /// already-discarded paths whose final stats had been retained because a [`Path`]
+    /// or [`WeakPathHandle`] handle was kept alive.
+    ///
+    /// [`WeakPathHandle`]: crate::WeakPathHandle
+    pub path_stats: Vec<(PathId, PathStats)>,
+}
+
+impl Closed {
+    /// Snapshot the current connection state into a [`Closed`] value.
+    ///
+    /// Must only be called once `state.error` has been set.
+    pub(crate) fn new(state: &mut State, reason: ConnectionError) -> Self {
+        let stats = state.inner.stats();
+
+        let non_discarded_paths = state.inner.paths();
+        let mut path_stats =
+            Vec::with_capacity(non_discarded_paths.len() + state.final_path_stats.len());
+
+        // Non-discarded paths are tracked by proto::Connection.
+        path_stats.extend(
+            non_discarded_paths
+                .into_iter()
+                .filter_map(|id| state.inner.path_stats(id).map(|stats| (id, stats))),
+        );
+        // Already-discarded paths whose final stats we kept around.
+        path_stats.extend(
+            state
+                .final_path_stats
+                .iter()
+                .map(|(id, stats)| (*id, *stats)),
+        );
+        Self {
+            reason,
+            stats,
+            path_stats,
+        }
+    }
+}
+
 /// Future returned by [`Connection::on_closed`]
 ///
-/// Resolves to a tuple of ([`ConnectionError`], [`ConnectionStats`]).
+/// Resolves to [`Closed`].
 pub struct OnClosed {
-    rx: oneshot::Receiver<(ConnectionError, ConnectionStats)>,
+    rx: oneshot::Receiver<Closed>,
     conn: WeakConnectionHandle,
 }
 
@@ -1218,7 +1232,7 @@ impl Drop for OnClosed {
 }
 
 impl Future for OnClosed {
-    type Output = (ConnectionError, ConnectionStats);
+    type Output = Closed;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
@@ -1237,7 +1251,7 @@ pub(crate) struct ConnectionRef(Arc<Arc<ConnectionInner>>);
 impl ConnectionRef {
     #[allow(clippy::redundant_allocation)]
     fn from_arc(inner: Arc<Arc<ConnectionInner>>) -> Self {
-        inner.lock_without_waking("from_arc").ref_count += 1;
+        inner.shared.ref_count.fetch_add(1, Ordering::Relaxed);
         Self(inner)
     }
 
@@ -1258,16 +1272,18 @@ impl Clone for ConnectionRef {
 
 impl Drop for ConnectionRef {
     fn drop(&mut self) {
+        if self.shared.ref_count.fetch_sub(1, Ordering::Relaxed) > 1 {
+            return;
+        }
+
         let conn = &mut *self.lock_without_waking("drop");
-        if let Some(x) = conn.ref_count.checked_sub(1) {
-            conn.ref_count = x;
-            if x == 0 && !conn.inner.is_closed() {
-                // If the driver is alive, it's just it and us, so we'd better shut it down. If it's
-                // not, we can't do any harm. If there were any streams being opened, then either
-                // the connection will be closed for an unrelated reason or a fresh reference will
-                // be constructed for the newly opened stream.
-                conn.implicit_close(&self.shared);
-            }
+
+        if !conn.inner.is_closed() {
+            // If the driver is alive, it's just it and us, so we'd better shut it down. If it's
+            // not, we can't do any harm. If there were any streams being opened, then either
+            // the connection will be closed for an unrelated reason or a fresh reference will
+            // be constructed for the newly opened stream.
+            conn.implicit_close(&self.shared);
         }
     }
 }
@@ -1372,6 +1388,8 @@ pub(crate) struct Shared {
     datagram_received: Notify,
     datagrams_unblocked: Notify,
     closed: Notify,
+    /// Number of live handles that can be used to initiate or handle I/O; excludes the driver
+    ref_count: AtomicUsize,
 }
 
 pub(crate) struct State {
@@ -1396,17 +1414,18 @@ pub(crate) struct State {
     /// Tracks reference counts for paths.
     ///
     /// I.e. how many [`Path`] and [`WeakPathHandle`] structs are alive for a path.
+    /// Each entry's [`PathRefOwner`] holds an [`AtomicUsize`] so that cloning or
+    /// dropping a [`PathRef`] (held by [`Path`] or [`WeakPathHandle`]) does not need
+    /// to lock this state.
     ///
     /// [`WeakPathHandle`]: crate::path::WeakPathHandle
-    pub(crate) path_refs: FxHashMap<PathId, usize>,
+    pub(crate) path_refs: FxHashMap<PathId, PathRefOwner>,
     /// Final path stats for discarded paths.
     ///
     /// We only insert entries if the discarded path has a non-zero reference count in [`Self::path_refs`].
-    /// When the last reference to a path is dropped via [`Self::decrement_path_refs`] its value is cleared.
+    /// When the last reference to a path is dropped its entry is removed from both maps.
     pub(crate) final_path_stats: FxHashMap<PathId, PathStats>,
     pub(crate) path_events: tokio::sync::broadcast::Sender<PathEvent>,
-    /// Number of live handles that can be used to initiate or handle I/O; excludes the driver
-    ref_count: usize,
     sender: Pin<Box<dyn UdpSender>>,
     pub(crate) runtime: Arc<dyn Runtime>,
     send_buffer: Vec<u8>,
@@ -1416,7 +1435,7 @@ pub(crate) struct State {
     /// last report across all paths.
     pub(crate) observed_external_addr: watch::Sender<Option<SocketAddr>>,
     pub(crate) nat_traversal_updates: tokio::sync::broadcast::Sender<n0_nat_traversal::Event>,
-    on_closed: Vec<oneshot::Sender<(ConnectionError, ConnectionStats)>>,
+    on_closed: Vec<oneshot::Sender<Closed>>,
 }
 
 impl State {
@@ -1448,7 +1467,6 @@ impl State {
             stopped: FxHashMap::default(),
             open_path: FxHashMap::default(),
             error: None,
-            ref_count: 0,
             sender,
             runtime,
             send_buffer: Vec::new(),
@@ -1621,7 +1639,7 @@ impl State {
                         old != *addr
                     });
                 }
-                Path(ref evt @ PathEvent::Opened { id }) => {
+                Path(ref evt @ PathEvent::Established { id }) => {
                     self.path_events.send(evt.clone()).ok();
                     if let Some(sender) = self.open_path.remove(&id) {
                         sender.send_modify(|value| *value = Ok(()));
@@ -1737,9 +1755,11 @@ impl State {
         shared.closed.notify_waiters();
 
         // Send to the registered on_closed futures.
-        let stats = self.inner.stats();
-        for tx in self.on_closed.drain(..) {
-            tx.send((reason.clone(), stats.clone())).ok();
+        if !self.on_closed.is_empty() {
+            let closed = Closed::new(self, reason);
+            for tx in self.on_closed.drain(..) {
+                tx.send(closed.clone()).ok();
+            }
         }
     }
 
@@ -1775,26 +1795,15 @@ impl State {
             .or_else(|| self.final_path_stats.get(&path_id).copied())
     }
 
-    /// Increment the reference counter for a path in this connection.
+    /// Acquire a new [`PathRef`] for a path id, bumping its reference counter by 1.
     ///
-    /// This counts how many [`Path`] or [`WeakPathHandle`] structs exist for a path.
-    /// Currently this is used to determine whether to store the final stats after a path is
-    /// abandoned.
+    /// The returned [`PathRef`] is intended to be stored on a [`Path`] or [`WeakPathHandle`].
+    /// Its reference count is automatically increased when cloned. When its owner is dropped,
+    /// [`PathRef::on_drop`] must be called to decrement the refcount.
     ///
     /// [`WeakPathHandle`]: crate::path::WeakPathHandle
-    pub(crate) fn increment_path_refs(&mut self, path_id: PathId) {
-        *self.path_refs.entry(path_id).or_default() += 1;
-    }
-
-    /// Decrement the reference counter for a path in this connection.
-    pub(crate) fn decrement_path_refs(&mut self, path_id: PathId) {
-        if let Some(refs) = self.path_refs.get_mut(&path_id) {
-            *refs = refs.saturating_sub(1);
-            if *refs == 0 {
-                self.path_refs.remove(&path_id);
-                self.final_path_stats.remove(&path_id);
-            }
-        }
+    pub(crate) fn acquire_path_ref(&mut self, path_id: PathId) -> PathRef {
+        self.path_refs.entry(path_id).or_default().acquire(path_id)
     }
 }
 
@@ -1807,12 +1816,13 @@ impl Drop for State {
                 .send((self.handle, proto::EndpointEvent::drained()));
         }
 
-        if !self.on_closed.is_empty() {
+        if !self.on_closed.is_empty()
+            && let Some(reason) = self.error.clone()
+        {
             // Ensure that all on_closed oneshot senders are triggered before dropping.
-            let reason = self.error.as_ref().expect("closed without error reason");
-            let stats = self.inner.stats();
+            let closed = Closed::new(self, reason);
             for tx in self.on_closed.drain(..) {
-                tx.send((reason.clone(), stats.clone())).ok();
+                tx.send(closed.clone()).ok();
             }
         }
     }

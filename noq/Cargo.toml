@@ -1,6 +1,6 @@
 [package]
 name = "noq"
-version = "0.17.0"
+version = "1.0.0-rc.0"
 license.workspace = true
 repository.workspace = true
 description = "General purpose QUIC transport protocol implementation"
@@ -57,6 +57,7 @@ rustls-aws-lc-rs = ["rustls", "aws-lc-rs"]
 # Don't rely on these whatsoever. They may disappear at any time.
 
 __rustls-post-quantum-test =  ["rustls/prefer-post-quantum", "rustls", "aws-lc-rs", "proto/__rustls-post-quantum-test"]
+__all_without_fips = ["lock_tracking", "aws-lc-rs", "rustls", "ring", "runtime-tokio", "runtime-smol", "tracing-log", "rustls-log", "bloom", "platform-verifier", "qlog", "fast-apple-datapath"]
 
 [dependencies]
 async-io = { workspace = true, optional = true }
@@ -66,13 +67,13 @@ derive_more = { workspace = true }
 futures-io = { workspace = true, optional = true }
 rustc-hash = { workspace = true }
 pin-project-lite = { workspace = true }
-proto = { package = "noq-proto", path = "../noq-proto", version = "0.16.0", default-features = false }
+proto = { package = "noq-proto", path = "../noq-proto", version = "1.0.0-rc.0", default-features = false }
 rustls = { workspace = true, optional = true }
 smol = { workspace = true, optional = true }
 thiserror = { workspace = true }
 tracing =  { workspace = true }
 tokio = { workspace = true }
-udp = { package = "noq-udp", path = "../noq-udp", version = "0.9", default-features = false, features = ["tracing"] }
+udp = { package = "noq-udp", path = "../noq-udp", version = "1.0.0-rc.0", default-features = false, features = ["tracing"] }
 
 # Fix minimal dependencies for indirect deps
 async-global-executor = { workspace = true, optional = true }
@@ -100,7 +101,7 @@ directories-next = { workspace = true }
 rand = { workspace = true }
 rcgen = { workspace = true }
 clap = { workspace = true }
-tokio = { workspace = true, features = ["rt", "rt-multi-thread", "time", "macros"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "time", "macros", "test-util"] }
 tracing-subscriber = { workspace = true }
 tracing-futures = { workspace = true }
 url = { workspace = true }
@@ -144,4 +145,16 @@ required-features = ["rustls", "ring"]
 
 [package.metadata.docs.rs]
 # all non-default features except fips (cannot build on docs.rs environment)
-features = ["lock_tracking", "aws-lc-rs", "rustls", "ring", "runtime-tokio", "runtime-smol", "tracing-log", "rustls-log"]
+features = ["__all_without_fips"]
+
+[package.metadata.cargo_check_external_types]
+allowed_external_types = [
+    "noq_proto::*",
+    "noq_udp",
+    "noq_udp::*",
+    "bytes::bytes::Bytes",
+    "futures_core::stream::Stream",
+    "rustls",
+    "tokio::io::async_read::AsyncRead",
+    "tokio::io::async_write::AsyncWrite",
+]

@@ -21,7 +21,8 @@ pub use recv::{Chunks, ReadError, ReadableError};
 mod send;
 pub(crate) use send::{ByteSlice, BytesArray};
 use send::{BytesSource, Send, SendState};
-pub use send::{FinishError, WriteError, Written};
+pub use send::{FinishError, WriteError};
+pub(crate) use send::Written;
 
 mod state;
 #[allow(unreachable_pub)] // fuzzing only
@@ -48,8 +49,8 @@ impl<'a> Streams<'a> {
             return None;
         }
 
-        // TODO: Queue STREAM_ID_BLOCKED if this fails
         if self.state.next[dir as usize] >= self.state.max[dir as usize] {
+            self.state.streams_blocked[dir as usize] = true;
             return None;
         }
 
@@ -163,6 +164,21 @@ impl RecvStream<'_> {
         Ok(())
     }
 
+    /// Returns the number of bytes read from this stream.
+    ///
+    /// This is the offset of the next byte to be read, i.e. the length of the contiguous
+    /// prefix of the stream consumed by the application.
+    pub fn bytes_read(&self) -> Result<u64, ClosedStream> {
+        let recv = self
+            .state
+            .recv
+            .get(&self.id)
+            .and_then(|s| s.as_ref())
+            .and_then(|s| s.as_open_recv())
+            .ok_or(ClosedStream { _private: () })?;
+        Ok(recv.assembler.bytes_read())
+    }
+
     /// Check whether this stream has been reset by the peer, returning the reset error code if so
     ///
     /// After returning `Ok(Some(_))` once, stream state will be discarded and all future calls will
@@ -226,12 +242,15 @@ impl<'a> SendStream<'a> {
 
     /// Send data on the given stream
     ///
-    /// Returns the number of bytes and chunks successfully written.
+    /// Returns the number of bytes written and advances the provided `Bytes`
+    /// slice, removing all completely written chunks.
+    ///
     /// Note that this method might also write a partial chunk. In this case
-    /// [`Written::chunks`] will not count this chunk as fully written. However
     /// the chunk will be advanced and contain only non-written data after the call.
-    pub fn write_chunks(&mut self, data: &mut [Bytes]) -> Result<Written, WriteError> {
-        self.write_source(&mut BytesArray::from_chunks(data))
+    pub fn write_chunks(&mut self, data: &mut &mut [Bytes]) -> Result<usize, WriteError> {
+        let written = self.write_source(&mut BytesArray::from_chunks(data))?;
+        *data = &mut std::mem::take(data)[written.chunks..];
+        Ok(written.bytes)
     }
 
     fn write_source<'b, B: BytesSource<'b>>(

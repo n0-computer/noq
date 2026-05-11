@@ -4,6 +4,15 @@
 skip_core_tasks = true
 default_to_workspace = false
 
+[env]
+RUSTFLAGS = "-Dwarnings"
+RUSTDOCFLAGS = "-Dwarnings"
+CARGO_MAKE_EXTEND_WORKSPACE_MAKEFILE = true
+# Workspace members to exclude when setting `workspace = true` for a task.
+# Must live at global env (not task-level) so it's read before workspace iteration
+# is generated. Only the `check-external-types` task uses this.
+CARGO_MAKE_WORKSPACE_SKIP_MEMBERS = ["bench", "fuzz", "perf", "docs/book"]
+
 [tasks.default]
 alias = "dev-flow"
 
@@ -92,3 +101,10 @@ env = { "PROPTEST_CASES" = "10000" }
 description = "Run proptests in regression-only mode (runs for <5 seconds)"
 command = "cargo"
 args = ["nextest", "run", "--package=noq-proto", "-P", "proptests", "--no-fail-fast", "${@}"]
+
+[tasks.check-external-types]
+description = "Run cargo check-external-types on workspace crates"
+workspace = true
+toolchain = "${TOOLCHAIN:nightly-2025-10-18}"
+command = "cargo"
+args = ["check-external-types", "--features", "__all_without_fips"]

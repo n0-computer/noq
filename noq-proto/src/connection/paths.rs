@@ -185,8 +185,6 @@ pub(super) struct PathData {
 
     /// Path challenges sent (on the wire, on-path) that we didn't receive a path response for yet
     on_path_challenges_unconfirmed: IntMap<u64, SentChallengeInfo>,
-    /// Path challenges sent (on the wire, off-path) that we didn't receive a path response for yet
-    off_path_challenges_unconfirmed: IntMap<u64, SentChallengeInfo>,
     /// Whether to trigger sending another PATH_CHALLENGE in the next poll_transmit.
     ///
     /// This is picked up by [`super::Connection::space_can_send`].
@@ -317,12 +315,12 @@ impl PathData {
                 config.initial_rtt,
                 congestion.initial_window(),
                 config.get_initial_mtu(),
+                config.max_outgoing_bytes_per_second,
                 now,
             ),
             congestion,
             app_limited: false,
             on_path_challenges_unconfirmed: Default::default(),
-            off_path_challenges_unconfirmed: Default::default(),
             pending_on_path_challenge: false,
             path_responses: PathResponses::default(),
             validated: false,
@@ -375,12 +373,17 @@ impl PathData {
         Self {
             network_path,
             rtt: prev.rtt,
-            pacing: Pacer::new(smoothed_rtt, congestion.window(), prev.current_mtu(), now),
+            pacing: Pacer::new(
+                smoothed_rtt,
+                congestion.window(),
+                prev.current_mtu(),
+                prev.pacing.max_bytes_per_second(),
+                now,
+            ),
             sending_ecn: true,
             congestion,
             app_limited: false,
             on_path_challenges_unconfirmed: Default::default(),
-            off_path_challenges_unconfirmed: Default::default(),
             pending_on_path_challenge: false,
             path_responses: PathResponses::default(),
             validated: false,
@@ -442,11 +445,8 @@ impl PathData {
             sent_instant: now,
             network_path,
         };
-        if network_path == self.network_path {
-            self.on_path_challenges_unconfirmed.insert(token, info);
-        } else {
-            self.off_path_challenges_unconfirmed.insert(token, info);
-        }
+        debug_assert_eq!(network_path, self.network_path);
+        self.on_path_challenges_unconfirmed.insert(token, info);
     }
 
     /// Remove `packet` with number `pn` from this path's congestion control counters, or return
@@ -517,16 +517,15 @@ impl PathData {
         match self.on_path_challenges_unconfirmed.remove(&token) {
             // Response to an on-path PathChallenge that validates this path.
             // The sent path should match the current path. However, it's possible that the
-            // challenge was sent when no local_ip was known. This case is allowed as well
+            // challenge was sent when no local_ip was known. This case is allowed as well.
             Some(info) if info.network_path.is_probably_same_path(&self.network_path) => {
                 self.network_path.update_local_if_same_remote(&network_path);
                 let sent_instant = info.sent_instant;
                 if !std::mem::replace(&mut self.validated, true) {
                     trace!("new path validated");
                 }
-                // Clear any other on-path sent challenge
+                // Clear any other on-path sent challenges and stop sending new ones.
                 self.on_path_challenges_unconfirmed.clear();
-
                 self.pending_on_path_challenge = false;
 
                 // This RTT can only be used for the initial RTT, not as a normal
@@ -536,21 +535,17 @@ impl PathData {
 
                 let prev_status = std::mem::replace(&mut self.open_status, OpenStatus::Informed);
                 OnPathResponseReceived::OnPath {
-                    was_open: matches!(
-                        prev_status,
-                        OpenStatus::Informed | OpenStatus::Revalidating
-                    ),
+                    was_open: matches!(prev_status, OpenStatus::Informed),
                 }
             }
-            // Response to an on-path PathChallenge that does not validate this path
+            // Response to an on-path PathChallenge that does not validate this path.
             Some(info) => {
-                // This is a valid path response, but this validates a path we no longer have in
-                // use. Keep only sent challenges for the current path.
-
+                // This is a valid path response, but this validates a 4-tuple we no longer
+                // have in use. Keep only sent challenges for the current path.
                 self.on_path_challenges_unconfirmed
                     .retain(|_token, i| i.network_path == self.network_path);
 
-                // if there are no challenges for the current path, schedule one
+                // If there are no challenges for the current path, schedule one
                 if !self.on_path_challenges_unconfirmed.is_empty() {
                     self.pending_on_path_challenge = true;
                 }
@@ -559,18 +554,10 @@ impl PathData {
                     current_path: self.network_path,
                 }
             }
-            None => match self.off_path_challenges_unconfirmed.remove(&token) {
-                // Response to an off-path PathChallenge
-                Some(info) => {
-                    // Since we do not store validation state for these paths, we only really care
-                    // about reaching the same remote
-                    self.off_path_challenges_unconfirmed
-                        .retain(|_token, i| i.network_path.remote != info.network_path.remote);
-                    OnPathResponseReceived::OffPath
-                }
-                // Response to an unknown PathChallenge. Does not indicate failure
-                None => OnPathResponseReceived::Unknown,
-            },
+            None => {
+                // Response to an unknown PathChallenge. Does not indicate failure.
+                OnPathResponseReceived::Unknown
+            }
         }
     }
 
@@ -578,18 +565,6 @@ impl PathData {
     pub(super) fn reset_on_path_challenges(&mut self) {
         self.on_path_challenges_unconfirmed.clear();
         self.pending_on_path_challenge = false;
-    }
-
-    /// Returns whether there are any pending off-path challenges.
-    pub(super) fn has_off_path_challenges(&self) -> bool {
-        !self.off_path_challenges_unconfirmed.is_empty()
-    }
-
-    /// Clears all off-path challenges.
-    ///
-    /// Used when a new NAT traversal round starts and old probes are obsolete.
-    pub(super) fn clear_off_path_challenges(&mut self) {
-        self.off_path_challenges_unconfirmed.clear();
     }
 
     #[cfg(feature = "qlog")]
@@ -623,12 +598,15 @@ impl PathData {
     /// See [`Pacer::delay`].
     pub(super) fn pacing_delay(&mut self, bytes_to_send: u64, now: Instant) -> Option<Duration> {
         let smoothed_rtt = self.rtt.get();
+        let metrics = self.congestion.metrics();
         self.pacing.delay(
             smoothed_rtt,
             bytes_to_send,
             self.current_mtu(),
-            self.congestion.window(),
+            metrics.congestion_window,
             now,
+            metrics.send_quantum,
+            metrics.pacing_rate,
         )
     }
 
@@ -684,8 +662,6 @@ impl PathData {
 pub(super) enum OnPathResponseReceived {
     /// This response validates the path on its current remote address.
     OnPath { was_open: bool },
-    /// This response is valid, but it's for a remote other than the path's current remote address.
-    OffPath,
     /// The received token is unknown.
     Unknown,
     /// The response is valid but it's not usable for path validation.
@@ -705,12 +681,6 @@ pub(super) enum OpenStatus {
     Sent,
     /// The application has been informed of this path.
     Informed,
-    /// The path was [`Self::Informed`] before, but we want to trigger path validation again.
-    ///
-    /// This is used to ensure we properly stop trying to re-send path challenges eventually, without
-    /// having to switch to [`Self::Pending`] when re-validating, as that would trigger another
-    /// application-level event about the path opening once validation succeeds.
-    Revalidating,
 }
 
 /// Congestion metrics as described in [`recovery_metrics_updated`].
@@ -769,10 +739,16 @@ impl RecoveryMetrics {
         }
 
         Some(RecoveryMetricsUpdated {
-            min_rtt: updated.min_rtt.map(|rtt| rtt.as_secs_f32()),
-            smoothed_rtt: updated.smoothed_rtt.map(|rtt| rtt.as_secs_f32()),
-            latest_rtt: updated.latest_rtt.map(|rtt| rtt.as_secs_f32()),
-            rtt_variance: updated.rtt_variance.map(|rtt| rtt.as_secs_f32()),
+            min_rtt: updated.min_rtt.map(|rtt| rtt.as_micros() as f32 / 1000.0),
+            smoothed_rtt: updated
+                .smoothed_rtt
+                .map(|rtt| rtt.as_micros() as f32 / 1000.0),
+            latest_rtt: updated
+                .latest_rtt
+                .map(|rtt| rtt.as_micros() as f32 / 1000.0),
+            rtt_variance: updated
+                .rtt_variance
+                .map(|rtt| rtt.as_micros() as f32 / 1000.0),
             pto_count: updated
                 .pto_count
                 .map(|count| count.try_into().unwrap_or(u16::MAX)),
@@ -883,8 +859,20 @@ pub(crate) struct PathResponses {
 
 impl PathResponses {
     pub(crate) fn push(&mut self, packet: u64, token: u64, network_path: FourTuple) {
-        /// Arbitrary permissive limit to prevent abuse
-        const MAX_PATH_RESPONSES: usize = 16;
+        /// An arbitrary permissive limit to prevent abuse.
+        ///
+        /// If we've negotiated the n0 NAT Traversal extension, and one user might have a lot
+        /// of addresses, e.g. because of having lots of interfaces (we've seen >25 interfaces
+        /// on Macs with docker and other things), then we need to be able to process at least
+        /// as many PATH_CHALLENGE frames as there are interfaces.
+        /// On top of that, there are retries, which make it possible that we need to process
+        /// even more.
+        ///
+        /// Considering that there can be up to 2 `PathData`s per active `PathId`, and
+        /// reasonable default values for maximum concurrent multipath paths are ~8 and each
+        /// `PathResponse` struct takes up 72 bytes at the moment this, means an attacker can
+        /// cause us to keep `32 * 2 * 8 * 72 = ~37KB` of data around.
+        const MAX_PATH_RESPONSES: usize = 32;
         let response = PathResponse {
             packet,
             token,
@@ -1054,9 +1042,9 @@ pub enum PathStatus {
 /// Application events about paths
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PathEvent {
-    /// A new path has been opened
-    Opened {
-        /// Which path is now open
+    /// A new path has established connection with the peer.
+    Established {
+        /// The path which can now be used for application data.
         id: PathId,
     },
     /// A path was abandoned and is no longer usable.

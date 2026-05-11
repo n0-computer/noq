@@ -216,6 +216,7 @@ pub(super) enum EncodableFrame<'a> {
     MaxData(MaxData),
     MaxStreamData(MaxStreamData),
     MaxStreams(MaxStreams),
+    StreamsBlocked(StreamsBlocked),
 }
 
 impl<'a> EncodableFrame<'a> {
@@ -249,7 +250,8 @@ impl<'a> EncodableFrame<'a> {
             | EncodableFrame::StreamMeta(_)
             | EncodableFrame::MaxData(_)
             | EncodableFrame::MaxStreamData(_)
-            | EncodableFrame::MaxStreams(_) => true,
+            | EncodableFrame::MaxStreams(_)
+            | EncodableFrame::StreamsBlocked(_) => true,
         }
     }
 }
@@ -2368,7 +2370,8 @@ impl Encodable for AddAddress {
     }
 }
 
-/// Conjunction of the information contained in the reach out frames
+/// Conjunction of the information contained in the reach out frames.
+///
 /// ([`FrameType::ReachOutAtIpv4`], [`FrameType::ReachOutAtIpv6`])
 #[derive(Debug, PartialEq, Eq, Clone, derive_more::Display)]
 #[display("REACH_OUT round: {round} local_addr: {}", self.socket_addr())]
@@ -2382,21 +2385,7 @@ pub(crate) struct ReachOut {
     pub(crate) port: u16,
 }
 
-// TODO(@divma): remove
-#[allow(dead_code)]
 impl ReachOut {
-    /// Smallest number of bytes this type of frame is guaranteed to fit within
-    pub(crate) const SIZE_BOUND: usize = Self {
-        round: VarInt::MAX,
-        ip: IpAddr::V6(std::net::Ipv6Addr::LOCALHOST),
-        port: u16::MAX,
-    }
-    .size();
-
-    pub(crate) const fn new(round: VarInt, (ip, port): (IpAddr, u16)) -> Self {
-        Self { round, ip, port }
-    }
-
     /// Get the [`FrameType`] for this frame
     pub(crate) const fn get_type(&self) -> FrameType {
         if self.ip.is_ipv6() {

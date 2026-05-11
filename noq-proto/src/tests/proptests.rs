@@ -23,8 +23,8 @@ use crate::{
 };
 
 // These TransportConfig constants are designed to match iroh for now.
-const MAX_MULTIPATH_PATHS: u32 = 13;
-const MAX_QNT_ADDRS: u8 = 12;
+const MAX_MULTIPATH_PATHS: u32 = 8;
+const MAX_QNT_ADDRS: u8 = 32;
 const PATH_MAX_IDLE_TIMEOUT: Duration = Duration::from_secs(15);
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -140,7 +140,7 @@ impl PairSetup {
 
         if self.extensions.is_qnt_enabled() {
             // enable QNT:
-            transport.set_max_remote_nat_traversal_addresses(MAX_QNT_ADDRS);
+            transport.max_remote_nat_traversal_addresses(MAX_QNT_ADDRS);
         }
 
         // Initialize the server config
@@ -166,12 +166,12 @@ impl PairSetup {
                 let routes = RoutingTable::simple_symmetric(CLIENT_ADDRS, SERVER_ADDRS);
                 pair.client.addr = routes.client_addr(0).unwrap();
                 pair.server.addr = routes.server_addr(0).unwrap();
-                pair.routes = Some(routes);
+                pair.routes = Some(Box::new(routes));
             }
             RoutingSetup::Complex(routes) => {
                 pair.client.addr = routes.client_addr(0).unwrap();
                 pair.server.addr = routes.server_addr(0).unwrap();
-                pair.routes = Some(routes);
+                pair.routes = Some(Box::new(routes));
             }
         }
 

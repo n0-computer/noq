@@ -1,7 +1,7 @@
 #[cfg(all(feature = "aws-lc-rs", not(feature = "ring")))]
-use aws_lc_rs::{aead, error, hkdf, hmac};
+use aws_lc_rs::{aead, hkdf, hmac};
 #[cfg(feature = "ring")]
-use ring::{aead, error, hkdf, hmac};
+use ring::{aead, hkdf, hmac};
 
 use crate::crypto::{self, CryptoError};
 
@@ -15,7 +15,7 @@ impl crypto::HmacKey for hmac::Key {
     }
 
     fn verify(&self, data: &[u8], signature: &[u8]) -> Result<(), CryptoError> {
-        Ok(hmac::verify(self, data, signature)?)
+        hmac::verify(self, data, signature).map_err(|_| CryptoError)
     }
 }
 
@@ -58,7 +58,9 @@ impl crypto::HandshakeTokenKey for RetryTokenKey {
         let aead_key = self.derive_aead(token_nonce);
         let nonce = aead::Nonce::assume_unique_for_key([0u8; 12]); // See docs for RetryTokenKey
         let aad = aead::Aad::empty();
-        aead_key.seal_in_place_append_tag(nonce, aad, data)?;
+        aead_key
+            .seal_in_place_append_tag(nonce, aad, data)
+            .map_err(|_| CryptoError)?;
         Ok(())
     }
 
@@ -66,12 +68,8 @@ impl crypto::HandshakeTokenKey for RetryTokenKey {
         let aead_key = self.derive_aead(token_nonce);
         let aad = aead::Aad::empty();
         let nonce = aead::Nonce::assume_unique_for_key([0u8; 12]); // See docs for RetryTokenKey
-        Ok(aead_key.open_in_place(nonce, aad, data)?)
-    }
-}
-
-impl From<error::Unspecified> for CryptoError {
-    fn from(_: error::Unspecified) -> Self {
-        Self
+        Ok(aead_key
+            .open_in_place(nonce, aad, data)
+            .map_err(|_| CryptoError)?)
     }
 }

@@ -11,14 +11,19 @@ use std::{
     convert::TryInto,
     io,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket},
+    pin::pin,
     str,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    task::{Context, Poll, RawWaker, RawWakerVTable, Waker},
 };
 
 use crate::runtime::TokioRuntime;
 use crate::{Duration, Instant};
 use bytes::Bytes;
-use proto::{ConnectionError, RandomConnectionIdGenerator, crypto::rustls::QuicClientConfig};
+use proto::{ConnectionError, PathId, RandomConnectionIdGenerator, crypto::rustls::QuicClientConfig};
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use rustls::{
     RootCertStore,
@@ -642,11 +647,15 @@ async fn echo((mut send, mut recv): (SendStream, RecvStream)) {
             Bytes::new(), Bytes::new(), Bytes::new(), Bytes::new(),
         ];
 
-        match recv.read_chunks(&mut bufs).await.expect("read chunks") {
+        match recv
+            .read_many_chunks(&mut bufs)
+            .await
+            .expect("read bytes many")
+        {
             Some(n) => {
                 send.write_all_chunks(&mut bufs[..n])
                     .await
-                    .expect("write chunks");
+                    .expect("write all chunks");
             }
             None => break,
         }
@@ -839,7 +848,7 @@ async fn multiple_conns_with_zero_length_cids() {
     let mut factory = EndpointFactory::new();
     factory
         .endpoint_config
-        .cid_generator(|| Box::new(RandomConnectionIdGenerator::new(0)));
+        .cid_generator(Arc::new(|| Box::new(RandomConnectionIdGenerator::new(0))));
     let server = factory.endpoint("server");
     let server_addr = server.local_addr().unwrap();
 
@@ -1098,9 +1107,12 @@ async fn on_closed() {
             .expect("connection");
         let on_closed = conn.on_closed();
         let cause = conn.closed().await;
-        let (cause1, _stats) = on_closed.await;
+        let closed = on_closed.await;
         assert!(matches!(cause, ConnectionError::ApplicationClosed(_)));
-        assert!(matches!(cause1, ConnectionError::ApplicationClosed(_)));
+        assert!(matches!(
+            closed.reason,
+            ConnectionError::ApplicationClosed(_)
+        ));
     });
     let client_task = tokio::spawn(async move {
         let conn = endpoint
@@ -1112,10 +1124,8 @@ async fn on_closed() {
         let on_closed2 = conn.on_closed();
         drop(conn);
 
-        let (cause, _stats) = on_closed1.await;
-        assert_eq!(cause, ConnectionError::LocallyClosed);
-        let (cause, _stats) = on_closed2.await;
-        assert_eq!(cause, ConnectionError::LocallyClosed);
+        assert_eq!(on_closed1.await.reason, ConnectionError::LocallyClosed);
+        assert_eq!(on_closed2.await.reason, ConnectionError::LocallyClosed);
     });
     let (server_res, client_res) = tokio::join!(server_task, client_task);
     server_res.expect("server task panicked");
@@ -1142,10 +1152,10 @@ async fn on_closed_endpoint_drop() {
             let on_closed = conn.on_closed();
             drop(conn);
             drop(server);
-            let (cause, _stats) = on_closed.await;
+            let closed = on_closed.await;
             // Depending on timing we might have received a close frame or not.
             assert!(matches!(
-                cause,
+                closed.reason,
                 ConnectionError::ApplicationClosed(_) | ConnectionError::LocallyClosed
             ));
         }),
@@ -1162,10 +1172,10 @@ async fn on_closed_endpoint_drop() {
             let on_closed = conn.on_closed();
             drop(conn);
             drop(client);
-            let (cause, _stats) = on_closed.await;
+            let closed = on_closed.await;
             // Depending on timing we might have received a close frame or not.
             assert!(matches!(
-                cause,
+                closed.reason,
                 ConnectionError::ApplicationClosed(_) | ConnectionError::LocallyClosed
             ));
         }),
@@ -1211,6 +1221,43 @@ async fn weak_connection_handle() {
     let (server_res, client_res) = tokio::join!(server_task, client_task);
     server_res.expect("server task panicked");
     client_res.expect("client task panicked");
+}
+
+#[tokio::test(start_paused = true)]
+async fn dropped_endpoint_cleans_up() {
+    let _guard = subscribe();
+
+    let mut endpoint_factory = EndpointFactory::new();
+    let cid_generator = Arc::new(|| -> Box<dyn proto::ConnectionIdGenerator> {
+        Box::<proto::HashedConnectionIdGenerator>::default()
+    });
+    endpoint_factory
+        .endpoint_config
+        .cid_generator(cid_generator.clone());
+    let endpoint = endpoint_factory.endpoint("endpoint");
+    drop(endpoint_factory);
+    assert_eq!(Arc::strong_count(&cid_generator), 2);
+    drop(endpoint);
+    // Let the driver task run; paused runtimes are guaranteed to drain pending work on sleep.
+    tokio::time::sleep(Duration::from_millis(1)).await;
+    assert_eq!(Arc::strong_count(&cid_generator), 1);
+}
+
+#[tokio::test]
+async fn dropped_connection_cleans_up() {
+    let _guard = subscribe();
+    let endpoint = endpoint();
+    tokio::join!(
+        async {
+            endpoint
+                .connect(endpoint.local_addr().unwrap(), "localhost")
+                .unwrap()
+                .await
+                .unwrap()
+        },
+        async { endpoint.accept().await.unwrap().await.unwrap() }
+    );
+    endpoint.wait_idle().await;
 }
 
 /// Test that accessing stats from `Path` works as expected.
@@ -1304,6 +1351,89 @@ async fn path_clone_stats_after_abandon() {
     tokio::join!(server_task, client_task);
 }
 
+/// `Closed::path_stats` should expose stats for every path the connection
+/// knew about — paths still in the proto layer at close time and paths
+/// already discarded but cached in the noq layer's final stats.
+#[tokio::test]
+async fn closed_includes_path_stats_for_all_known_paths() -> TestResult {
+    let _logging = subscribe();
+    let factory = EndpointFactory::new();
+
+    let mut transport_config = TransportConfig::default();
+    transport_config.max_concurrent_multipath_paths(3);
+    let server = factory.endpoint_with_config("server", transport_config.clone());
+    let server_addr = server.local_addr()?;
+
+    let server_task = async move {
+        let conn = server.accept().await.ok_or("closed conn?")?.await?;
+        let _ = conn.closed().await;
+        TestResult::Ok(())
+    }
+    .instrument(info_span!("server"));
+
+    let client = factory.endpoint_with_config("client", transport_config);
+
+    let client_task = async move {
+        let conn = client.connect(server_addr, "localhost")?.await?;
+        let mut path_events = conn.path_events();
+
+        // Open a second path.
+        let path2 = loop {
+            match conn
+                .open_path(server_addr, proto::PathStatus::Available)
+                .await
+            {
+                Ok(p) => break p,
+                Err(proto::PathError::RemoteCidsExhausted) => {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                Err(err) => Err(err)?,
+            }
+        };
+        let path2_id = path2.id();
+
+        // Close path 2 and wait for the Discarded event. We hold `path2`
+        // alive past the discard so the final stats land in noq's
+        // `final_path_stats` cache and become visible in `Closed`.
+        path2.close()?;
+        while let Some(Ok(evt)) = path_events.next().await {
+            if let proto::PathEvent::Discarded { id, .. } = evt
+                && id == path2_id
+            {
+                break;
+            }
+        }
+
+        // Now close the connection. The initial path should still be in
+        // proto.paths() at close time.
+        let on_closed_fut = conn.on_closed();
+        conn.close(0u32.into(), b"done");
+        let closed = on_closed_fut.await;
+
+        let initial_path = PathId::ZERO;
+        let ids: Vec<_> = closed.path_stats.iter().map(|(id, _stats)| *id).collect();
+        assert!(
+            closed.path_stats.iter().any(|(id, _stats)| *id == path2_id),
+            "Closed.path_stats missing the discarded path {path2_id:?}; ids={ids:?}",
+        );
+        assert!(
+            closed
+                .path_stats
+                .iter()
+                .any(|(id, _stats)| *id == initial_path),
+            "Closed.path_stats missing the initial path {initial_path:?}; ids={ids:?}",
+        );
+
+        TestResult::Ok(())
+    }
+    .instrument(info_span!("client"));
+
+    let (server_res, client_res) = tokio::join!(server_task, client_task);
+    server_res?;
+    client_res?;
+    Ok(())
+}
+
 /// Tests the [`Path::close`] api.
 ///
 /// It should:
@@ -1329,7 +1459,7 @@ async fn close_path() -> TestResult {
         // The server learns the path ID from the Opened event
         let mut path_id = None;
         while let Some(Ok(evt)) = path_events.next().await {
-            if let proto::PathEvent::Opened { id } = evt {
+            if let proto::PathEvent::Established { id } = evt {
                 path_id = Some(id);
                 break;
             }
@@ -1426,7 +1556,7 @@ async fn nat_traversal_wakes_connection_driver() -> TestResult {
 
     let mut transport_config = TransportConfig::default();
     transport_config.max_concurrent_multipath_paths(3);
-    transport_config.set_max_remote_nat_traversal_addresses(10);
+    transport_config.max_remote_nat_traversal_addresses(10);
     let server = factory.endpoint_with_config("server", transport_config.clone());
     let server_addr = server.local_addr().unwrap();
 
@@ -1480,4 +1610,152 @@ async fn nat_traversal_wakes_connection_driver() -> TestResult {
 
     tokio::join!(server_task, client_task);
     Ok(())
+}
+
+#[tokio::test]
+async fn stream_drop_removes_blocked_reader() {
+    let _guard = subscribe();
+
+    for drop_stream in [false, true] {
+        let endpoint_factory = EndpointFactory::new();
+        let server = endpoint_factory.endpoint("server");
+        let server_address = server.local_addr().unwrap();
+        let client = endpoint_factory.endpoint("client");
+
+        let server_task = tokio::spawn(async move {
+            let conn = server.accept().await.unwrap().await.unwrap();
+            let mut stream = conn.accept_uni().await.unwrap();
+
+            // read "hello"
+            let mut buf = [0u8; 5];
+            stream.read_exact(&mut buf).await.unwrap();
+
+            let (waker, wake_counter) = new_count_waker();
+            let mut cx = Context::from_waker(&waker);
+            // do a blocking read which will add the stream in conn.blocked_readers
+            {
+                let mut buf = [0u8; 64];
+                let read_fut = stream.read(&mut buf);
+                tokio::pin!(read_fut);
+                assert!(matches!(read_fut.as_mut().poll(&mut cx), Poll::Pending));
+            }
+
+            if !drop_stream {
+                assert_eq!(wake_counter.wakes(), 0);
+                // We have a blocked reader, closing the connection should wake it. We use this as
+                // a proxy to assert that the stream is in conn.blocked_readers.
+                conn.close(0u32.into(), b"done");
+                assert_eq!(wake_counter.wakes(), 1);
+            } else {
+                // dropping the stream should remove it from conn.blocked_readers, so we don't
+                // expect any wakeups
+                drop(stream);
+                assert_eq!(wake_counter.wakes(), 0, "no wakeups should have occurred");
+                conn.close(0u32.into(), b"done");
+                assert_eq!(wake_counter.wakes(), 0, "no wakeups should have occurred");
+            }
+        });
+
+        let conn = client
+            .connect(server_address, "localhost")
+            .unwrap()
+            .await
+            .unwrap();
+        let mut stream = conn.open_uni().await.unwrap();
+        // need to send some data to actually start the stream
+        stream.write_all(b"hello").await.unwrap();
+
+        server_task.await.unwrap();
+    }
+}
+
+/// Test that dropping a `RecvStream` after cancelling a read and then
+/// explicitly `stop`ing it doesn't panic.
+#[tokio::test]
+async fn recv_stream_cancel_stop_drop() {
+    let _guard = subscribe();
+    let factory = EndpointFactory::new();
+    let server = factory.endpoint("server");
+    let server_addr = server.local_addr().unwrap();
+    let client = factory.endpoint("client");
+    let recv_dropped = tokio::sync::SetOnce::new();
+    tokio::join!(
+        async {
+            let conn = server.accept().await.unwrap().await.unwrap();
+            let mut recv = conn.accept_uni().await.unwrap();
+            // Create a future to read from the stream, poll it once, then immediately drop it
+            {
+                let fut = pin!(recv.read_to_end(usize::MAX));
+                let mut cx = Context::from_waker(Waker::noop());
+                assert!(fut.poll(&mut cx).is_pending());
+            }
+            recv_dropped.set(()).unwrap();
+            recv.stop(0u32.into()).unwrap();
+        },
+        async {
+            let conn = client
+                .connect(server_addr, "localhost")
+                .unwrap()
+                .await
+                .unwrap();
+            let mut send = conn.open_uni().await.unwrap();
+            _ = send.write_all(b"hello").await;
+            // Don't drop (finish) the send stream until the read has been
+            // cancelled by the server, ensuring that read_to_end can't complete
+            // immediately.
+            recv_dropped.wait().await;
+        },
+    );
+}
+
+#[derive(Default)]
+struct WakeCounter {
+    wakes: AtomicUsize,
+}
+
+impl WakeCounter {
+    fn wakes(&self) -> usize {
+        self.wakes.load(Ordering::SeqCst)
+    }
+}
+
+fn new_count_waker() -> (Waker, Arc<WakeCounter>) {
+    // instance of WakeCounter
+    let counter = Arc::new(WakeCounter::default());
+
+    // convert
+    let waker = unsafe { Waker::from_raw(raw_waker(counter.clone())) };
+    (waker, counter)
+}
+
+fn raw_waker(counter: Arc<WakeCounter>) -> RawWaker {
+    // Store an Arc<WakeCounter> behind the raw pointer.
+    let ptr = Arc::into_raw(counter) as *const ();
+    RawWaker::new(ptr, &VTABLE)
+}
+
+static VTABLE: RawWakerVTable =
+    RawWakerVTable::new(clone_waker, wake_waker, wake_by_ref_waker, drop_waker);
+
+unsafe fn clone_waker(data: *const ()) -> RawWaker {
+    let arc = unsafe { Arc::<WakeCounter>::from_raw(data as *const WakeCounter) };
+    let cloned = arc.clone();
+    std::mem::forget(arc);
+    raw_waker(cloned)
+}
+
+unsafe fn wake_waker(data: *const ()) {
+    let arc = unsafe { Arc::<WakeCounter>::from_raw(data as *const WakeCounter) };
+    arc.wakes.fetch_add(1, Ordering::SeqCst);
+    // arc drops here
+}
+
+unsafe fn wake_by_ref_waker(data: *const ()) {
+    let arc = unsafe { Arc::<WakeCounter>::from_raw(data as *const WakeCounter) };
+    arc.wakes.fetch_add(1, Ordering::SeqCst);
+    std::mem::forget(arc);
+}
+
+unsafe fn drop_waker(data: *const ()) {
+    drop(unsafe { Arc::<WakeCounter>::from_raw(data as *const WakeCounter) });
 }

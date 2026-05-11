@@ -1,6 +1,6 @@
 [package]
 name = "noq-proto"
-version = "0.16.0"
+version = "1.0.0-rc.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -50,6 +50,7 @@ rustls-aws-lc-rs = ["rustls", "aws-lc-rs"]
 # Don't rely on these whatsoever. They may disappear at any time.
 
 __rustls-post-quantum-test =  []
+__all_without_fips = ["arbitrary", "aws-lc-rs", "rustls", "ring", "platform-verifier", "rustls-log", "qlog", "bench", "bloom", "tracing-log"]
 
 [dependencies]
 aes-gcm = { workspace = true, optional = true }
@@ -64,6 +65,7 @@ identity-hash = { workspace = true }
 lru-slab = { workspace = true }
 qlog = { workspace = true, optional = true }
 rand = { workspace = true }
+rand_pcg = "0.10"
 ring = { workspace = true, optional = true }
 rustc-hash = { workspace = true }
 rustls = { workspace = true, optional = true }
@@ -86,7 +88,6 @@ web-time = { workspace = true }
 assert_matches = { workspace = true }
 hex-literal = { workspace = true  }
 proptest = { workspace = true }
-rand_pcg = "0.10"
 rcgen = { workspace = true }
 test-strategy = { workspace = true }
 testresult = "0.4.1"
@@ -107,4 +108,15 @@ workspace = true
 
 [package.metadata.docs.rs]
 # all non-default features except fips (cannot build on docs.rs environment)
-features = ["aws-lc-rs", "rustls", "ring", "platform-verifier", "rustls-log", "qlog", "bench"]
+features = ["__all_without_fips"]
+
+[package.metadata.cargo_check_external_types]
+allowed_external_types = [
+    "arbitrary::Arbitrary", # gated behind `arbitrary` feature
+    "criterion::Criterion", # gated behind `bench` feature
+    "identity_hash::IdentityHashable",
+    "bytes::*",
+    "rustls",
+    "rustls::*",
+    "rustls_pki_types::*",
+]

@@ -61,13 +61,14 @@ pub(crate) use web_time::{Duration, Instant};
 #[cfg(feature = "bloom")]
 pub use proto::BloomTokenLog;
 pub use proto::{
-    AckFrequencyConfig, ApplicationClose, Chunk, ClientConfig, ClosedStream, ConfigError,
-    ConnectError, ConnectionClose, ConnectionError, ConnectionId, ConnectionIdGenerator,
-    ConnectionStats, Dir, EcnCodepoint, EndpointConfig, FrameStats, FrameType, IdleTimeout,
-    InvalidCid, MtuDiscoveryConfig, NetworkChangeHint, NoneTokenLog, NoneTokenStore, PathId,
-    PathStats, ServerConfig, Side, StdSystemTime, StreamId, TimeSource, TokenLog, TokenMemoryCache,
-    TokenReuseError, TokenStore, Transmit, TransportConfig, TransportErrorCode, UdpStats,
-    ValidationTokenConfig, VarInt, VarIntBoundsExceeded, Written, congestion, crypto,
+    AckFrequencyConfig, ApplicationClose, Chunk, ClientConfig, ClosePathError, ClosedPath,
+    ClosedStream, ConfigError, ConnectError, ConnectionClose, ConnectionError, ConnectionId,
+    ConnectionIdGenerator, ConnectionStats, DecryptedInitial, Dir, EcnCodepoint, EndpointConfig,
+    FrameStats, FrameType, IdleTimeout, InvalidCid, MtuDiscoveryConfig, NetworkChangeHint,
+    NoneTokenLog, NoneTokenStore, PathError, PathEvent, PathId, PathStats, PathStatus,
+    ServerConfig, SetPathStatusError, Side, StdSystemTime, StreamId, TimeSource, TokenLog,
+    TokenMemoryCache, TokenReuseError, TokenStore, Transmit, TransportConfig, TransportErrorCode,
+    UdpStats, ValidationTokenConfig, VarInt, VarIntBoundsExceeded, congestion, crypto,
 };
 #[cfg(feature = "qlog")]
 pub use proto::{QlogConfig, QlogFactory, QlogFileFactory};
@@ -76,7 +77,7 @@ pub use rustls;
 pub use udp;
 
 pub use crate::connection::{
-    AcceptBi, AcceptUni, Connecting, Connection, OnClosed, OpenBi, OpenUni, ReadDatagram,
+    AcceptBi, AcceptUni, Closed, Connecting, Connection, OnClosed, OpenBi, OpenUni, ReadDatagram,
     SendDatagram, SendDatagramError, WeakConnectionHandle, ZeroRttAccepted,
 };
 pub use crate::endpoint::{Accept, Endpoint, EndpointStats};

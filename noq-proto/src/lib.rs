@@ -47,7 +47,7 @@ pub use crate::connection::{
     ConnectionStats, Datagrams, Event, FinishError, FrameStats, MultipathNotNegotiated,
     NetworkChangeHint, PathAbandonReason, PathError, PathEvent, PathId, PathStats, PathStatus,
     ReadError, ReadableError, RecvStream, RttEstimator, SendDatagramError, SendStream,
-    SetPathStatusError, ShouldTransmit, StreamEvent, Streams, UdpStats, WriteError, Written,
+    SetPathStatusError, ShouldTransmit, StreamEvent, Streams, UdpStats, WriteError,
 };
 #[cfg(test)]
 use test_strategy::Arbitrary;
@@ -56,8 +56,6 @@ use test_strategy::Arbitrary;
 pub use rustls;
 
 mod config;
-#[cfg(doc)]
-pub use config::DEFAULT_CONCURRENT_MULTIPATH_PATHS_WHEN_ENABLED;
 pub use config::{
     AckFrequencyConfig, ClientConfig, ConfigError, EndpointConfig, IdleTimeout, MtuDiscoveryConfig,
     ServerConfig, StdSystemTime, TimeSource, TransportConfig, ValidationTokenConfig,
