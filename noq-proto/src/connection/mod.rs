@@ -553,8 +553,8 @@ impl Connection {
     /// Opens a new path.
     ///
     /// Further errors might occur and they will be emitted in [`PathEvent::Abandoned`]
-    /// events with this path id.  When the path is opened it will be reported as an
-    /// [`PathEvent::Established`].
+    /// events with this path id.  Once the path is opened and can carry application data it
+    /// will be reported using a [`PathEvent::Established`] event.
     pub fn open_path(
         &mut self,
         network_path: FourTuple,
