@@ -2,6 +2,7 @@ use std::{
     convert::TryInto,
     mem,
     net::{Ipv4Addr, Ipv6Addr, SocketAddr},
+    num::NonZeroUsize,
     sync::{Arc, Mutex},
 };
 
@@ -2189,6 +2190,40 @@ fn tail_loss_respect_max_datagrams() {
     // Finally checking the number of sent udp datagrams match the number of iops
     let client_stats = pair.client_conn_mut(client_ch).stats();
     assert_eq!(client_stats.udp_tx.ios, client_stats.udp_tx.datagrams);
+}
+
+#[test]
+fn max_transmit_segments_setter_caps_batch_size() {
+    let _guard = subscribe();
+    const CAP: usize = 4;
+    let client_config = {
+        let mut c_config = client_config();
+        let mut t_config = TransportConfig::default();
+        t_config.max_transmit_segments(NonZeroUsize::new(CAP).expect("nonzero"));
+        c_config.transport_config(t_config.into());
+        c_config
+    };
+    let mut pair = Pair::default();
+    let (client_ch, _) = pair.connect_with(client_config);
+    let before = pair.client_conn_mut(client_ch).stats().udp_tx;
+
+    let s = pair.client_streams(client_ch).open(Dir::Uni).unwrap();
+    pair.client_send(client_ch, s)
+        .write(&[42u8; 64 * 1024])
+        .unwrap();
+    pair.drive();
+
+    let after = pair.client_conn_mut(client_ch).stats().udp_tx;
+    let ios = after.ios - before.ios;
+    let datagrams = after.datagrams - before.datagrams;
+    assert!(
+        ios > 0,
+        "expected the stream transfer to produce at least one UDP I/O"
+    );
+    assert!(
+        datagrams <= ios * CAP as u64,
+        "max_transmit_segments({CAP}) should cap each batch, but {datagrams} datagrams across {ios} ios exceeds {CAP} per io",
+    );
 }
 
 #[test]

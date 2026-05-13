@@ -251,16 +251,20 @@ impl Endpoint {
             addr
         };
 
+        let max_transmit_datagrams = endpoint.inner.config().get_max_transmit_datagrams();
         let (ch, conn) = endpoint
             .inner
             .connect(self.runtime.now(), config, addr, server_name)?;
 
         let sender = endpoint.socket.create_sender();
         endpoint.stats.outgoing_handshakes += 1;
-        Ok(endpoint
-            .recv_state
-            .connections
-            .insert(ch, conn, sender, self.runtime.clone()))
+        Ok(endpoint.recv_state.connections.insert(
+            ch,
+            conn,
+            max_transmit_datagrams,
+            sender,
+            self.runtime.clone(),
+        ))
     }
 
     /// Switch to a new UDP socket
@@ -485,6 +489,7 @@ impl EndpointInner {
         let mut state = self.state.lock().unwrap();
         let mut response_buffer = Vec::new();
         let now = state.runtime.now();
+        let max_transmit_datagrams = state.inner.config().get_max_transmit_datagrams();
         match state
             .inner
             .accept(incoming, now, &mut response_buffer, server_config)
@@ -493,10 +498,13 @@ impl EndpointInner {
                 state.stats.accepted_handshakes += 1;
                 let sender = state.socket.create_sender();
                 let runtime = state.runtime.clone();
-                Ok(state
-                    .recv_state
-                    .connections
-                    .insert(handle, conn, sender, runtime))
+                Ok(state.recv_state.connections.insert(
+                    handle,
+                    conn,
+                    max_transmit_datagrams,
+                    sender,
+                    runtime,
+                ))
             }
             Err(error) => {
                 if let Some(transmit) = error.response {
@@ -707,6 +715,7 @@ impl ConnectionSet {
         &mut self,
         handle: ConnectionHandle,
         conn: proto::Connection,
+        max_transmit_datagrams: NonZeroUsize,
         sender: Pin<Box<dyn UdpSender>>,
         runtime: Arc<dyn Runtime>,
     ) -> Connecting {
@@ -719,7 +728,15 @@ impl ConnectionSet {
             .unwrap();
         }
         self.senders.insert(handle, send);
-        Connecting::new(handle, conn, self.sender.clone(), recv, sender, runtime)
+        Connecting::new(
+            handle,
+            conn,
+            max_transmit_datagrams,
+            self.sender.clone(),
+            recv,
+            sender,
+            runtime,
+        )
     }
 
     fn is_empty(&self) -> bool {
