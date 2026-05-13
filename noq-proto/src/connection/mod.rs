@@ -4962,7 +4962,8 @@ impl Connection {
                     // If we were passively migrated (e.g. NAT rebinding), our local_ip will
                     // not match. Once we processed a non-probing packet the local_ip will
                     // finally be updated.
-                    if network_path.remote == path.network_path.remote {
+                    let on_path = network_path.remote == path.network_path.remote;
+                    if on_path {
                         // PATH_CHALLENGE on active path, possible off-path packet
                         // forwarding attack. Send a non-probing packet to recover the
                         // active path. See
@@ -4974,6 +4975,37 @@ impl Connection {
                             true => self.immediate_ack(path_id),
                             false => {
                                 self.ping_path(path_id).ok();
+                            }
+                        }
+                    } else {
+                        // Off-path PATH_CHALLENGE. If we are the client of this
+                        // connection and NAT traversal was negotiated, this is the
+                        // server's own probe arriving at us. Its source address is the
+                        // server's NAT-mapped 4-tuple for this flow, which may differ
+                        // from what the server advertised via ADD_ADDRESS (for example
+                        // when the server is behind a symmetric NAT). Treat that source
+                        // as a fresh probe target. A path is only opened once the
+                        // client's own probe to that target gets back a matching
+                        // PATH_RESPONSE; we never open a path off the bare PATH_CHALLENGE.
+                        // discover_remote_from_probe is a no-op on the server side.
+                        let ipv6 = self.is_ipv6();
+                        if self
+                            .n0_nat_traversal
+                            .discover_remote_from_probe(network_path.remote, ipv6)
+                        {
+                            let timer_armed = self
+                                .timers
+                                .get(Timer::Conn(ConnTimer::NatTraversalProbeRetry))
+                                .is_some();
+                            if !timer_armed
+                                && let Some(delay) =
+                                    self.n0_nat_traversal.retry_delay(self.config.initial_rtt)
+                            {
+                                self.timers.set(
+                                    Timer::Conn(ConnTimer::NatTraversalProbeRetry),
+                                    now + delay,
+                                    self.qlog.with_time(now),
+                                );
                             }
                         }
                     }

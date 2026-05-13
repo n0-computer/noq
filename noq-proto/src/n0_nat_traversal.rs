@@ -297,6 +297,21 @@ impl State {
         }
     }
 
+    /// Records a remote address discovered from an incoming off-path PATH_CHALLENGE and
+    /// queues a probe to it.
+    ///
+    /// Returns `true` if a new probe was queued and the `NatTraversalProbeRetry` timer
+    /// should be reset. Returns `false` for any reason discovery did not produce a new
+    /// probe (already known, at capacity, address family mismatch, server side, or
+    /// nat traversal not negotiated). See
+    /// [`ClientState::discover_remote_from_probe`] for the full client-side behavior.
+    pub(crate) fn discover_remote_from_probe(&mut self, addr: SocketAddr, ipv6: bool) -> bool {
+        match self {
+            Self::ClientSide(state) => state.discover_remote_from_probe(addr, ipv6),
+            Self::NotNegotiated | Self::ServerSide(_) => false,
+        }
+    }
+
     /// Returns the delay to arm the `NatTraversalProbeRetry` timer.
     ///
     /// `initial_rtt` must be [`TransportConfig::initial_rtt`] so retries are scaled to this
@@ -353,14 +368,17 @@ pub(crate) struct ClientState {
     ///
     /// This is set by the remote endpoint.
     max_local_addresses: usize,
-    /// Candidate addresses the remote endpoint advertises.
+    /// Candidate addresses the remote endpoint advertises, plus any addresses we discovered
+    /// from incoming off-path PATH_CHALLENGE frames.
     ///
     /// These are addresses on which the server is potentially reachable, to use for NAT
     /// traversal attempts.
     ///
     /// They are indexed by their ADD_ADDRESS sequence id and stored in **canonical
     /// form**. Not in the socket-native form as usual. This because we need to store them
-    /// so we have the correct sequence IDs.
+    /// so we have the correct sequence IDs. Addresses discovered locally
+    /// (see [`Self::discover_remote_from_probe`]) use sequence ids allocated by the client
+    /// from the top of the `VarInt` range so they cannot collide with peer-advertised ids.
     remote_addresses: FxHashMap<VarInt, (CanonicalIpPort, ProbeState)>,
     /// Candidate addresses for the local endpoint.
     ///
@@ -398,6 +416,12 @@ pub(crate) struct ClientState {
     /// MAX_PATH_ID.
     // TODO(flub): perhaps there should be a time-limit on these?
     paths_to_be_opened: Vec<FourTuple>,
+    /// Next sequence id to allocate for an address discovered from an incoming off-path
+    /// PATH_CHALLENGE.
+    ///
+    /// Walks down from [`VarInt::MAX`] so it never collides with peer-advertised
+    /// ADD_ADDRESS sequence ids, which start at 0.
+    next_discovered_seq: VarInt,
 }
 
 impl ClientState {
@@ -412,6 +436,7 @@ impl ClientState {
             sent_challenges: Default::default(),
             pending_probes: Default::default(),
             paths_to_be_opened: Default::default(),
+            next_discovered_seq: VarInt::MAX,
         }
     }
 
@@ -588,6 +613,50 @@ impl ClientState {
         self.remote_addresses
             .remove(&remove_addr.seq_no)
             .map(|(address, _)| address.as_canonical_addr())
+    }
+
+    /// Records a remote address discovered from an incoming off-path PATH_CHALLENGE and
+    /// queues a probe to it.
+    ///
+    /// This bridges the asymmetry between client-initiated path opening and bidirectional
+    /// probing: when the server is behind a symmetric NAT, its ADD_ADDRESS-advertised
+    /// reflexive address (mapped against the relay) is unreachable from the client. The
+    /// server's own probes do reach the client when the client's NAT is permissive, but they
+    /// come from a different, NAT-rebound source address. By treating that source as a probe
+    /// target, the client can reach the server on the hot 4-tuple, validate the response,
+    /// and open a path.
+    ///
+    /// Sequence ids for discovered remotes are allocated from the top of the `VarInt`
+    /// range and cannot collide with peer-advertised ids (which start at 0). `addr` is
+    /// canonicalized before storage.
+    ///
+    /// Returns `true` if a new address was added and queued for probing. Returns `false`
+    /// when the address is already known, when there is no capacity left, or when the
+    /// address family is not addressable from the local socket.
+    pub(crate) fn discover_remote_from_probe(&mut self, addr: SocketAddr, ipv6: bool) -> bool {
+        let canonical = CanonicalIpPort::from(addr);
+        if self.remote_addresses.values().any(|(a, _)| *a == canonical) {
+            return false;
+        }
+        if self.remote_addresses.len() >= self.max_remote_addresses {
+            return false;
+        }
+        let Some(ip_port) = canonical.as_local_socket_family(ipv6) else {
+            return false;
+        };
+        let seq = self.next_discovered_seq;
+        self.next_discovered_seq =
+            VarInt::from_u64(seq.into_inner().saturating_sub(1)).unwrap_or(VarInt::MAX);
+        self.remote_addresses.insert(
+            seq,
+            (canonical, ProbeState::Active(MAX_NAT_PROBE_ATTEMPTS - 1)),
+        );
+        self.pending_probes.insert(ip_port);
+        trace!(
+            %addr,
+            "discovered NAT traversal candidate from off-path PATH_CHALLENGE"
+        );
+        true
     }
 
     /// Checks that a received remote address is valid.
