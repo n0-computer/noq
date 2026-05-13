@@ -376,7 +376,7 @@ impl Endpoint {
     /// rejected. Consider calling [`close()`] if that is desired.
     ///
     /// [`close()`]: Endpoint::close
-    pub async fn wait_idle(&self) {
+    pub async fn wait_drained(&self) {
         loop {
             {
                 let endpoint = &mut *self.inner.state.lock().unwrap();
@@ -385,6 +385,21 @@ impl Endpoint {
                 }
                 // Construct future while lock is held to avoid race
                 self.inner.shared.idle.notified()
+            }
+            .await;
+        }
+    }
+
+    /// TODO(matheus23): docs
+    pub async fn wait_idle(&self) {
+        loop {
+            {
+                let endpoint = &mut *self.inner.state.lock().unwrap();
+                if endpoint.recv_state.connections.active_connections == 0 {
+                    break;
+                }
+                // Construct future while lock is held to avoid race
+                self.inner.shared.draining.notified()
             }
             .await;
         }
@@ -467,6 +482,7 @@ impl Drop for EndpointDriver {
         // Drop all outgoing channels, signaling the termination of the endpoint to the associated
         // connections.
         endpoint.recv_state.connections.senders.clear();
+        endpoint.recv_state.connections.active_connections = 0;
     }
 }
 
@@ -551,6 +567,7 @@ pub(crate) struct State {
 #[derive(Debug)]
 pub(crate) struct Shared {
     incoming: Notify,
+    draining: Notify,
     idle: Notify,
     /// Number of live handles that can be used to initiate or handle I/O; excludes the driver
     ref_count: AtomicUsize,
@@ -602,7 +619,17 @@ impl State {
                 }
             };
 
-            if event.is_drained() {
+            if event.is_draining() {
+                self.recv_state.connections.active_connections -= 1;
+                tracing::error!(
+                    active_connections = self.recv_state.connections.active_connections,
+                    "active_connections -= 1"
+                );
+                if self.recv_state.connections.active_connections == 0 {
+                    tracing::error!("active_connections == 0, draining");
+                    shared.draining.notify_waiters();
+                }
+            } else if event.is_drained() {
                 self.recv_state.connections.senders.remove(&ch);
                 if self.recv_state.connections.is_empty() {
                     shared.idle.notify_waiters();
@@ -700,6 +727,8 @@ struct ConnectionSet {
     sender: mpsc::UnboundedSender<(ConnectionHandle, EndpointEvent)>,
     /// Set if the endpoint has been manually closed
     close: Option<(VarInt, Bytes)>,
+    /// Counter for all active (non-draining/drained) connections.
+    active_connections: u64,
 }
 
 impl ConnectionSet {
@@ -719,6 +748,10 @@ impl ConnectionSet {
             .unwrap();
         }
         self.senders.insert(handle, send);
+        if self.close.is_none() {
+            self.active_connections += 1;
+            tracing::error!(self.active_connections, "active_connections += 1");
+        }
         Connecting::new(handle, conn, self.sender.clone(), recv, sender, runtime)
     }
 
@@ -789,6 +822,7 @@ impl EndpointRef {
         Self(Arc::new(EndpointInner {
             shared: Shared {
                 incoming: Notify::new(),
+                draining: Notify::new(),
                 idle: Notify::new(),
                 ref_count: AtomicUsize::new(0),
             },
@@ -864,6 +898,7 @@ impl RecvState {
                 senders: FxHashMap::default(),
                 sender,
                 close: None,
+                active_connections: 0,
             },
             incoming: VecDeque::new(),
             recv_buf: recv_buf.into(),

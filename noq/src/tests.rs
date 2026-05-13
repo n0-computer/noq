@@ -23,7 +23,9 @@ use std::{
 use crate::runtime::TokioRuntime;
 use crate::{Duration, Instant};
 use bytes::Bytes;
-use proto::{ConnectionError, PathId, RandomConnectionIdGenerator, crypto::rustls::QuicClientConfig};
+use proto::{
+    ConnectionError, PathId, RandomConnectionIdGenerator, crypto::rustls::QuicClientConfig,
+};
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use rustls::{
     RootCertStore,
@@ -1207,7 +1209,7 @@ async fn weak_connection_handle() {
         assert!(weak.is_alive());
         drop(conn);
         // wait to ensure the connection is fully cleaned up
-        endpoint2.wait_idle().await;
+        endpoint2.wait_drained().await;
         assert!(!weak.is_alive());
     });
     let client_task = tokio::spawn(async move {
@@ -1343,7 +1345,7 @@ async fn path_clone_stats_after_abandon() {
 
         // After dropping the path, upgrading fails after the endpoint cleared the connection.
         drop(path_clone);
-        client.wait_idle().await;
+        client.wait_drained().await;
         assert!(weak_path.upgrade().is_none());
     }
     .instrument(info_span!("client"));
