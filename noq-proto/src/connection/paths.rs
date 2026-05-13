@@ -1102,8 +1102,6 @@ pub enum PathAbandonReason {
     TimedOut,
     /// The path became unusable after a local network change.
     UnusableAfterNetworkChange,
-    /// The path was opened in a NAT traversal round which was terminated.
-    NatTraversalRoundEnded,
     /// The remote closed the path.
     RemoteAbandoned {
         /// The error that was sent with the abandon frame.
@@ -1121,7 +1119,6 @@ impl PathAbandonReason {
     pub(crate) fn error_code(&self) -> TransportErrorCode {
         match self {
             Self::ApplicationClosed { error_code } => (*error_code).into(),
-            Self::NatTraversalRoundEnded => TransportErrorCode::APPLICATION_ABANDON_PATH,
             Self::ValidationFailed | Self::TimedOut | Self::UnusableAfterNetworkChange => {
                 TransportErrorCode::PATH_UNSTABLE_OR_POOR
             }
