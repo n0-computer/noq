@@ -77,8 +77,8 @@ pub use rustls;
 pub use udp;
 
 pub use crate::connection::{
-    AcceptBi, AcceptUni, Closed, Connecting, Connection, OnClosed, OpenBi, OpenUni, ReadDatagram,
-    SendDatagram, SendDatagramError, WeakConnectionHandle, ZeroRttAccepted,
+    AcceptBi, AcceptUni, Closed, Connecting, Connection, OnClosed, OpenBi, OpenPathOpts, OpenUni,
+    ReadDatagram, SendDatagram, SendDatagramError, WeakConnectionHandle, ZeroRttAccepted,
 };
 pub use crate::endpoint::{Accept, Endpoint, EndpointStats};
 pub use crate::event_stream::{Lagged, NatTraversalUpdates, ObservedExternalAddr, PathEvents};

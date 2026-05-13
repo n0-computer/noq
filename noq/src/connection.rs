@@ -292,6 +292,43 @@ impl Future for ConnectionDriver {
     }
 }
 
+/// Options for opening a new path on a [`Connection`].
+///
+/// Defaults to [`PathStatus::Available`] and no preferred local IP.
+///
+/// # Examples
+///
+/// ```ignore
+/// let opts = OpenPathOpts::default()
+///     .initial_status(PathStatus::Backup)
+///     .local_ip(Some(local_ip));
+/// connection.open_path(remote_addr, opts);
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct OpenPathOpts {
+    initial_status: PathStatus,
+    local_ip: Option<IpAddr>,
+}
+
+impl OpenPathOpts {
+    /// Sets the initial [`PathStatus`] for the new path.
+    #[must_use]
+    pub fn initial_status(mut self, initial_status: PathStatus) -> Self {
+        self.initial_status = initial_status;
+        self
+    }
+
+    /// Sets the local IP address to use for the new path.
+    ///
+    /// When `Some`, the path is bound to the given local IP. When `None`, the local IP is
+    /// left unspecified and the operating system selects a source address.
+    #[must_use]
+    pub fn local_ip(mut self, local_ip: Option<IpAddr>) -> Self {
+        self.local_ip = local_ip;
+        self
+    }
+}
+
 /// A QUIC connection.
 ///
 /// If all references to a connection (including every clone of the `Connection` handle, streams of
@@ -383,7 +420,7 @@ impl Connection {
     /// Otherwise behaves exactly as [`open_path`].
     ///
     /// [`open_path`]: Self::open_path
-    pub fn open_path_ensure(&self, addr: SocketAddr, initial_status: PathStatus) -> OpenPath {
+    pub fn open_path_ensure(&self, addr: SocketAddr, opts: OpenPathOpts) -> OpenPath {
         let mut state = self.0.lock_and_wake("open_path");
 
         // If endpoint::State::ipv6 is true we want to keep all our IP addresses as IPv6.
@@ -415,8 +452,10 @@ impl Connection {
         let now = state.runtime.now();
         // TODO(matheus23): For now this means it's impossible to make use of short-circuiting path validation currently.
         // However, changing that would mean changing the API.
-        let addrs = FourTuple::from_remote(addr);
-        let open_res = state.inner.open_path_ensure(addrs, initial_status, now);
+        let addrs = FourTuple::new(addr, opts.local_ip);
+        let open_res = state
+            .inner
+            .open_path_ensure(addrs, opts.initial_status, now);
         match open_res {
             Ok((path_id, existed)) if existed => {
                 let recv = state.open_path.get(&path_id).map(|tx| tx.subscribe());
@@ -450,7 +489,7 @@ impl Connection {
     /// future, or at a later time.  If the failure is immediate [`OpenPath::path_id`] will
     /// return `None` and the future will be ready immediately.  If the failure happens
     /// later, a [`PathEvent`] will be emitted.
-    pub fn open_path(&self, addr: SocketAddr, initial_status: PathStatus) -> OpenPath {
+    pub fn open_path(&self, addr: SocketAddr, opts: OpenPathOpts) -> OpenPath {
         let mut state = self.0.lock_and_wake("open_path");
 
         // If endpoint::State::ipv6 is true we want to keep all our IP addresses as IPv6.
@@ -483,8 +522,8 @@ impl Connection {
         let now = state.runtime.now();
         // TODO(matheus23): For now this means it's impossible to make use of short-circuiting path validation currently.
         // However, changing that would mean changing the API.
-        let addrs = FourTuple::from_remote(addr);
-        let open_res = state.inner.open_path(addrs, initial_status, now);
+        let addrs = FourTuple::new(addr, opts.local_ip);
+        let open_res = state.inner.open_path(addrs, opts.initial_status, now);
         match open_res {
             Ok(path_id) => {
                 state.open_path.insert(path_id, on_open_path_send);
