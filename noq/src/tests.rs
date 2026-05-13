@@ -21,7 +21,7 @@ use std::{
 };
 
 use crate::runtime::TokioRuntime;
-use crate::{Duration, Instant};
+use crate::{Duration, Instant, OpenPathOpts};
 use bytes::Bytes;
 use proto::{ConnectionError, PathId, RandomConnectionIdGenerator, crypto::rustls::QuicClientConfig};
 use rand::{Rng, SeedableRng, rngs::StdRng};
@@ -1024,7 +1024,7 @@ async fn test_open_path_ensure_existing_path() {
 
         // Re-ensuring the already-established path (PathId::ZERO) takes the
         // `existed` branch in `open_path_ensure`.
-        let fut = conn.open_path_ensure(server_addr, proto::PathStatus::Available);
+        let fut = conn.open_path_ensure(server_addr, OpenPathOpts::default());
         let expected_path_id = fut
             .path_id()
             .expect("open_path_ensure should allocate or reuse a path id");
@@ -1078,7 +1078,7 @@ async fn test_multipath_observed_address() {
         // this sleep after the poll_transmit unwraps have been addressed
         tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
         let path = conn
-            .open_path(server_addr, proto::PathStatus::Available)
+            .open_path(server_addr, OpenPathOpts::default())
             .await
             .unwrap();
         let mut reports = path.observed_external_addr().unwrap();
@@ -1292,10 +1292,7 @@ async fn path_clone_stats_after_abandon() {
         // Open a second path, while giving the remote some time to issue cids.
         let path = tokio::time::timeout(Duration::from_secs(1), async {
             loop {
-                match conn
-                    .open_path(server_addr, proto::PathStatus::Available)
-                    .await
-                {
+                match conn.open_path(server_addr, OpenPathOpts::default()).await {
                     Ok(path) => break path,
                     Err(proto::PathError::RemoteCidsExhausted) => {
                         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -1379,10 +1376,7 @@ async fn closed_includes_path_stats_for_all_known_paths() -> TestResult {
 
         // Open a second path.
         let path2 = loop {
-            match conn
-                .open_path(server_addr, proto::PathStatus::Available)
-                .await
-            {
+            match conn.open_path(server_addr, OpenPathOpts::default()).await {
                 Ok(p) => break p,
                 Err(proto::PathError::RemoteCidsExhausted) => {
                     tokio::time::sleep(Duration::from_millis(20)).await;
@@ -1493,10 +1487,7 @@ async fn close_path() -> TestResult {
 
         // Open a second path, retrying until remote CIDs are available
         let path = loop {
-            match conn
-                .open_path(server_addr, proto::PathStatus::Available)
-                .await
-            {
+            match conn.open_path(server_addr, OpenPathOpts::default()).await {
                 Ok(path) => break path,
                 Err(proto::PathError::RemoteCidsExhausted) => {
                     tokio::time::sleep(Duration::from_millis(20)).await;
