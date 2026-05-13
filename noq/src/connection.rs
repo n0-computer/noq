@@ -45,9 +45,11 @@ pub struct Connecting {
 }
 
 impl Connecting {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         handle: ConnectionHandle,
         conn: proto::Connection,
+        max_transmit_datagrams: NonZeroUsize,
         endpoint_events: mpsc::UnboundedSender<(ConnectionHandle, EndpointEvent)>,
         conn_events: mpsc::UnboundedReceiver<ConnectionEvent>,
         sender: Pin<Box<dyn UdpSender>>,
@@ -66,6 +68,7 @@ impl Connecting {
                 on_connected_send,
                 sender,
                 runtime.clone(),
+                max_transmit_datagrams,
             )),
             shared: Shared::default(),
         })));
@@ -1428,6 +1431,7 @@ pub(crate) struct State {
     pub(crate) path_events: tokio::sync::broadcast::Sender<PathEvent>,
     sender: Pin<Box<dyn UdpSender>>,
     pub(crate) runtime: Arc<dyn Runtime>,
+    max_transmit_datagrams: usize,
     send_buffer: Vec<u8>,
     /// We buffer a transmit when the underlying I/O would block
     buffered_transmit: Option<proto::Transmit>,
@@ -1449,6 +1453,7 @@ impl State {
         on_connected: oneshot::Sender<bool>,
         sender: Pin<Box<dyn UdpSender>>,
         runtime: Arc<dyn Runtime>,
+        max_transmit_datagrams: NonZeroUsize,
     ) -> Self {
         Self {
             inner,
@@ -1469,6 +1474,7 @@ impl State {
             error: None,
             sender,
             runtime,
+            max_transmit_datagrams: max_transmit_datagrams.get(),
             send_buffer: Vec::new(),
             buffered_transmit: None,
             path_events: tokio::sync::broadcast::channel(32).0,
@@ -1484,10 +1490,8 @@ impl State {
         let now = self.runtime.now();
         let mut transmits = 0;
 
-        let max_datagrams = self
-            .sender
-            .max_transmit_segments()
-            .min(MAX_TRANSMIT_SEGMENTS);
+        let max_datagrams = self.sender.max_transmit_segments();
+        let max_transmit_datagrams = self.max_transmit_datagrams;
 
         loop {
             // Retry the last transmit, or get a new one.
@@ -1525,7 +1529,7 @@ impl State {
                 Poll::Ready(Ok(())) => {}
             }
 
-            if transmits >= MAX_TRANSMIT_DATAGRAMS {
+            if transmits >= max_transmit_datagrams {
                 // TODO: What isn't ideal here yet is that if we don't poll all
                 // datagrams that could be sent we don't go into the `app_limited`
                 // state and CWND continues to grow until we get here the next time.
@@ -1875,16 +1879,3 @@ pub enum SendDatagramError {
     #[error("connection lost")]
     ConnectionLost(#[from] ConnectionError),
 }
-
-/// The maximum amount of datagrams which will be produced in a single `drive_transmit` call
-///
-/// This limits the amount of CPU resources consumed by datagram generation,
-/// and allows other tasks (like receiving ACKs) to run in between.
-const MAX_TRANSMIT_DATAGRAMS: usize = 20;
-
-/// The maximum amount of datagrams that are sent in a single transmit
-///
-/// This can be lower than the maximum platform capabilities, to avoid excessive
-/// memory allocations when calling `poll_transmit()`. Benchmarks have shown
-/// that numbers around 10 are a good compromise.
-const MAX_TRANSMIT_SEGMENTS: NonZeroUsize = NonZeroUsize::new(10).expect("known");

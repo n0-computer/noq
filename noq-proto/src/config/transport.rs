@@ -3,7 +3,7 @@ use std::path::Path;
 use std::{
     fmt,
     net::SocketAddr,
-    num::{NonZeroU8, NonZeroU32},
+    num::{NonZeroU8, NonZeroU32, NonZeroUsize},
     sync::Arc,
 };
 
@@ -13,6 +13,8 @@ use crate::{
 };
 #[cfg(feature = "qlog")]
 use crate::{QlogFactory, QlogFileFactory};
+
+const DEFAULT_MAX_TRANSMIT_SEGMENTS: NonZeroUsize = NonZeroUsize::new(40).expect("nonzero");
 
 /// Parameters governing the core QUIC state machine
 ///
@@ -58,6 +60,7 @@ pub struct TransportConfig {
     pub(crate) congestion_controller_factory: Arc<dyn congestion::ControllerFactory + Send + Sync>,
 
     pub(crate) enable_segmentation_offload: bool,
+    pub(crate) max_transmit_segments: NonZeroUsize,
 
     pub(crate) address_discovery_role: address_discovery::Role,
 
@@ -364,6 +367,21 @@ impl TransportConfig {
         self
     }
 
+    /// The maximum amount of datagrams that are sent in a single transmit.
+    ///
+    /// This can be lower than the maximum platform capabilities, to avoid excessive
+    /// memory allocations when calling `poll_transmit()`. Benchmarks have shown that
+    /// numbers around 10 are a good compromise on small payloads, but with
+    /// `UDP_SEGMENT` (GSO) on Linux it pays off to batch more aggressively: at MTU
+    /// 1280 this means 51.2 KB per `sendmsg()` call instead of 12.8 KB. The Linux
+    /// kernel hard limit `UDP_MAX_SEGMENTS` is 64, so 40 stays comfortably within
+    /// bounds. On uplink-saturated benchmarks this gives a meaningful throughput
+    /// improvement at the cost of slightly more work per drive call.
+    pub fn max_transmit_segments(&mut self, value: NonZeroUsize) -> &mut Self {
+        self.max_transmit_segments = value;
+        self
+    }
+
     /// Whether to send observed address reports to peers.
     ///
     /// This will aid peers in inferring their reachable address, which in most NATd networks
@@ -562,6 +580,7 @@ impl Default for TransportConfig {
             congestion_controller_factory: Arc::new(congestion::CubicConfig::default()),
 
             enable_segmentation_offload: true,
+            max_transmit_segments: DEFAULT_MAX_TRANSMIT_SEGMENTS,
 
             address_discovery_role: address_discovery::Role::default(),
 
@@ -608,6 +627,7 @@ impl fmt::Debug for TransportConfig {
                 deterministic_packet_numbers: _,
             congestion_controller_factory: _,
             enable_segmentation_offload,
+            max_transmit_segments,
             address_discovery_role,
             max_concurrent_multipath_paths,
             default_path_max_idle_timeout,
@@ -648,6 +668,7 @@ impl fmt::Debug for TransportConfig {
             .field("datagram_send_buffer_size", datagram_send_buffer_size)
             // congestion_controller_factory not debug
             .field("enable_segmentation_offload", enable_segmentation_offload)
+            .field("max_transmit_segments", max_transmit_segments)
             .field("address_discovery_role", address_discovery_role)
             .field(
                 "max_concurrent_multipath_paths",

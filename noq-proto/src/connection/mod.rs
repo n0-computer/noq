@@ -1026,7 +1026,7 @@ impl Connection {
     ) -> Option<Transmit> {
         let max_datagrams = match self.config.enable_segmentation_offload {
             false => NonZeroUsize::MIN,
-            true => max_datagrams,
+            true => max_datagrams.min(self.config.max_transmit_segments),
         };
 
         // Each call to poll_transmit can only send datagrams to one destination, because

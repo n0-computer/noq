@@ -1,7 +1,7 @@
 use std::{
     fmt,
     net::{SocketAddrV4, SocketAddrV6},
-    num::TryFromIntError,
+    num::{NonZeroUsize, TryFromIntError},
     sync::Arc,
 };
 
@@ -33,6 +33,8 @@ mod transport;
 pub use qlog::{QlogConfig, QlogFactory, QlogFileFactory};
 pub use transport::{AckFrequencyConfig, IdleTimeout, MtuDiscoveryConfig, TransportConfig};
 
+const DEFAULT_MAX_TRANSMIT_DATAGRAMS: NonZeroUsize = NonZeroUsize::new(80).expect("nonzero");
+
 /// Global configuration for the endpoint, affecting all connections
 ///
 /// Default values should be suitable for most internet applications.
@@ -51,6 +53,7 @@ pub struct EndpointConfig {
     pub(crate) min_reset_interval: Duration,
     /// Optional seed to be used internally for random number generation
     pub(crate) rng_seed: Option<[u8; 32]>,
+    pub(crate) max_transmit_datagrams: NonZeroUsize,
 }
 
 impl EndpointConfig {
@@ -66,6 +69,7 @@ impl EndpointConfig {
             grease_quic_bit: true,
             min_reset_interval: Duration::from_millis(20),
             rng_seed: None,
+            max_transmit_datagrams: DEFAULT_MAX_TRANSMIT_DATAGRAMS,
         }
     }
 
@@ -162,6 +166,25 @@ impl EndpointConfig {
         self.rng_seed = seed;
         self
     }
+
+    /// The maximum amount of datagrams which will be produced in a single
+    /// transmit drive iteration.
+    ///
+    /// This limits the amount of CPU resources consumed by datagram generation, and
+    /// allows other tasks (like receiving ACKs) to run in between.
+    ///
+    /// Kept in lockstep with [`TransportConfig::max_transmit_segments`] so a single
+    /// GSO super-segment can hold a couple of transmit drives back-to-back without
+    /// bouncing to the scheduler.
+    pub fn max_transmit_datagrams(&mut self, value: NonZeroUsize) -> &mut Self {
+        self.max_transmit_datagrams = value;
+        self
+    }
+
+    /// Get the current value of [`max_transmit_datagrams`](Self::max_transmit_datagrams).
+    pub fn get_max_transmit_datagrams(&self) -> NonZeroUsize {
+        self.max_transmit_datagrams
+    }
 }
 
 impl fmt::Debug for EndpointConfig {
@@ -173,6 +196,7 @@ impl fmt::Debug for EndpointConfig {
             .field("supported_versions", &self.supported_versions)
             .field("grease_quic_bit", &self.grease_quic_bit)
             .field("rng_seed", &self.rng_seed)
+            .field("max_transmit_datagrams", &self.max_transmit_datagrams)
             .finish_non_exhaustive()
     }
 }
