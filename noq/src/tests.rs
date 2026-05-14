@@ -21,9 +21,12 @@ use std::{
 };
 
 use crate::runtime::TokioRuntime;
-use crate::{Duration, Instant, OpenPathOpts};
+use crate::{Duration, Instant};
 use bytes::Bytes;
-use proto::{ConnectionError, PathId, RandomConnectionIdGenerator, crypto::rustls::QuicClientConfig};
+use proto::{
+    ConnectionError, FourTuple, OpenPathOpts, PathError, PathId, RandomConnectionIdGenerator,
+    crypto::rustls::QuicClientConfig,
+};
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use rustls::{
     RootCertStore,
@@ -1024,17 +1027,8 @@ async fn test_open_path_ensure_existing_path() {
 
         // Re-ensuring the already-established path (PathId::ZERO) takes the
         // `existed` branch in `open_path_ensure`.
-        let fut = conn.open_path_ensure(server_addr, OpenPathOpts::default());
-        let expected_path_id = fut
-            .path_id()
-            .expect("open_path_ensure should allocate or reuse a path id");
-
-        let path = tokio::time::timeout(Duration::from_millis(200), fut)
-            .await
-            .expect("open_path_ensure(existing path) timed out")
-            .expect("open_path_ensure(existing path) failed");
-        assert_eq!(path.id(), expected_path_id);
-        assert_eq!(path.remote_address().unwrap(), server_addr);
+        let res = conn.open_path(FourTuple::from_remote(server_addr), OpenPathOpts::default());
+        assert!(matches!(res, Err(PathError::PathExistsForNetworkPath(id)) if id == PathId::ZERO));
     }
     .instrument(info_span!("client"));
 
@@ -1078,7 +1072,11 @@ async fn test_multipath_observed_address() {
         // this sleep after the poll_transmit unwraps have been addressed
         tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
         let path = conn
-            .open_path(server_addr, OpenPathOpts::default())
+            .open_path(
+                FourTuple::from_remote(server_addr),
+                OpenPathOpts::default().allow_duplicate(true),
+            )
+            .expect("open_path")
             .await
             .unwrap();
         let mut reports = path.observed_external_addr().unwrap();
@@ -1292,8 +1290,11 @@ async fn path_clone_stats_after_abandon() {
         // Open a second path, while giving the remote some time to issue cids.
         let path = tokio::time::timeout(Duration::from_secs(1), async {
             loop {
-                match conn.open_path(server_addr, OpenPathOpts::default()).await {
-                    Ok(path) => break path,
+                match conn.open_path(
+                    FourTuple::from_remote(server_addr),
+                    OpenPathOpts::default().allow_duplicate(true),
+                ) {
+                    Ok(fut) => break fut.await.expect("path open failed"),
                     Err(proto::PathError::RemoteCidsExhausted) => {
                         tokio::time::sleep(Duration::from_millis(20)).await;
                     }
@@ -1376,12 +1377,15 @@ async fn closed_includes_path_stats_for_all_known_paths() -> TestResult {
 
         // Open a second path.
         let path2 = loop {
-            match conn.open_path(server_addr, OpenPathOpts::default()).await {
-                Ok(p) => break p,
+            match conn.open_path(
+                FourTuple::from_remote(server_addr),
+                OpenPathOpts::default().allow_duplicate(true),
+            ) {
                 Err(proto::PathError::RemoteCidsExhausted) => {
                     tokio::time::sleep(Duration::from_millis(20)).await;
                 }
                 Err(err) => Err(err)?,
+                Ok(fut) => break fut.await?,
             }
         };
         let path2_id = path2.id();
@@ -1487,8 +1491,11 @@ async fn close_path() -> TestResult {
 
         // Open a second path, retrying until remote CIDs are available
         let path = loop {
-            match conn.open_path(server_addr, OpenPathOpts::default()).await {
-                Ok(path) => break path,
+            match conn.open_path(
+                FourTuple::from_remote(server_addr),
+                OpenPathOpts::default().allow_duplicate(true),
+            ) {
+                Ok(fut) => break fut.await?,
                 Err(proto::PathError::RemoteCidsExhausted) => {
                     tokio::time::sleep(Duration::from_millis(20)).await;
                 }

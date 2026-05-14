@@ -74,7 +74,8 @@ pub(crate) use packet_crypto::EncryptionLevel;
 
 mod paths;
 pub use paths::{
-    ClosedPath, PathAbandonReason, PathEvent, PathId, PathStatus, RttEstimator, SetPathStatusError,
+    ClosedPath, OpenPathOpts, PathAbandonReason, PathEvent, PathId, PathStatus, RttEstimator,
+    SetPathStatusError,
 };
 use paths::{PathData, PathState};
 
@@ -518,39 +519,11 @@ impl Connection {
         }
     }
 
-    /// Opens a new path only if no path on the same network path currently exists.
-    ///
-    /// This comparison will use [`FourTuple::is_probably_same_path`] on the given `network_path`
-    /// and pass it existing path's network paths.
-    ///
-    /// This means that you can pass `local_ip: None` to make the comparison only compare
-    /// remote addresses.
-    ///
-    /// This avoids having to guess which local interface will be used to communicate with the
-    /// remote, should it not be known yet. We assume that if we already have a path to the remote,
-    /// the OS is likely to use the same interface to talk to said remote.
-    ///
-    /// See also [`open_path`]. Returns `(path_id, true)` if the path already existed. `(path_id,
-    /// false)` if was opened.
-    ///
-    /// [`open_path`]: Connection::open_path
-    pub fn open_path_ensure(
-        &mut self,
-        network_path: FourTuple,
-        initial_status: PathStatus,
-        now: Instant,
-    ) -> Result<(PathId, bool), PathError> {
-        let existing_open_path = self.paths.iter().find(|(id, path)| {
-            network_path.is_probably_same_path(&path.data.network_path)
-                && !self.abandoned_paths.contains(*id)
-        });
-        match existing_open_path {
-            Some((path_id, _state)) => Ok((*path_id, true)),
-            None => Ok((self.open_path(network_path, initial_status, now)?, false)),
-        }
-    }
-
     /// Opens a new path.
+    ///
+    /// By default, if a path with `network_path` already exists,
+    /// [`PathError::PathExistsForNetworkPath`] is returned. Set
+    /// [`OpenPathOpts::allow_duplicate`] to `true` to open a new path regardless.
     ///
     /// Further errors might occur and they will be emitted in [`PathEvent::Abandoned`]
     /// events with this path id.  Once the path is opened and can carry application data it
@@ -558,7 +531,7 @@ impl Connection {
     pub fn open_path(
         &mut self,
         network_path: FourTuple,
-        initial_status: PathStatus,
+        opts: OpenPathOpts,
         now: Instant,
     ) -> Result<PathId, PathError> {
         if !self.is_multipath_negotiated() {
@@ -566,6 +539,17 @@ impl Connection {
         }
         if self.side().is_server() {
             return Err(PathError::ServerSideNotAllowed);
+        }
+
+        if !opts.allow_duplicate {
+            let existing_open_path = self.paths.iter().find(|(id, path)| {
+                network_path.is_probably_same_path(&path.data.network_path)
+                    && !self.abandoned_paths.contains(*id)
+            });
+
+            if let Some((path_id, _state)) = existing_open_path {
+                return Err(PathError::PathExistsForNetworkPath(*path_id));
+            }
         }
 
         let max_abandoned = self.abandoned_paths.iter().max().copied();
@@ -596,7 +580,7 @@ impl Connection {
         }
 
         let path = self.ensure_path(path_id, network_path, now, None);
-        path.status.local_update(initial_status);
+        path.status.local_update(opts.initial_status);
 
         Ok(path_id)
     }
@@ -5640,16 +5624,23 @@ impl Connection {
             .ok()
             .and_then(|s| s.pop_pending_path_open())
         {
-            match self.open_path_ensure(network_path, PathStatus::Backup, now) {
-                Ok((path_id, already_existed)) => {
+            let opts = OpenPathOpts::default().initial_status(PathStatus::Backup);
+            match self.open_path(network_path, opts, now) {
+                Ok(path_id) => {
                     debug!(
                         %path_id,
                         ?network_path,
-                        new_path = !already_existed,
                         "Opened NAT traversal path",
                     );
                 }
                 Err(err) => match err {
+                    PathError::PathExistsForNetworkPath(path_id) => {
+                        debug!(
+                            %path_id,
+                            ?network_path,
+                            "NAT traversal path already exists",
+                        );
+                    }
                     PathError::MultipathNotNegotiated
                     | PathError::ServerSideNotAllowed
                     | PathError::ValidationFailed
@@ -5857,7 +5848,13 @@ impl Connection {
                 local_ip: None, /* allow the local ip to be discovered */
             };
 
-            if open_first && let Err(e) = self.open_path(network_path, status, now) {
+            // We set `allow_duplicate` to true: the loop above cleared `local_ip` on every open
+            // path, so any other path with the same remote would otherwise fail to open.
+            let opts = OpenPathOpts::default()
+                .initial_status(status)
+                .allow_duplicate(true);
+
+            if open_first && let Err(e) = self.open_path(network_path, opts, now) {
                 if self.side().is_client() {
                     debug!(%e, "Failed to open new path for network change");
                 }
@@ -5874,7 +5871,7 @@ impl Connection {
                 continue;
             }
 
-            if !open_first && let Err(e) = self.open_path(network_path, status, now) {
+            if !open_first && let Err(e) = self.open_path(network_path, opts, now) {
                 // Path has already been closed if we got here. Since the path was not recoverable,
                 // this might be desirable in any case, because other paths exist (!open_first) and
                 // this was is considered non recoverable
@@ -7447,6 +7444,9 @@ pub enum PathError {
     /// The remote address for the path is not supported by the endpoint
     #[error("invalid remote address")]
     InvalidRemoteAddress(SocketAddr),
+    /// A path with the same network 4-tuple already exists.
+    #[error("a path with this network 4-tuple already exists (path id {_0})")]
+    PathExistsForNetworkPath(PathId),
 }
 
 /// Errors triggered when abandoning a path

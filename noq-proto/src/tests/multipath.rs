@@ -605,10 +605,8 @@ fn open_path_ensure_after_abandon() -> TestResult {
     );
 
     info!("opening path 2");
-    let (path_id, existed) = pair.open_path_ensure(Client, second_path, PathStatus::Available)?;
+    let path_id = pair.open_path(Client, second_path, PathStatus::Available)?;
     pair.drive();
-
-    assert!(!existed);
 
     // The path should have been opened:
     assert_matches!(

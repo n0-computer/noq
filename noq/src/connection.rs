@@ -31,9 +31,9 @@ use crate::{
     udp_transmit,
 };
 use proto::{
-    ConnectionError, ConnectionHandle, ConnectionStats, Dir, EndpointEvent, FourTuple, PathError,
-    PathEvent, PathId, PathStats, PathStatus, Side, StreamEvent, StreamId, TransportError,
-    TransportErrorCode, congestion::Controller, n0_nat_traversal,
+    ConnectionError, ConnectionHandle, ConnectionStats, Dir, EndpointEvent, FourTuple,
+    OpenPathOpts, PathError, PathEvent, PathId, PathStats, Side, StreamEvent, StreamId,
+    TransportError, TransportErrorCode, congestion::Controller, n0_nat_traversal,
 };
 
 /// In-progress connection attempt future
@@ -292,43 +292,6 @@ impl Future for ConnectionDriver {
     }
 }
 
-/// Options for opening a new path on a [`Connection`].
-///
-/// Defaults to [`PathStatus::Available`] and no preferred local IP.
-///
-/// # Examples
-///
-/// ```ignore
-/// let opts = OpenPathOpts::default()
-///     .initial_status(PathStatus::Backup)
-///     .local_ip(Some(local_ip));
-/// connection.open_path(remote_addr, opts);
-/// ```
-#[derive(Debug, Clone, Default)]
-pub struct OpenPathOpts {
-    initial_status: PathStatus,
-    local_ip: Option<IpAddr>,
-}
-
-impl OpenPathOpts {
-    /// Sets the initial [`PathStatus`] for the new path.
-    #[must_use]
-    pub fn initial_status(mut self, initial_status: PathStatus) -> Self {
-        self.initial_status = initial_status;
-        self
-    }
-
-    /// Sets the local IP address to use for the new path.
-    ///
-    /// When `Some`, the path is bound to the given local IP. When `None`, the local IP is
-    /// left unspecified and the operating system selects a source address.
-    #[must_use]
-    pub fn local_ip(mut self, local_ip: Option<IpAddr>) -> Self {
-        self.local_ip = local_ip;
-        self
-    }
-}
-
 /// A QUIC connection.
 ///
 /// If all references to a connection (including every clone of the `Connection` handle, streams of
@@ -415,81 +378,26 @@ impl Connection {
         }
     }
 
-    /// Opens a new path if no path exists yet for the remote address.
-    ///
-    /// Otherwise behaves exactly as [`open_path`].
-    ///
-    /// [`open_path`]: Self::open_path
-    pub fn open_path_ensure(&self, addr: SocketAddr, opts: OpenPathOpts) -> OpenPath {
-        let mut state = self.0.lock_and_wake("open_path");
-
-        // If endpoint::State::ipv6 is true we want to keep all our IP addresses as IPv6.
-        // If not, we do not support IPv6.  We can not access endpoint::State from here
-        // however, but either all our paths use an IPv6 address, or all our paths use an
-        // IPv4 address.  So we can use that information.
-        let ipv6 = state
-            .inner
-            .paths()
-            .iter()
-            .filter_map(|id| {
-                state
-                    .inner
-                    .network_path(*id)
-                    .map(|addrs| addrs.remote().is_ipv6())
-                    .ok()
-            })
-            .next()
-            .unwrap_or_default();
-        if addr.is_ipv6() && !ipv6 {
-            return OpenPath::rejected(PathError::InvalidRemoteAddress(addr));
-        }
-        let addr = if ipv6 {
-            SocketAddr::V6(ensure_ipv6(addr))
-        } else {
-            addr
-        };
-
-        let now = state.runtime.now();
-        // TODO(matheus23): For now this means it's impossible to make use of short-circuiting path validation currently.
-        // However, changing that would mean changing the API.
-        let addrs = FourTuple::new(addr, opts.local_ip);
-        let open_res = state
-            .inner
-            .open_path_ensure(addrs, opts.initial_status, now);
-        match open_res {
-            Ok((path_id, existed)) if existed => {
-                let recv = state.open_path.get(&path_id).map(|tx| tx.subscribe());
-                drop(state);
-                match recv {
-                    Some(recv) => OpenPath::new(path_id, recv, self.0.clone()),
-                    None => OpenPath::ready(path_id, self.0.clone()),
-                }
-            }
-            Ok((path_id, _)) => {
-                let (tx, rx) = watch::channel(Ok(()));
-                state.open_path.insert(path_id, tx);
-                drop(state);
-                OpenPath::new(path_id, rx, self.0.clone())
-            }
-            Err(err) => OpenPath::rejected(err),
-        }
-    }
-
-    /// Opens an additional path if the multipath extension is negotiated.
+    /// Opens an additional path via `network_path` if the multipath extension is negotiated.
     ///
     /// The returned future completes once the path is either fully opened and ready to
     /// carry application data, or if there was an error.
     ///
-    /// Dropping the returned future does not cancel the opening of the path, the
-    /// [`PathEvent::Established`] event will still be emitted from [`Self::path_events`] if
-    /// the path opens.  The [`PathId`] for the events can be extracted from
-    /// [`OpenPath::path_id`].
+    /// Returns `Err` immediately if the path cannot be opened (for example, multipath
+    /// is not negotiated, the maximum path id is reached or if no connection ids are available
+    /// for the new path).
     ///
-    /// Failure to open a path can either occur immediately, before polling the returned
-    /// future, or at a later time.  If the failure is immediate [`OpenPath::path_id`] will
-    /// return `None` and the future will be ready immediately.  If the failure happens
-    /// later, a [`PathEvent`] will be emitted.
-    pub fn open_path(&self, addr: SocketAddr, opts: OpenPathOpts) -> OpenPath {
+    /// If a path with `network_path` already exists, and [`OpenPathOpts::allow_duplicate`]
+    /// is not set to `true`, then [`PathError::PathExistsForNetworkPath`] is returned. Set
+    /// [`OpenPathOpts::allow_duplicate`] to `true` to open a new path regardless.
+    ///
+    /// Dropping the returned future does not cancel the opening of the path. The
+    /// [`PathEvent::Established`] event will still be emitted from [`Self::path_events`].
+    pub fn open_path(
+        &self,
+        network_path: FourTuple,
+        opts: OpenPathOpts,
+    ) -> Result<OpenPath, PathError> {
         let mut state = self.0.lock_and_wake("open_path");
 
         // If endpoint::State::ipv6 is true we want to keep all our IP addresses as IPv6.
@@ -509,29 +417,22 @@ impl Connection {
             })
             .next()
             .unwrap_or_default();
-        if addr.is_ipv6() && !ipv6 {
-            return OpenPath::rejected(PathError::InvalidRemoteAddress(addr));
+        let remote = network_path.remote();
+        if remote.is_ipv6() && !ipv6 {
+            return Err(PathError::InvalidRemoteAddress(remote));
         }
-        let addr = if ipv6 {
-            SocketAddr::V6(ensure_ipv6(addr))
+        let network_path = if ipv6 {
+            FourTuple::new(SocketAddr::V6(ensure_ipv6(remote)), network_path.local_ip())
         } else {
-            addr
+            network_path
         };
 
-        let (on_open_path_send, on_open_path_recv) = watch::channel(Ok(()));
+        let (on_open_path_send, on_open_path_recv) = oneshot::channel();
         let now = state.runtime.now();
-        // TODO(matheus23): For now this means it's impossible to make use of short-circuiting path validation currently.
-        // However, changing that would mean changing the API.
-        let addrs = FourTuple::new(addr, opts.local_ip);
-        let open_res = state.inner.open_path(addrs, opts.initial_status, now);
-        match open_res {
-            Ok(path_id) => {
-                state.open_path.insert(path_id, on_open_path_send);
-                drop(state);
-                OpenPath::new(path_id, on_open_path_recv, self.0.clone())
-            }
-            Err(err) => OpenPath::rejected(err),
-        }
+        let path_id = state.inner.open_path(network_path, opts, now)?;
+        state.open_path.insert(path_id, on_open_path_send);
+        drop(state);
+        Ok(OpenPath::new(path_id, on_open_path_recv, self.0.clone()))
     }
 
     /// Returns the [`Path`] structure of an open path
@@ -1449,7 +1350,7 @@ pub(crate) struct State {
     /// Always set to Some before the connection becomes drained
     pub(crate) error: Option<ConnectionError>,
     /// Tracks paths being opened
-    open_path: FxHashMap<PathId, watch::Sender<Result<(), PathError>>>,
+    open_path: FxHashMap<PathId, oneshot::Sender<Result<(), PathError>>>,
     /// Tracks reference counts for paths.
     ///
     /// I.e. how many [`Path`] and [`WeakPathHandle`] structs are alive for a path.
@@ -1681,7 +1582,7 @@ impl State {
                 Path(ref evt @ PathEvent::Established { id }) => {
                     self.path_events.send(evt.clone()).ok();
                     if let Some(sender) = self.open_path.remove(&id) {
-                        sender.send_modify(|value| *value = Ok(()));
+                        sender.send(Ok(())).ok();
                     }
                 }
                 Path(ref evt @ PathEvent::Discarded { id, ref path_stats }) => {
@@ -1700,7 +1601,7 @@ impl State {
                         // The previous iteration of this code had another event `PathEvent::LocallyClosed` which
                         // contained a `PathError`, but that was only ever set to `ValidationFailed`.
                         let error = PathError::ValidationFailed;
-                        sender.send_modify(|value| *value = Err(error));
+                        sender.send(Err(error)).ok();
                     }
                     // this will happen also for already opened paths
                     self.path_events.send(evt.clone()).ok();

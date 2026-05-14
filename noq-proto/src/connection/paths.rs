@@ -1039,6 +1039,41 @@ pub enum PathStatus {
     Backup,
 }
 
+/// Options for opening a new path via [`Connection::open_path`].
+///
+/// Defaults to [`PathStatus::Available`] and `allow_duplicate: false`.
+///
+/// [`Connection::open_path`]: crate::Connection::open_path
+#[derive(Debug, Copy, Clone, Default)]
+pub struct OpenPathOpts {
+    pub(crate) initial_status: PathStatus,
+    pub(crate) allow_duplicate: bool,
+}
+
+impl OpenPathOpts {
+    /// Sets the initial [`PathStatus`] for the new path.
+    #[must_use]
+    pub fn initial_status(mut self, initial_status: PathStatus) -> Self {
+        self.initial_status = initial_status;
+        self
+    }
+
+    /// Whether to open a new path even if another open path with the same network 4-tuple
+    /// already exists.
+    ///
+    /// When `false` (the default), [`Connection::open_path`] returns
+    /// [`PathError::PathExistsForNetworkPath`] if an open path with the same network 4-tuple
+    /// already exists. When `true`, a new path is opened regardless.
+    ///
+    /// [`Connection::open_path`]: crate::Connection::open_path
+    /// [`PathError::PathExistsForNetworkPath`]: crate::PathError::PathExistsForNetworkPath
+    #[must_use]
+    pub fn allow_duplicate(mut self, allow_duplicate: bool) -> Self {
+        self.allow_duplicate = allow_duplicate;
+        self
+    }
+}
+
 /// Application events about paths
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PathEvent {

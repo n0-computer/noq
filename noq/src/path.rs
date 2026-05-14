@@ -7,99 +7,54 @@ use std::task::{Context, Poll, ready};
 use std::time::Duration;
 
 use proto::{
-    ClosePathError, ClosedPath, PathError, PathEvent, PathId, PathStats, PathStatus,
+    ClosePathError, ClosedPath, FourTuple, PathError, PathEvent, PathId, PathStats, PathStatus,
     SetPathStatusError, TransportErrorCode,
 };
-use tokio::sync::watch;
+use tokio::sync::{oneshot, watch};
 use tokio_stream::{Stream, wrappers::WatchStream};
 
 use crate::connection::ConnectionRef;
 use crate::{Runtime, WeakConnectionHandle};
 
 /// Future produced by [`crate::Connection::open_path`]
-pub struct OpenPath(OpenPathInner);
-
-enum OpenPathInner {
-    /// Opening a path in underway
-    ///
-    /// This might fail later on.
-    Ongoing {
-        opened: WatchStream<Result<(), PathError>>,
-        path_id: PathId,
-        conn: ConnectionRef,
-    },
-    /// Opening a path failed immediately
-    Rejected {
-        /// The error that occurred
-        err: PathError,
-    },
-    /// The path is already open
-    Ready {
-        path_id: PathId,
-        conn: ConnectionRef,
-    },
+pub struct OpenPath {
+    opened: oneshot::Receiver<Result<(), PathError>>,
+    path_id: PathId,
+    conn: ConnectionRef,
 }
 
 impl OpenPath {
     pub(crate) fn new(
         path_id: PathId,
-        opened: watch::Receiver<Result<(), PathError>>,
+        opened: oneshot::Receiver<Result<(), PathError>>,
         conn: ConnectionRef,
     ) -> Self {
-        Self(OpenPathInner::Ongoing {
-            opened: WatchStream::from_changes(opened),
+        Self {
+            opened,
             path_id,
             conn,
-        })
-    }
-
-    pub(crate) fn ready(path_id: PathId, conn: ConnectionRef) -> Self {
-        Self(OpenPathInner::Ready { path_id, conn })
-    }
-
-    pub(crate) fn rejected(err: PathError) -> Self {
-        Self(OpenPathInner::Rejected { err })
+        }
     }
 
     /// Returns the path ID of the new path being opened.
-    ///
-    /// If an error occurred before a path ID was allocated, `None` is returned.  In this
-    /// case the future is ready and polling it will immediately yield the error.
-    ///
-    /// The returned value remains the same for the entire lifetime of this future.
-    pub fn path_id(&self) -> Option<PathId> {
-        match self.0 {
-            OpenPathInner::Ongoing { path_id, .. } => Some(path_id),
-            OpenPathInner::Rejected { .. } => None,
-            OpenPathInner::Ready { path_id, .. } => Some(path_id),
-        }
+    pub fn path_id(&self) -> PathId {
+        self.path_id
     }
 }
 
 impl Future for OpenPath {
     type Output = Result<Path, PathError>;
-    fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
-        match self.get_mut().0 {
-            OpenPathInner::Ongoing {
-                ref mut opened,
-                path_id,
-                ref mut conn,
-            } => match ready!(Pin::new(opened).poll_next(ctx)) {
-                Some(value) => {
-                    Poll::Ready(value.map(|_| Path::new_unchecked(conn.clone(), path_id)))
-                }
-                None => {
-                    // This only happens if receiving a notification change failed, this means the
-                    // sender was dropped. This generally should not happen so we use a transient
-                    // error
-                    Poll::Ready(Err(PathError::ValidationFailed))
-                }
-            },
-            OpenPathInner::Ready {
-                path_id,
-                ref mut conn,
-            } => Poll::Ready(Ok(Path::new_unchecked(conn.clone(), path_id))),
-            OpenPathInner::Rejected { err } => Poll::Ready(Err(err)),
+    fn poll(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
+        match ready!(Pin::new(&mut self.opened).poll(ctx)) {
+            Ok(value) => {
+                Poll::Ready(value.map(|_| Path::new_unchecked(self.conn.clone(), self.path_id)))
+            }
+            Err(_sender_dropped) => {
+                // This only happens if receiving a notification change failed, this means the
+                // sender was dropped. This generally should not happen so we use a transient
+                // error
+                Poll::Ready(Err(PathError::ValidationFailed))
+            }
         }
     }
 }
@@ -267,6 +222,14 @@ impl Path {
     pub fn local_ip(&self) -> Result<Option<IpAddr>, ClosedPath> {
         let state = self.conn.lock_without_waking("per_path_local_ip");
         Ok(state.inner.network_path(self.id())?.local_ip())
+    }
+
+    /// The network path used for this path, if known.
+    ///
+    /// Returns a [`FourTuple`], combining [`Self::remote_address`] and [`Self::local_ip`].
+    pub fn network_path(&self) -> Result<FourTuple, ClosedPath> {
+        let state = self.conn.lock_without_waking("per_path_local_ip");
+        state.inner.network_path(self.id())
     }
 
     /// Ping the remote endpoint over this path.

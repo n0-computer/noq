@@ -500,17 +500,6 @@ impl ConnPair {
         self.conn_mut(side).send_stream(id)
     }
 
-    pub(super) fn open_path_ensure(
-        &mut self,
-        side: Side,
-        network_path: FourTuple,
-        initial_status: PathStatus,
-    ) -> Result<(PathId, bool), PathError> {
-        let now = self.pair.time;
-        self.conn_mut(side)
-            .open_path_ensure(network_path, initial_status, now)
-    }
-
     pub(super) fn open_path(
         &mut self,
         side: Side,
@@ -518,8 +507,10 @@ impl ConnPair {
         initial_status: PathStatus,
     ) -> Result<PathId, PathError> {
         let now = self.pair.time;
-        self.conn_mut(side)
-            .open_path(network_path, initial_status, now)
+        let opts = OpenPathOpts::default()
+            .initial_status(initial_status)
+            .allow_duplicate(true);
+        self.conn_mut(side).open_path(network_path, opts, now)
     }
 
     pub(super) fn close_path(
