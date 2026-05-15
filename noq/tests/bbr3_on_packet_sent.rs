@@ -20,10 +20,13 @@ use std::{
 };
 
 use noq::{
-    TransportConfig,
+    ClientConfig, Endpoint, ServerConfig, TransportConfig,
     congestion::{Controller, ControllerFactory, ControllerMetrics, CubicConfig},
 };
-use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
+use rustls::{
+    RootCertStore,
+    pki_types::{CertificateDer, PrivatePkcs8KeyDer},
+};
 use tokio::runtime::Builder;
 
 /// Counts `on_packet_sent` calls; every other hook forwards to a real
@@ -115,9 +118,8 @@ fn connection_sender_calls_on_packet_sent() {
         let (cert, key) = gen_cert();
         let local = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
 
-        let server_cfg =
-            noq::ServerConfig::with_single_cert(vec![cert.clone()], key.into()).unwrap();
-        let server = noq::Endpoint::server(server_cfg, local).unwrap();
+        let server_cfg = ServerConfig::with_single_cert(vec![cert.clone()], key.into()).unwrap();
+        let server = Endpoint::server(server_cfg, local).unwrap();
         let server_addr = server.local_addr().unwrap();
 
         let server_task = tokio::spawn(async move {
@@ -133,12 +135,12 @@ fn connection_sender_calls_on_packet_sent() {
             calls: calls.clone(),
         }));
 
-        let mut roots = rustls::RootCertStore::empty();
+        let mut roots = RootCertStore::empty();
         roots.add(cert).unwrap();
-        let mut client_cfg = noq::ClientConfig::with_root_certificates(Arc::new(roots)).unwrap();
+        let mut client_cfg = ClientConfig::with_root_certificates(Arc::new(roots)).unwrap();
         client_cfg.transport_config(Arc::new(transport));
 
-        let client = noq::Endpoint::client(local).unwrap();
+        let client = Endpoint::client(local).unwrap();
         let conn = client
             .connect_with(client_cfg, server_addr, "localhost")
             .unwrap()
