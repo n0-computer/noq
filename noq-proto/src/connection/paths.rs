@@ -426,6 +426,8 @@ impl PathData {
 
     /// Account for transmission of `packet` with number `pn` in `space`
     pub(super) fn sent(&mut self, pn: u64, packet: SentPacket, space: &mut PacketNumberSpace) {
+        self.congestion
+            .on_packet_sent(packet.time_sent, packet.size, pn);
         self.in_flight.insert(&packet);
         if self.first_packet.is_none() {
             self.first_packet = Some(pn);
