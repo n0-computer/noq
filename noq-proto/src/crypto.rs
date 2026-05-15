@@ -89,12 +89,7 @@ pub trait Session: Send + Sync + 'static {
     ///
     /// This function will fail, returning [ExportKeyingMaterialError],
     /// if the requested output length is too large.
-    fn export_keying_material(
-        &self,
-        output: &mut [u8],
-        label: &[u8],
-        context: &[u8],
-    ) -> Result<(), ExportKeyingMaterialError>;
+    fn exporter(&self) -> Result<KeyingMaterialExporter, ExportKeyingMaterialError>;
 }
 
 /// A pair of keys for bidirectional communication

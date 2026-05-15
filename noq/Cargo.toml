@@ -42,9 +42,6 @@ runtime-smol = ["dep:async-io", "dep:smol"]
 
 # Configure `tracing` to log events via `log` if no `tracing` subscriber exists.
 tracing-log = ["tracing/log", "proto/tracing-log", "udp/tracing-log"]
-# Enable rustls logging
-rustls-log = ["rustls?/logging"]
-# Enable qlog support
 qlog = ["proto/qlog"]
 # Use private Apple APIs to send multiple packets in a single syscall.
 fast-apple-datapath = ["udp/fast-apple-datapath"]
@@ -56,8 +53,8 @@ rustls-aws-lc-rs = ["rustls", "aws-lc-rs"]
 # Internal (PRIVATE!) features used to aid testing.
 # Don't rely on these whatsoever. They may disappear at any time.
 
-__rustls-post-quantum-test =  ["rustls/prefer-post-quantum", "rustls", "aws-lc-rs", "proto/__rustls-post-quantum-test"]
-__all_without_fips = ["lock_tracking", "aws-lc-rs", "rustls", "ring", "runtime-tokio", "runtime-smol", "tracing-log", "rustls-log", "bloom", "platform-verifier", "qlog", "fast-apple-datapath"]
+__rustls-post-quantum-test =  ["rustls", "aws-lc-rs", "proto/__rustls-post-quantum-test"]
+__all_without_fips = ["lock_tracking", "aws-lc-rs", "rustls", "ring", "runtime-tokio", "runtime-smol", "tracing-log", "bloom", "platform-verifier", "qlog", "fast-apple-datapath"]
 
 [dependencies]
 async-io = { workspace = true, optional = true }

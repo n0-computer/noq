@@ -20,14 +20,14 @@ arbitrary = ["dep:arbitrary"]
 # for the rustls TLS backend, making `Endpoint::client` and `Endpoint::server` available,
 # except when compiling to Wasm.
 # If both `aws-lc-rs` and `ring` are enabled, `ring` will actually be used.
-aws-lc-rs = ["dep:aws-lc-rs", "aws-lc-rs?/aws-lc-sys", "aws-lc-rs?/prebuilt-nasm", "rustls?/aws-lc-rs"] # TODO: Once released, we'll want to depend on the rustls-aws-lc-rs crate instead of rustls' aws-lc-rs feature.
-aws-lc-rs-fips = ["aws-lc-rs", "aws-lc-rs?/fips"]
+aws-lc-rs = ["dep:aws-lc-rs", "aws-lc-rs?/aws-lc-sys", "aws-lc-rs?/prebuilt-nasm", "dep:rustls-aws-lc-rs"]
+aws-lc-rs-fips = ["aws-lc-rs"]
 # Enables conveniences like `EndpointConfig::default`, and together with
 # enabling the `rustls` feature, this also enables the `ring` crypto provider
 # for the rustls TLS backend, making `Endpoint::client` and `Endpoint::server` available,
 # except when compiling to Wasm.
 # If both `aws-lc-rs` and `ring` are enabled, `ring` will actually be used.
-ring = ["dep:ring", "rustls?/ring"] # TODO: Once released, we'll want to depend on the rustls-ring crate instead of rustls' ring feature.
+ring = ["dep:ring", "dep:rustls-ring"]
 # Enables BloomTokenLog, and uses it by default
 bloom = ["dep:fastbloom"]
 # Enables rustls as the TLS implementation backend
@@ -36,8 +36,6 @@ rustls = ["dep:rustls", "dep:aes-gcm"]
 platform-verifier = ["dep:rustls-platform-verifier"]
 # Configure `tracing` to log events via `log` if no `tracing` subscriber exists.
 tracing-log = ["tracing/log"]
-# Enable rustls logging
-rustls-log = ["rustls?/logging"]
 # Enable qlog support
 qlog = ["dep:qlog"]
 bench = ["dep:criterion"]
@@ -50,7 +48,7 @@ rustls-aws-lc-rs = ["rustls", "aws-lc-rs"]
 # Don't rely on these whatsoever. They may disappear at any time.
 
 __rustls-post-quantum-test =  []
-__all_without_fips = ["arbitrary", "aws-lc-rs", "rustls", "ring", "platform-verifier", "rustls-log", "qlog", "bench", "bloom", "tracing-log"]
+__all_without_fips = ["arbitrary", "aws-lc-rs", "rustls", "ring", "platform-verifier", "qlog", "bench", "bloom", "tracing-log"]
 
 [dependencies]
 aes-gcm = { workspace = true, optional = true }
@@ -68,7 +66,9 @@ rand = { workspace = true }
 rand_pcg = "0.10"
 ring = { workspace = true, optional = true }
 rustc-hash = { workspace = true }
-rustls = { workspace = true, optional = true }
+rustls = { workspace = true, optional = true, features = ["webpki"] }
+rustls-aws-lc-rs = { workspace = true, optional = true }
+rustls-ring = { workspace = true, optional = true }
 rustls-platform-verifier = { workspace = true, optional = true }
 slab = { workspace = true }
 sorted-index-buffer = { workspace = true }

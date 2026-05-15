@@ -4,12 +4,17 @@ use aes_gcm::{KeyInit, aead::AeadMutInPlace};
 use bytes::BytesMut;
 pub use rustls::Error;
 use rustls::{
-    self, CipherSuite,
+    self, KeyingMaterialExporter,
+    crypto::CipherSuite,
+    enums::ApplicationProtocol,
     pki_types::{CertificateDer, ServerName},
     quic::{Connection, HeaderProtectionKey, KeyChange, PacketKey, Secrets, Suite, Version},
 };
 #[cfg(any(feature = "aws-lc-rs", feature = "ring"))]
-use rustls::{client::danger::ServerCertVerifier, pki_types::PrivateKeyDer};
+use rustls::{
+    client::danger::ServerVerifier, crypto::Identity, pki_types::PrivateKeyDer,
+    time_provider::TimeProvider,
+};
 
 use crate::{
     ConnectError, ConnectionId, PathId, Side, TransportError, TransportErrorCode,
@@ -19,7 +24,7 @@ use crate::{
     transport_parameters::TransportParameters,
 };
 
-impl From<Side> for rustls::Side {
+impl From<Side> for rustls::quic::Side {
     fn from(s: Side) -> Self {
         match s {
             Side::Client => Self::Client,
@@ -178,7 +183,6 @@ impl crypto::Session for TlsSession {
 
         let (nonce, key) = match self.version {
             Version::V1 => (&RETRY_INTEGRITY_NONCE_V1, &RETRY_INTEGRITY_KEY_V1),
-            Version::V1Draft => (&RETRY_INTEGRITY_NONCE_DRAFT, &RETRY_INTEGRITY_KEY_DRAFT),
             _ => unreachable!(),
         };
 
@@ -195,16 +199,12 @@ impl crypto::Session for TlsSession {
             .is_ok()
     }
 
-    fn export_keying_material(
-        &self,
-        output: &mut [u8],
-        label: &[u8],
-        context: &[u8],
-    ) -> Result<(), ExportKeyingMaterialError> {
-        self.inner
-            .export_keying_material(output, label, Some(context))
-            .map_err(|_| ExportKeyingMaterialError)?;
-        Ok(())
+    fn exporter(&self) -> Result<KeyingMaterialExporter, ExportKeyingMaterialError> {
+        let exporter = match &self.inner {
+            Connection::Client(conn) => conn.exporter().map_err(|_| ExportKeyingMaterialError)?,
+            Connection::Server(conn) => conn.exporter().map_err(|_| ExportKeyingMaterialError)?,
+        };
+        Ok(exporter)
     }
 }
 
@@ -266,7 +266,7 @@ pub struct HandshakeData {
     /// The key exchange group negotiated with the peer. Useful for logging and metrics.
     ///
     /// `None` until the handshake has completed.
-    pub negotiated_key_exchange_group: Option<rustls::NamedGroup>,
+    pub negotiated_key_exchange_group: Option<rustls::crypto::kx::NamedGroup>,
 }
 
 /// A QUIC-compatible TLS client configuration
@@ -294,39 +294,43 @@ pub struct QuicClientConfig {
 }
 
 impl QuicClientConfig {
-    #[cfg(all(
-        feature = "platform-verifier",
-        any(feature = "aws-lc-rs", feature = "ring")
-    ))]
-    pub(crate) fn with_platform_verifier() -> Result<Self, Error> {
-        use rustls_platform_verifier::BuilderVerifierExt;
+    // #[cfg(all(
+    //     feature = "platform-verifier",
+    //     any(feature = "aws-lc-rs", feature = "ring")
+    // ))]
+    // pub(crate) fn with_platform_verifier(
+    //     time_provider: Arc<dyn TimeProvider>,
+    // ) -> Result<Self, Error> {
+    //     use rustls_platform_verifier::BuilderVerifierExt;
 
-        // Keep in sync with `inner()` below
-        let mut inner = rustls::ClientConfig::builder_with_provider(configured_provider())
-            .with_protocol_versions(&[&rustls::version::TLS13])
-            .unwrap() // The default providers support TLS 1.3
-            .with_platform_verifier()?
-            .with_no_client_auth();
+    //     // Keep in sync with `inner()` below
+    //     let mut inner =
+    //         rustls::ClientConfig::builder_with_details(configured_provider(), time_provider)
+    //             .with_webpki_verifier()?
+    //             .with_no_client_auth();
 
-        inner.enable_early_data = true;
-        Ok(Self {
-            // We're confident that the *ring* default provider contains TLS13_AES_128_GCM_SHA256
-            initial: initial_suite_from_provider(inner.crypto_provider())
-                .expect("no initial cipher suite found"),
-            inner: Arc::new(inner),
-        })
-    }
+    //     inner.enable_early_data = true;
+    //     Ok(Self {
+    //         // We're confident that the *ring* default provider contains TLS13_AES_128_GCM_SHA256
+    //         initial: initial_suite_from_provider(inner.crypto_provider())
+    //             .expect("no initial cipher suite found"),
+    //         inner: Arc::new(inner),
+    //     })
+    // }
 
     /// Initialize a sane QUIC-compatible TLS client configuration
     ///
     /// QUIC requires that TLS 1.3 be enabled. Advanced users can use any [`rustls::ClientConfig`] that
     /// satisfies this requirement.
     #[cfg(any(feature = "aws-lc-rs", feature = "ring"))]
-    pub(crate) fn new(verifier: Arc<dyn ServerCertVerifier>) -> Self {
-        let inner = Self::inner(verifier);
+    pub(crate) fn new(
+        verifier: Arc<dyn ServerVerifier>,
+        time_provider: Arc<dyn TimeProvider>,
+    ) -> Self {
+        let inner = Self::inner(verifier, time_provider);
         Self {
             // We're confident that the *ring* default provider contains TLS13_AES_128_GCM_SHA256
-            initial: initial_suite_from_provider(inner.crypto_provider())
+            initial: initial_suite_from_provider(inner.provider())
                 .expect("no initial cipher suite found"),
             inner: Arc::new(inner),
         }
@@ -346,20 +350,23 @@ impl QuicClientConfig {
     }
 
     /// Updates the set of ALPN protocols configured in the client config.
-    pub fn set_alpn_protocols(&mut self, alpn_protocols: Vec<Vec<u8>>) {
+    pub fn set_alpn_protocols(&mut self, alpn_protocols: Vec<ApplicationProtocol<'static>>) {
         let config = Arc::make_mut(&mut self.inner);
         config.alpn_protocols = alpn_protocols;
     }
 
     #[cfg(any(feature = "aws-lc-rs", feature = "ring"))]
-    pub(crate) fn inner(verifier: Arc<dyn ServerCertVerifier>) -> rustls::ClientConfig {
+    pub(crate) fn inner(
+        verifier: Arc<dyn ServerVerifier>,
+        time_provider: Arc<dyn TimeProvider>,
+    ) -> rustls::ClientConfig {
         // Keep in sync with `with_platform_verifier()` above
-        let mut config = rustls::ClientConfig::builder_with_provider(configured_provider())
-            .with_protocol_versions(&[&rustls::version::TLS13])
-            .unwrap() // The default providers support TLS 1.3
-            .dangerous()
-            .with_custom_certificate_verifier(verifier)
-            .with_no_client_auth();
+        let mut config =
+            rustls::ClientConfig::builder_with_details(configured_provider(), time_provider)
+                .dangerous()
+                .with_custom_certificate_verifier(verifier)
+                .with_no_client_auth()
+                .expect("TODO(matheus23): unwrap?");
 
         config.enable_early_data = true;
         config
@@ -407,7 +414,7 @@ impl TryFrom<Arc<rustls::ClientConfig>> for QuicClientConfig {
 
     fn try_from(inner: Arc<rustls::ClientConfig>) -> Result<Self, Self::Error> {
         Ok(Self {
-            initial: initial_suite_from_provider(inner.crypto_provider())
+            initial: initial_suite_from_provider(inner.provider())
                 .ok_or(NoInitialCipherSuite { specific: false })?,
             inner,
         })
@@ -459,10 +466,11 @@ pub struct QuicServerConfig {
 impl QuicServerConfig {
     #[cfg(any(feature = "aws-lc-rs", feature = "ring"))]
     pub(crate) fn new(
-        cert_chain: Vec<CertificateDer<'static>>,
+        identity: Arc<Identity<'static>>,
         key: PrivateKeyDer<'static>,
+        time_provider: Arc<dyn TimeProvider>,
     ) -> Result<Self, rustls::Error> {
-        let inner = Self::inner(cert_chain, key)?;
+        let inner = Self::inner(identity, key, time_provider)?;
         Ok(Self {
             // We're confident that the *ring* default provider contains TLS13_AES_128_GCM_SHA256
             initial: initial_suite_from_provider(inner.crypto_provider())
@@ -485,7 +493,7 @@ impl QuicServerConfig {
     }
 
     /// Updates the set of ALPN protocols configured in the server config.
-    pub fn set_alpn_protocols(&mut self, alpn_protocols: Vec<Vec<u8>>) {
+    pub fn set_alpn_protocols(&mut self, alpn_protocols: Vec<ApplicationProtocol<'static>>) {
         let config = Arc::make_mut(&mut self.inner);
         config.alpn_protocols = alpn_protocols;
     }
@@ -497,14 +505,14 @@ impl QuicServerConfig {
     /// requirements.
     #[cfg(any(feature = "aws-lc-rs", feature = "ring"))]
     pub(crate) fn inner(
-        cert_chain: Vec<CertificateDer<'static>>,
+        identity: Arc<Identity<'static>>,
         key: PrivateKeyDer<'static>,
+        time_provider: Arc<dyn TimeProvider>,
     ) -> Result<rustls::ServerConfig, rustls::Error> {
-        let mut inner = rustls::ServerConfig::builder_with_provider(configured_provider())
-            .with_protocol_versions(&[&rustls::version::TLS13])
-            .unwrap() // The *ring* default provider supports TLS 1.3
-            .with_no_client_auth()
-            .with_single_cert(cert_chain, key)?;
+        let mut inner =
+            rustls::ServerConfig::builder_with_details(configured_provider(), time_provider)
+                .with_no_client_auth()
+                .with_single_cert(identity, key)?;
 
         inner.max_early_data_size = u32::MAX;
         Ok(inner)
@@ -565,7 +573,6 @@ impl crypto::ServerConfig for QuicServerConfig {
         let version = interpret_version(version).unwrap();
         let (nonce, key) = match version {
             Version::V1 => (&RETRY_INTEGRITY_NONCE_V1, &RETRY_INTEGRITY_KEY_V1),
-            Version::V1Draft => (&RETRY_INTEGRITY_NONCE_DRAFT, &RETRY_INTEGRITY_KEY_DRAFT),
             _ => unreachable!(),
         };
 
@@ -587,25 +594,22 @@ pub(crate) fn initial_suite_from_provider(
     provider: &Arc<rustls::crypto::CryptoProvider>,
 ) -> Option<Suite> {
     provider
-        .cipher_suites
+        .tls13_cipher_suites
         .iter()
-        .find_map(|cs| match (cs.suite(), cs.tls13()) {
-            (rustls::CipherSuite::TLS13_AES_128_GCM_SHA256, Some(suite)) => {
-                Some(suite.quic_suite())
-            }
+        .find_map(|cs| match cs.common.suite {
+            rustls::crypto::CipherSuite::TLS13_AES_128_GCM_SHA256 => cs.quic_suite(),
             _ => None,
         })
-        .flatten()
 }
 
 #[cfg(all(feature = "aws-lc-rs", not(feature = "ring")))]
 pub(crate) fn configured_provider() -> Arc<rustls::crypto::CryptoProvider> {
-    Arc::new(rustls::crypto::aws_lc_rs::default_provider())
+    Arc::new(rustls_aws_lc_rs::DEFAULT_PROVIDER)
 }
 
 #[cfg(feature = "ring")]
 pub(crate) fn configured_provider() -> Arc<rustls::crypto::CryptoProvider> {
-    Arc::new(rustls::crypto::ring::default_provider())
+    Arc::new(rustls_ring::DEFAULT_PROVIDER)
 }
 
 fn to_vec(params: &TransportParameters) -> Vec<u8> {
@@ -638,7 +642,7 @@ impl crypto::PacketKey for Box<dyn PacketKey> {
         let (header, payload_tag) = buf.split_at_mut(header_len);
         let (payload, tag_storage) = payload_tag.split_at_mut(payload_tag.len() - self.tag_len());
         let tag = self
-            .encrypt_in_place_for_path(path_id.as_u32(), packet, &*header, payload)
+            .encrypt_in_place(packet, &*header, payload, Some(path_id.as_u32()))
             .unwrap();
         tag_storage.copy_from_slice(tag.as_ref());
     }
@@ -651,7 +655,7 @@ impl crypto::PacketKey for Box<dyn PacketKey> {
         payload: &mut BytesMut,
     ) -> Result<(), CryptoError> {
         let plain = self
-            .decrypt_in_place_for_path(path_id.as_u32(), packet, header, payload.as_mut())
+            .decrypt_in_place(packet, header, payload.as_mut(), Some(path_id.as_u32()))
             .map_err(|_| CryptoError)?;
         let plain_len = plain.len();
         payload.truncate(plain_len);
@@ -673,7 +677,6 @@ impl crypto::PacketKey for Box<dyn PacketKey> {
 
 fn interpret_version(version: u32) -> Result<Version, UnsupportedVersion> {
     match version {
-        0xff00_001d..=0xff00_0020 => Ok(Version::V1Draft),
         0x0000_0001 | 0xff00_0021..=0xff00_0022 => Ok(Version::V1),
         _ => Err(UnsupportedVersion),
     }

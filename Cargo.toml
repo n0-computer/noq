@@ -41,7 +41,9 @@ rand = "0.10"
 rcgen = "0.14"
 ring = "0.17"
 rustc-hash = "2"
-rustls = { version = "0.23.33", default-features = false, features = ["std"] }
+rustls = { version = "0.24.0-dev.0", default-features = false }
+rustls-aws-lc-rs = { version = "0.1.0-dev.0" }
+rustls-ring = { version = "0.1.0-dev.0" }
 rustls-pemfile = "2"
 rustls-pki-types = "1.7"
 rustls-platform-verifier = "0.7"
@@ -95,3 +97,6 @@ unreachable_pub = "warn"
 manual_let_else = "warn"
 or_fun_call = "warn"
 use_self = "warn"
+
+# [patch.crates-io]
+# rustls = { path = "../rustls/rustls" }
