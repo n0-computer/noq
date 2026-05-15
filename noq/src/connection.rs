@@ -1672,6 +1672,15 @@ impl State {
                 NatTraversal(update) => {
                     self.nat_traversal_updates.send(update).ok();
                 }
+                _ => {
+                    // PathEvent is #[non_exhaustive].
+                    // It's possible that noq is built against a newer noq-proto version.
+                    // In that case, we need to ignore path events we can't handle yet.
+                    // But for tests, we expect noq and noq-proto to be in sync, so we
+                    // should panic in case we don't actually handle new cases.
+                    #[cfg(test)]
+                    panic!("Unhandled PathEvent variant: {event:?}");
+                }
             }
         }
     }
