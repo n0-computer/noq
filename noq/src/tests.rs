@@ -23,9 +23,7 @@ use std::{
 use crate::runtime::TokioRuntime;
 use crate::{Duration, Instant};
 use bytes::Bytes;
-use proto::{
-    ConnectionError, PathId, RandomConnectionIdGenerator, crypto::rustls::QuicClientConfig,
-};
+use proto::{ConnectionError, PathId, RandomConnectionIdGenerator, crypto::rustls::QuicClientConfig};
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use rustls::{
     RootCertStore,
