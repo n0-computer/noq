@@ -829,7 +829,7 @@ pub(super) struct TestEndpoint {
     pub(super) inbound: VecDeque<Inbound>,
     pub(super) accepted: Option<Result<ConnectionHandle, ConnectionError>>,
     pub(super) connections: HashMap<ConnectionHandle, Connection>,
-    drained_connections: HashSet<ConnectionHandle>,
+    pub(super) draining_connections: HashSet<ConnectionHandle>,
     conn_events: HashMap<ConnectionHandle, VecDeque<ConnectionEvent>>,
     pub(super) captured_packets: Vec<Vec<u8>>,
     pub(super) capture_inbound_packets: bool,
@@ -872,7 +872,7 @@ impl TestEndpoint {
             inbound: VecDeque::new(),
             accepted: None,
             connections: HashMap::default(),
-            drained_connections: HashSet::default(),
+            draining_connections: HashSet::default(),
             conn_events: HashMap::default(),
             captured_packets: Vec::new(),
             capture_inbound_packets: false,
@@ -975,8 +975,8 @@ impl TestEndpoint {
             }
 
             for (ch, event) in endpoint_events {
-                if event.is_drained() {
-                    self.drained_connections.insert(ch);
+                if event.is_draining() {
+                    self.draining_connections.insert(ch);
                 }
                 if let Some(event) = self.handle_event(ch, event)
                     && let Some(conn) = self.connections.get_mut(&ch)
@@ -1084,11 +1084,9 @@ pub(crate) fn subscribe() -> tracing::subscriber::DefaultGuard {
                 .with_default_directive(tracing::Level::TRACE.into())
                 .from_env_lossy(),
         )
+        .without_time()
         .with_line_number(true)
         .with_writer(|| TestWriter);
-    // tracing uses std::time to trace time, which panics in wasm.
-    #[cfg(all(target_family = "wasm", target_os = "unknown"))]
-    let builder = builder.without_time();
     tracing::subscriber::set_default(builder.finish())
 }
 

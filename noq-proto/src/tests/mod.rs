@@ -4320,3 +4320,54 @@ fn regression_close_without_connection_event() {
         Some(Event::ConnectionLost { .. })
     );
 }
+
+/// Ensures that the draining delay for the server is exactly 0.5 RTT and 1 RTT for the client.
+///
+/// The draining delay is the time between the connection being closed and the connection
+/// entering the "draining" state (either on the same or on the other side).
+///
+/// We expect the side that *receives* the CONNECTION_CLOSE to immediately enter the draining
+/// state. However in absolute terms, it'll be delayed by 0.5 RTT (exactly the latency) compared
+/// to when `connection.close()` was called.
+/// On the side that called `connection.close()` we first enter the "closed" state, and only
+/// enter the "draining" state once we *receive* a "reciprocal" CONNECTION_CLOSE from the other
+/// side. In the normal case this will be exactly 1 RTT after calling `connection.close()` to
+/// account for the latency of CONNECTION_CLOSE going one way and then coming back.
+///
+/// The "draining" state from noq-proto is observed by noq to enable `wait_idle` waiting the
+/// ideal amount of time before allowing us to close the socket.
+#[test]
+fn timely_graceful_close() {
+    let mut pair = Pair::default();
+    pair.latency = Duration::from_millis(100);
+    let (client_ch, server_ch) = pair.connect();
+
+    let _guard = subscribe();
+    let start = pair.time;
+    let now = pair.time;
+    pair.client_conn_mut(client_ch)
+        .close(now, 0u32.into(), Bytes::from_static(b"done!"));
+
+    assert!(!pair.client.draining_connections.contains(&client_ch));
+    assert!(!pair.server.draining_connections.contains(&server_ch));
+
+    pair.drive_client();
+    pair.advance_time();
+    let now = pair.time;
+    pair.drive_server();
+
+    assert!(pair.server.draining_connections.contains(&server_ch));
+    let server_draining_delay = now.saturating_duration_since(start);
+    info!(?server_draining_delay);
+    assert_eq!(server_draining_delay, Duration::from_millis(100));
+
+    // already drove server
+    pair.advance_time();
+    let now = pair.time;
+    pair.drive_client();
+
+    assert!(pair.client.draining_connections.contains(&client_ch));
+    let client_draining_delay = now.saturating_duration_since(start);
+    info!(?client_draining_delay);
+    assert_eq!(client_draining_delay, Duration::from_millis(200));
+}

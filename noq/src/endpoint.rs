@@ -366,16 +366,16 @@ impl Endpoint {
         }
     }
 
-    /// Wait for all connections on the endpoint to be cleanly shut down
+    /// Waits for all connections on the endpoint to be cleanly shut down and drained.
     ///
-    /// Waiting for this condition before exiting ensures that a good-faith effort is made to notify
-    /// peers of recent connection closes, whereas exiting immediately could force them to wait out
-    /// the idle timeout period.
+    /// This is equivalent to [`wait_idle()`] with additionally waiting for the connections to be
+    /// drained. Please see its documentation for more information.
     ///
-    /// Does not proactively close existing connections or cause incoming connections to be
-    /// rejected. Consider calling [`close()`] if that is desired.
+    /// Use `wait_drained()` in favor of `wait_idle()` if you care about waiting for the
+    /// [`Connection`] structs to be dropped.
     ///
-    /// [`close()`]: Endpoint::close
+    /// [`wait_idle()`]: Self::wait_idle
+    /// [`Connection`]: crate::Connection
     pub async fn wait_drained(&self) {
         loop {
             {
@@ -390,7 +390,23 @@ impl Endpoint {
         }
     }
 
-    /// TODO(matheus23): docs
+    /// Waits for all connections on the endpoint to be ready for shutting down.
+    ///
+    /// Waiting for this condition before exiting ensures that a good-faith effort is made to notify
+    /// peers of recent connection closes, whereas exiting immediately could force them to wait out
+    /// the idle timeout period.
+    ///
+    /// Does not proactively close existing connections or cause incoming connections to be
+    /// rejected. Consider calling [`close()`] if that is desired.
+    ///
+    /// Unlike [`wait_drained()`], this doesn't wait for the full draining period, so it can't be
+    /// used to wait for all now-idle [`Connection`]s to be dropped.
+    ///
+    /// See also this section in the QUIC RFC: <https://datatracker.ietf.org/doc/html/rfc9000#section-10.2-6>
+    ///
+    /// [`close()`]: Self::close
+    /// [`wait_drained()`]: Self::wait_drained
+    /// [`Connection`]: crate::Connection
     pub async fn wait_idle(&self) {
         loop {
             {
