@@ -42,7 +42,7 @@ pub(super) struct Pair {
     pub(super) spins: u64,
     /// The routing table used for resolving addresses observed for incoming packets
     /// and determining whether they should get lost.
-    pub(super) routes: Option<Box<dyn PairRoutingTable>>,
+    pub(super) routes: Box<dyn PairRoutingTable>,
     last_spin: bool,
 }
 
@@ -96,7 +96,10 @@ impl Pair {
             spins: 0,
             last_spin: false,
             congestion_experienced: false,
-            routes: None,
+            routes: Box::new(BasicRouting {
+                client_addr,
+                server_addr,
+            }),
         }
     }
 
@@ -127,7 +130,10 @@ impl Pair {
             spins: 0,
             last_spin: false,
             congestion_experienced: false,
-            routes: None,
+            routes: Box::new(BasicRouting {
+                client_addr: Self::CLIENT_ADDR,
+                server_addr: Self::SERVER_ADDR,
+            }),
         }
     }
 
@@ -193,20 +199,7 @@ impl Pair {
                 self.spins += (spin == self.last_spin) as u64;
                 self.last_spin = spin;
             }
-            let outcome = match self.routes.as_mut() {
-                Some(table) => table.route_client_to_server(&packet),
-                None => {
-                    if self.server.addr == packet.destination {
-                        RoutingDecision::Deliver {
-                            src: self.client.addr,
-                            dst: Some(packet.destination.ip()),
-                        }
-                    } else {
-                        RoutingDecision::Drop
-                    }
-                }
-            };
-            match outcome {
+            match self.routes.route_client_to_server(&packet) {
                 RoutingDecision::Deliver { src, dst } => {
                     let ecn = set_congestion_experienced(packet.ecn, self.congestion_experienced);
                     self.server.inbound.push_back(Inbound {
@@ -234,20 +227,7 @@ impl Pair {
                 info!(packet_size, "dropping packet (max size exceeded)");
                 continue;
             }
-            let outcome = match self.routes.as_mut() {
-                Some(table) => table.route_server_to_client(&packet),
-                None => {
-                    if self.client.addr == packet.destination {
-                        RoutingDecision::Deliver {
-                            src: self.server.addr,
-                            dst: Some(packet.destination.ip()),
-                        }
-                    } else {
-                        RoutingDecision::Drop
-                    }
-                }
-            };
-            match outcome {
+            match self.routes.route_server_to_client(&packet) {
                 RoutingDecision::Deliver { src, dst } => {
                     let ecn = set_congestion_experienced(packet.ecn, self.congestion_experienced);
                     self.client.inbound.push_back(Inbound {
@@ -399,23 +379,19 @@ impl Pair {
     }
 
     /// Helper to get access to the test-specific routing table.
-    pub(super) fn downcast_routes_ref<T: PairRoutingTable>(&self) -> Option<&T> {
-        let routes: &dyn std::any::Any = self.routes.as_ref()?.as_ref();
-        Some(
-            routes
-                .downcast_ref::<T>()
-                .expect("downcast type does not match"),
-        )
+    pub(super) fn downcast_routes_ref<T: PairRoutingTable>(&self) -> &T {
+        let routes: &dyn std::any::Any = self.routes.as_ref();
+        routes
+            .downcast_ref::<T>()
+            .expect("downcast type does not match")
     }
 
     /// Helper to get mutable access to the test-specific routing table.
-    pub(super) fn downcast_routes_mut<T: PairRoutingTable>(&mut self) -> Option<&mut T> {
-        let routes: &mut dyn std::any::Any = self.routes.as_mut()?.as_mut();
-        Some(
-            routes
-                .downcast_mut::<T>()
-                .expect("downcast type does not match"),
-        )
+    pub(super) fn downcast_routes_mut<T: PairRoutingTable>(&mut self) -> &mut T {
+        let routes: &mut dyn std::any::Any = self.routes.as_mut();
+        routes
+            .downcast_mut::<T>()
+            .expect("downcast type does not match")
     }
 }
 
@@ -760,30 +736,6 @@ impl ConnPair {
 
     pub(super) fn is_multipath_negotiated(&self, side: Side) -> bool {
         self.conn(side).is_multipath_negotiated()
-    }
-
-    /// Simulate a passive migration by incrementing the last octet of the ip.
-    #[track_caller]
-    pub(super) fn passive_migration(&mut self, side: Side) -> SocketAddr {
-        let address = match side {
-            Side::Client => &mut self.pair.client.addr,
-            Side::Server => &mut self.pair.server.addr,
-        };
-
-        match address {
-            SocketAddr::V4(socket_addr_v4) => {
-                let [a, b, c, d] = socket_addr_v4.ip().octets();
-                socket_addr_v4.set_ip(Ipv4Addr::new(a, b, c, d.overflowing_add(1).0));
-            }
-            SocketAddr::V6(socket_addr_v6) => {
-                let [a, b, c, d, e, f, g, h] = socket_addr_v6.ip().segments();
-                socket_addr_v6.set_ip(Ipv6Addr::new(a, b, c, d, e, f, g, h.overflowing_add(1).0));
-            }
-        }
-
-        let new_port = address.port().checked_add(1).unwrap();
-        address.set_port(new_port);
-        *address
     }
 
     pub(super) fn current_mtu(&self, side: Side) -> u16 {
@@ -1321,6 +1273,8 @@ impl TokenLog for SimpleTokenLog {
 /// This allows implementing different routing strategies.
 pub(super) trait PairRoutingTable: std::any::Any {
     /// Routes a datagram from client to server.
+    ///
+    /// `client_addr` is the current primary address of the client.
     fn route_client_to_server(&mut self, transmit: &Transmit) -> RoutingDecision;
     /// Routes a datagram from server to client.
     fn route_server_to_client(&mut self, transmit: &Transmit) -> RoutingDecision;
@@ -1339,6 +1293,74 @@ pub(super) enum RoutingDecision {
         dst: Option<IpAddr>,
     },
     Drop,
+}
+
+/// Routing that is essentially a direct link between the client and server.
+///
+/// Packets set to the wrong destination are still dropped however. But the source IP they
+/// are sent from is ignored, so it is only a primitive kind of routing.
+///
+/// You may change the addresses of either to make it look like they migrated to a new
+/// address.
+pub(super) struct BasicRouting {
+    pub(super) client_addr: SocketAddr,
+    pub(super) server_addr: SocketAddr,
+}
+
+impl BasicRouting {
+    /// Simulate a passive migration, remaining in the same subnet.
+    ///
+    /// This increments the last octet of the IP and the port
+    pub(super) fn passive_migration(&mut self, side: Side) -> SocketAddr {
+        let address = match side {
+            Side::Client => &mut self.client_addr,
+            Side::Server => &mut self.server_addr,
+        };
+        let prev_addr = *address;
+        match address {
+            SocketAddr::V4(socket_addr_v4) => {
+                let [a, b, c, d] = socket_addr_v4.ip().octets();
+                let mut d = d.overflowing_add(1).0;
+                if d == 0 {
+                    // skip the (potential) broadcast address
+                    d = d + 1;
+                }
+                socket_addr_v4.set_ip(Ipv4Addr::new(a, b, c, d));
+            }
+            SocketAddr::V6(socket_addr_v6) => {
+                let [a, b, c, d, e, f, g, h] = socket_addr_v6.ip().segments();
+                socket_addr_v6.set_ip(Ipv6Addr::new(a, b, c, d, e, f, g, h.overflowing_add(1).0));
+            }
+        }
+        let new_port = address.port().checked_add(1).unwrap();
+        address.set_port(new_port);
+        info!(?side, ?prev_addr, new_addr = ?address, "passive migration");
+        *address
+    }
+}
+
+impl PairRoutingTable for BasicRouting {
+    fn route_client_to_server(&mut self, transmit: &Transmit) -> RoutingDecision {
+        if transmit.destination == self.server_addr {
+            RoutingDecision::Deliver {
+                src: self.client_addr,
+                dst: Some(transmit.destination.ip()),
+            }
+        } else {
+            RoutingDecision::Drop
+        }
+    }
+
+    fn route_server_to_client(&mut self, transmit: &Transmit) -> RoutingDecision {
+        if transmit.destination == self.client_addr {
+            RoutingDecision::Deliver {
+                src: self.server_addr,
+                dst: Some(transmit.destination.ip()),
+            }
+        } else {
+            RoutingDecision::Drop
+        }
+    }
 }
 
 /// Set of uni-directional links between interfaces of a client and server.

@@ -22,6 +22,8 @@ use crate::{
     },
 };
 
+use super::BasicRouting;
+
 // These TransportConfig constants are designed to match iroh for now.
 const MAX_MULTIPATH_PATHS: u32 = 8;
 const MAX_QNT_ADDRS: u8 = 32;
@@ -88,13 +90,33 @@ enum Extensions {
 /// The advantage of using this is very efficient shrinking: The first attempt at shrinking the
 /// routing setup will be to reduce the routing setup to nothing or a simple symmetric one.
 #[derive(Debug, test_strategy::Arbitrary)]
-enum RoutingSetup {
-    /// Set [`Pair::routes`] to `None`
-    None,
+pub(super) enum RoutingSetup {
+    /// Set [`Pair::routes`] to [`BasicRouting`]
+    Basic,
     /// Use [`RoutingTable::simple_symmetric`] with the default [`CLIENT_ADDRS`] and [`SERVER_ADDRS`].
     SimpleSymmetric,
     /// Use given generated routing table.
     Complex(#[strategy(routing_table())] RoutingTable),
+}
+
+impl RoutingSetup {
+    fn routing(&self) -> RoutingTableKind {
+        match self {
+            RoutingSetup::Basic => RoutingTableKind::Basic,
+            RoutingSetup::SimpleSymmetric | RoutingSetup::Complex(_) => RoutingTableKind::OG,
+        }
+    }
+}
+
+/// Which [`PairRoutingTable`] is in use.
+///
+/// We need this to know how to downcast it.
+#[derive(Debug, Copy, Clone)]
+pub(super) enum RoutingTableKind {
+    /// [`BasicRouting`]
+    Basic,
+    /// [`RoutingTable`]
+    OG,
 }
 
 /// Which seed to use in the test setup.
@@ -159,19 +181,22 @@ impl PairSetup {
         // Add routing, if enabled
 
         match self.routing_setup {
-            RoutingSetup::None => {
-                pair.routes = None;
+            RoutingSetup::Basic => {
+                pair.routes = Box::new(BasicRouting {
+                    client_addr: pair.client.addr,
+                    server_addr: pair.server.addr,
+                });
             }
             RoutingSetup::SimpleSymmetric => {
                 let routes = RoutingTable::simple_symmetric(CLIENT_ADDRS, SERVER_ADDRS);
                 pair.client.addr = routes.client_addr(0).unwrap();
                 pair.server.addr = routes.server_addr(0).unwrap();
-                pair.routes = Some(Box::new(routes));
+                pair.routes = Box::new(routes);
             }
             RoutingSetup::Complex(routes) => {
                 pair.client.addr = routes.client_addr(0).unwrap();
                 pair.server.addr = routes.server_addr(0).unwrap();
-                pair.routes = Some(Box::new(routes));
+                pair.routes = Box::new(routes);
             }
         }
 
@@ -203,8 +228,10 @@ fn random_interaction(
     setup: PairSetup,
     #[strategy(vec(any::<TestOp>(), 0..100))] interactions: Vec<TestOp>,
 ) {
+    let routing = setup.routing_setup.routing();
     let (mut pair, client_config) = setup.run("random_interaction");
-    let (client_ch, server_ch) = run_random_interaction(&mut pair, interactions, client_config);
+    let (client_ch, server_ch) =
+        run_random_interaction(routing, &mut pair, interactions, client_config);
 
     prop_assert!(!pair.drive_bounded(1000), "connection never became idle");
     prop_assert!(allowed_error(poll_to_close(
@@ -328,7 +355,8 @@ fn regression_unset_packet_acked() {
 
     let _guard = subscribe();
     let (mut pair, client_config) = setup.run(prefix);
-    let (client_ch, server_ch) = run_random_interaction(&mut pair, interactions, client_config);
+    let (client_ch, server_ch) =
+        run_random_interaction(RoutingTableKind::OG, &mut pair, interactions, client_config);
 
     assert!(!pair.drive_bounded(1000), "connection never became idle");
     assert!(allowed_error(poll_to_close(
@@ -367,7 +395,8 @@ fn regression_invalid_key() {
 
     let _guard = subscribe();
     let (mut pair, client_config) = setup.run(prefix);
-    let (client_ch, server_ch) = run_random_interaction(&mut pair, interactions, client_config);
+    let (client_ch, server_ch) =
+        run_random_interaction(RoutingTableKind::OG, &mut pair, interactions, client_config);
 
     assert!(!pair.drive_bounded(1000), "connection never became idle");
     assert!(allowed_error(poll_to_close(
@@ -418,7 +447,8 @@ fn regression_invalid_key2() {
 
     let _guard = subscribe();
     let (mut pair, client_config) = setup.run(prefix);
-    let (client_ch, server_ch) = run_random_interaction(&mut pair, interactions, client_config);
+    let (client_ch, server_ch) =
+        run_random_interaction(RoutingTableKind::OG, &mut pair, interactions, client_config);
 
     assert!(!pair.drive_bounded(1000), "connection never became idle");
     assert!(allowed_error(poll_to_close(
@@ -452,7 +482,8 @@ fn regression_key_update_error() {
 
     let _guard = subscribe();
     let (mut pair, client_config) = setup.run(prefix);
-    let (client_ch, server_ch) = run_random_interaction(&mut pair, interactions, client_config);
+    let (client_ch, server_ch) =
+        run_random_interaction(RoutingTableKind::OG, &mut pair, interactions, client_config);
 
     assert!(!pair.drive_bounded(1000), "connection never became idle");
     assert!(allowed_error(poll_to_close(
@@ -491,7 +522,8 @@ fn regression_never_idle() {
 
     let _guard = subscribe();
     let (mut pair, client_config) = setup.run(prefix);
-    let (client_ch, server_ch) = run_random_interaction(&mut pair, interactions, client_config);
+    let (client_ch, server_ch) =
+        run_random_interaction(RoutingTableKind::OG, &mut pair, interactions, client_config);
 
     assert!(!pair.drive_bounded(1000), "connection never became idle");
     assert!(allowed_error(poll_to_close(
@@ -532,7 +564,8 @@ fn regression_never_idle2() {
 
     let _guard = subscribe();
     let (mut pair, client_config) = setup.run(prefix);
-    let (client_ch, server_ch) = run_random_interaction(&mut pair, interactions, client_config);
+    let (client_ch, server_ch) =
+        run_random_interaction(RoutingTableKind::OG, &mut pair, interactions, client_config);
 
     // We needed to increase the bounds. It eventually times out.
     assert!(!pair.drive_bounded(1000), "connection never became idle");
@@ -574,7 +607,8 @@ fn regression_packet_number_space_missing() {
 
     let _guard = subscribe();
     let (mut pair, client_config) = setup.run(prefix);
-    let (client_ch, server_ch) = run_random_interaction(&mut pair, interactions, client_config);
+    let (client_ch, server_ch) =
+        run_random_interaction(RoutingTableKind::OG, &mut pair, interactions, client_config);
 
     assert!(!pair.drive_bounded(1000), "connection never became idle");
     assert!(allowed_error(poll_to_close(
@@ -608,7 +642,8 @@ fn regression_peer_failed_to_respond_with_path_abandon() {
 
     let _guard = subscribe();
     let (mut pair, client_config) = setup.run(prefix);
-    let (client_ch, server_ch) = run_random_interaction(&mut pair, interactions, client_config);
+    let (client_ch, server_ch) =
+        run_random_interaction(RoutingTableKind::OG, &mut pair, interactions, client_config);
 
     assert!(!pair.drive_bounded(1000), "connection never became idle");
     assert!(allowed_error(poll_to_close(
@@ -652,7 +687,8 @@ fn regression_peer_failed_to_respond_with_path_abandon2() {
 
     let _guard = subscribe();
     let (mut pair, client_config) = setup.run(prefix);
-    let (client_ch, server_ch) = run_random_interaction(&mut pair, interactions, client_config);
+    let (client_ch, server_ch) =
+        run_random_interaction(RoutingTableKind::OG, &mut pair, interactions, client_config);
 
     assert!(!pair.drive_bounded(1000), "connection never became idle");
     assert!(allowed_error(poll_to_close(
@@ -731,7 +767,8 @@ fn regression_path_validation() {
 
     let _guard = subscribe();
     let (mut pair, client_config) = setup.run(prefix);
-    let (client_ch, server_ch) = run_random_interaction(&mut pair, interactions, client_config);
+    let (client_ch, server_ch) =
+        run_random_interaction(RoutingTableKind::OG, &mut pair, interactions, client_config);
 
     assert!(!pair.drive_bounded(1000), "connection never became idle");
     assert!(allowed_error(poll_to_close(
@@ -788,7 +825,8 @@ fn regression_never_idle3() {
 
     let _guard = subscribe();
     let (mut pair, client_config) = setup.run(prefix);
-    let (client_ch, server_ch) = run_random_interaction(&mut pair, interactions, client_config);
+    let (client_ch, server_ch) =
+        run_random_interaction(RoutingTableKind::OG, &mut pair, interactions, client_config);
 
     assert!(!pair.drive_bounded(1000), "connection never became idle");
     assert!(allowed_error(poll_to_close(
@@ -827,7 +865,8 @@ fn regression_frame_encoding_error() {
 
     let _guard = subscribe();
     let (mut pair, client_config) = setup.run(prefix);
-    let (client_ch, server_ch) = run_random_interaction(&mut pair, interactions, client_config);
+    let (client_ch, server_ch) =
+        run_random_interaction(RoutingTableKind::OG, &mut pair, interactions, client_config);
 
     assert!(!pair.drive_bounded(1000), "connection never became idle");
     assert!(allowed_error(poll_to_close(
@@ -859,7 +898,8 @@ fn regression_there_should_be_at_least_one_path() {
 
     let _guard = subscribe();
     let (mut pair, client_config) = setup.run(prefix);
-    let (client_ch, server_ch) = run_random_interaction(&mut pair, interactions, client_config);
+    let (client_ch, server_ch) =
+        run_random_interaction(RoutingTableKind::OG, &mut pair, interactions, client_config);
 
     assert!(!pair.drive_bounded(1000), "connection never became idle");
     assert!(allowed_error(poll_to_close(
@@ -911,7 +951,8 @@ fn regression_conn_never_idle5() {
 
     let _guard = subscribe();
     let (mut pair, client_config) = setup.run(prefix);
-    let (client_ch, server_ch) = run_random_interaction(&mut pair, interactions, client_config);
+    let (client_ch, server_ch) =
+        run_random_interaction(RoutingTableKind::OG, &mut pair, interactions, client_config);
 
     assert!(!pair.drive_bounded(1000), "connection never became idle");
     assert!(allowed_error(poll_to_close(
@@ -979,7 +1020,8 @@ fn regression_peer_ignored_path_abandon() {
 
     let _guard = subscribe();
     let (mut pair, client_config) = setup.run(prefix);
-    let (client_ch, server_ch) = run_random_interaction(&mut pair, interactions, client_config);
+    let (client_ch, server_ch) =
+        run_random_interaction(RoutingTableKind::OG, &mut pair, interactions, client_config);
 
     assert!(!pair.drive_bounded(1000), "connection never became idle");
     assert!(allowed_error(poll_to_close(
@@ -1068,7 +1110,8 @@ fn regression_never_idle4() {
 
     let _guard = subscribe();
     let (mut pair, client_config) = setup.run(prefix);
-    let (client_ch, server_ch) = run_random_interaction(&mut pair, interactions, client_config);
+    let (client_ch, server_ch) =
+        run_random_interaction(RoutingTableKind::OG, &mut pair, interactions, client_config);
 
     assert!(!pair.drive_bounded(1000), "connection never became idle");
     assert!(allowed_error(poll_to_close(
@@ -1130,7 +1173,8 @@ fn regression_infinite_loop() {
 
     let _guard = subscribe();
     let (mut pair, client_config) = setup.run(prefix);
-    let (client_ch, server_ch) = run_random_interaction(&mut pair, interactions, client_config);
+    let (client_ch, server_ch) =
+        run_random_interaction(RoutingTableKind::OG, &mut pair, interactions, client_config);
 
     // This bug originally occurred at exactly 4540 iterations.
     // At 4539 it still finishes (but fails the assertion).
@@ -1191,7 +1235,8 @@ fn regression_qnt_revalidating_path_forever() {
 
     let _guard = subscribe();
     let (mut pair, client_config) = setup.run(prefix);
-    let (client_ch, server_ch) = run_random_interaction(&mut pair, interactions, client_config);
+    let (client_ch, server_ch) =
+        run_random_interaction(RoutingTableKind::OG, &mut pair, interactions, client_config);
 
     assert!(!pair.drive_bounded(1000), "connection never became idle");
     assert!(allowed_error(poll_to_close(
