@@ -193,21 +193,33 @@ impl Pair {
                 self.spins += (spin == self.last_spin) as u64;
                 self.last_spin = spin;
             }
-            let client_addr = match self.routes.as_mut() {
+            let outcome = match self.routes.as_mut() {
                 Some(table) => table.route_client_to_server(&packet),
-                None => (self.server.addr == packet.destination).then_some(self.client.addr),
+                None => {
+                    if self.server.addr == packet.destination {
+                        RoutingDecision::Deliver {
+                            src: self.client.addr,
+                            dst: Some(packet.destination.ip()),
+                        }
+                    } else {
+                        RoutingDecision::Drop
+                    }
+                }
             };
-            if let Some(client_addr) = client_addr {
-                let ecn = set_congestion_experienced(packet.ecn, self.congestion_experienced);
-                self.server.inbound.push_back(Inbound {
-                    recv_time: self.time + self.latency,
-                    ecn,
-                    packet: buffer.as_ref().into(),
-                    remote: client_addr,
-                    dst_ip: Some(packet.destination.ip()),
-                });
-            } else {
-                debug!(?packet.destination, "no route from client to server for packet");
+            match outcome {
+                RoutingDecision::Deliver { src, dst } => {
+                    let ecn = set_congestion_experienced(packet.ecn, self.congestion_experienced);
+                    self.server.inbound.push_back(Inbound {
+                        recv_time: self.time + self.latency,
+                        ecn,
+                        packet: buffer.as_ref().into(),
+                        remote: src,
+                        dst_ip: dst,
+                    });
+                }
+                RoutingDecision::Drop => {
+                    debug!(?packet.destination, "no route from client to server for packet");
+                }
             }
         }
     }
@@ -222,21 +234,33 @@ impl Pair {
                 info!(packet_size, "dropping packet (max size exceeded)");
                 continue;
             }
-            let server_addr = match self.routes.as_mut() {
+            let outcome = match self.routes.as_mut() {
                 Some(table) => table.route_server_to_client(&packet),
-                None => (self.client.addr == packet.destination).then_some(self.server.addr),
+                None => {
+                    if self.client.addr == packet.destination {
+                        RoutingDecision::Deliver {
+                            src: self.server.addr,
+                            dst: Some(packet.destination.ip()),
+                        }
+                    } else {
+                        RoutingDecision::Drop
+                    }
+                }
             };
-            if let Some(server_addr) = server_addr {
-                let ecn = set_congestion_experienced(packet.ecn, self.congestion_experienced);
-                self.client.inbound.push_back(Inbound {
-                    recv_time: self.time + self.latency,
-                    ecn,
-                    packet: buffer.as_ref().into(),
-                    remote: server_addr,
-                    dst_ip: Some(packet.destination.ip()),
-                });
-            } else {
-                debug!(?packet.destination, "no route from server to client for packet");
+            match outcome {
+                RoutingDecision::Deliver { src, dst } => {
+                    let ecn = set_congestion_experienced(packet.ecn, self.congestion_experienced);
+                    self.client.inbound.push_back(Inbound {
+                        recv_time: self.time + self.latency,
+                        ecn,
+                        packet: buffer.as_ref().into(),
+                        remote: src,
+                        dst_ip: dst,
+                    });
+                }
+                RoutingDecision::Drop => {
+                    debug!(?packet.destination, "no route from server to client for packet");
+                }
             }
         }
     }
@@ -1292,15 +1316,24 @@ impl TokenLog for SimpleTokenLog {
 /// This allows implementing different routing strategies.
 pub(super) trait PairRoutingTable: std::any::Any {
     /// Routes a datagram from client to server.
-    ///
-    /// Returns the address the server will observe as the sender of the datagram. Or `None`
-    /// if there is no open link.
-    fn route_client_to_server(&mut self, transmit: &Transmit) -> Option<SocketAddr>;
+    fn route_client_to_server(&mut self, transmit: &Transmit) -> RoutingDecision;
     /// Routes a datagram from server to client.
-    ///
-    /// Returns the address the client will observe as the sender of the datagram. Or `None`
-    /// if there is no open link.
-    fn route_server_to_client(&mut self, transmit: &Transmit) -> Option<SocketAddr>;
+    fn route_server_to_client(&mut self, transmit: &Transmit) -> RoutingDecision;
+}
+
+#[derive(Debug)]
+pub(super) enum RoutingDecision {
+    Deliver {
+        /// The source address of the delivered packet.
+        ///
+        /// In other words this becomes the [`FourTuple::remote`] for the receiver.
+        src: SocketAddr,
+        /// The destination IP address of the delivered packet.
+        ///
+        /// In other words this becomes the [`FourTuple::local_ip`] for the receiver.
+        dst: Option<IpAddr>,
+    },
+    Drop,
 }
 
 /// Set of uni-directional links between interfaces of a client and server.
@@ -1406,22 +1439,38 @@ impl RoutingTable {
 }
 
 impl PairRoutingTable for RoutingTable {
-    fn route_client_to_server(&mut self, transmit: &Transmit) -> Option<SocketAddr> {
-        let (_, client_addr_idx) = self
+    fn route_client_to_server(&mut self, transmit: &Transmit) -> RoutingDecision {
+        let Some((_, client_addr_idx)) = self
             .server_routes
             .iter()
-            .find(|(addr, _)| *addr == transmit.destination)?;
-        let (client_addr, _) = self.client_routes.get(*client_addr_idx)?;
-        Some(*client_addr)
+            .find(|(addr, _)| *addr == transmit.destination)
+        else {
+            return RoutingDecision::Drop;
+        };
+        let Some((client_addr, _)) = self.client_routes.get(*client_addr_idx) else {
+            return RoutingDecision::Drop;
+        };
+        RoutingDecision::Deliver {
+            src: *client_addr,
+            dst: Some(transmit.destination.ip()),
+        }
     }
 
-    fn route_server_to_client(&mut self, transmit: &Transmit) -> Option<SocketAddr> {
-        let (_, server_addr_idx) = self
+    fn route_server_to_client(&mut self, transmit: &Transmit) -> RoutingDecision {
+        let Some((_, server_addr_idx)) = self
             .client_routes
             .iter()
-            .find(|(addr, _)| *addr == transmit.destination)?;
-        let (server_addr, _) = self.server_routes.get(*server_addr_idx)?;
-        Some(*server_addr)
+            .find(|(addr, _)| *addr == transmit.destination)
+        else {
+            return RoutingDecision::Drop;
+        };
+        let Some((server_addr, _)) = self.server_routes.get(*server_addr_idx) else {
+            return RoutingDecision::Drop;
+        };
+        RoutingDecision::Deliver {
+            src: *server_addr,
+            dst: Some(transmit.destination.ip()),
+        }
     }
 }
 
@@ -1499,7 +1548,7 @@ impl PairRoutingTable for SimpleFirewallRoutingTable {
     /// If there is no [`Transmit::src_ip`] then this routing table selects one based on the
     /// destination, if reachable. Otherwise if the `src_ip` does not match an open link the
     /// datagram is blocked.
-    fn route_client_to_server(&mut self, transmit: &Transmit) -> Option<SocketAddr> {
+    fn route_client_to_server(&mut self, transmit: &Transmit) -> RoutingDecision {
         // Find the address this datagram SHOULD have been sent on to be able to reach the
         // destination.
         let link_src = if transmit.destination == Self::SERVER_DIRECT_ADDR {
@@ -1512,7 +1561,7 @@ impl PairRoutingTable for SimpleFirewallRoutingTable {
                 ?transmit.destination,
                 "transmit dropped: unknown destination (network unreachable)",
             );
-            return None;
+            return RoutingDecision::Drop;
         };
 
         // If the datagram is NOT sent from this source then it can't be sent.
@@ -1522,7 +1571,7 @@ impl PairRoutingTable for SimpleFirewallRoutingTable {
                 ?transmit.destination,
                 "transmit dropped: sent from wrong source (network unreachable)",
             );
-            return None;
+            return RoutingDecision::Drop;
         }
 
         // Open the local firewall for outgoing packet.
@@ -1537,11 +1586,14 @@ impl PairRoutingTable for SimpleFirewallRoutingTable {
                 ?transmit.destination,
                 "transmit dropped: blocked by server firewall",
             );
-            return None;
+            return RoutingDecision::Drop;
         }
 
         // Allow the datagram to be delivered.
-        Some(link_src)
+        RoutingDecision::Deliver {
+            src: link_src,
+            dst: Some(transmit.destination.ip()),
+        }
     }
 
     /// Routes a datagram from server to client.
@@ -1552,7 +1604,7 @@ impl PairRoutingTable for SimpleFirewallRoutingTable {
     /// If there is no [`Transmit::src_ip`] then this routing table selects one based on the
     /// destination, if reachable. Otherwise if the `src_ip` does not match an open link the
     /// datagram is blocked.
-    fn route_server_to_client(&mut self, transmit: &Transmit) -> Option<SocketAddr> {
+    fn route_server_to_client(&mut self, transmit: &Transmit) -> RoutingDecision {
         // Find the address this datagram SHOULD have been sent on to be able to reach the
         // destination.
         let link_src = if transmit.destination == Self::CLIENT_DIRECT_ADDR {
@@ -1565,7 +1617,7 @@ impl PairRoutingTable for SimpleFirewallRoutingTable {
                 ?transmit.destination,
                 "transmit dropped: unknown destination (network unreachable)",
             );
-            return None;
+            return RoutingDecision::Drop;
         };
 
         // If the datagram is NOT sent from this source then it can't be sent.
@@ -1575,7 +1627,7 @@ impl PairRoutingTable for SimpleFirewallRoutingTable {
                 ?transmit.destination,
                 "transmit dropped: sent from wrong source (network unreachable)",
             );
-            return None;
+            return RoutingDecision::Drop;
         }
 
         // Open the local firewall for outgoing packet.
@@ -1590,10 +1642,13 @@ impl PairRoutingTable for SimpleFirewallRoutingTable {
                 ?transmit.destination,
                 "transmit dropped: blocked by client firewall",
             );
-            return None;
+            return RoutingDecision::Drop;
         }
 
         // Allow the datagram to be delivered.
-        Some(link_src)
+        RoutingDecision::Deliver {
+            src: link_src,
+            dst: Some(transmit.destination.ip()),
+        }
     }
 }
