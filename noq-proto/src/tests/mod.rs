@@ -4346,7 +4346,7 @@ fn timely_graceful_close() {
     let mut pair = ConnPair::connect_with(pair, client_config());
 
     let start = pair.time;
-    pair.close(Client, 0u32.into(), b"done!");
+    pair.close(Client, 0, b"done!");
 
     assert!(!pair.is_draining(Client));
     assert!(!pair.is_draining(Server));
