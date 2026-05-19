@@ -4341,8 +4341,9 @@ fn timely_graceful_close() {
     const ONE_WAY_LATENCY: Duration = Duration::from_millis(100);
 
     let _guard = subscribe();
-    let mut pair = ConnPair::default();
+    let mut pair = Pair::default();
     pair.latency = ONE_WAY_LATENCY;
+    let mut pair = ConnPair::connect_with(pair, client_config());
 
     let start = pair.time;
     pair.close(Client, 0u32.into(), b"done!");
