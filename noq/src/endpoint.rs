@@ -368,15 +368,15 @@ impl Endpoint {
 
     /// Waits for all connections on the endpoint to be cleanly shut down and drained.
     ///
-    /// This is equivalent to [`wait_idle()`] with additionally waiting for the connections to be
+    /// This is equivalent to [`wait_all_draining()`] with additionally waiting for the connections to be
     /// drained. Please see its documentation for more information.
     ///
-    /// Use `wait_drained()` in favor of `wait_idle()` if you care about waiting for the
+    /// Use `wait_idle()` in favor of `wait_all_draining()` if you care about waiting for the
     /// [`Connection`] structs to be dropped.
     ///
-    /// [`wait_idle()`]: Self::wait_idle
+    /// [`wait_all_draining()`]: Self::wait_all_draining
     /// [`Connection`]: crate::Connection
-    pub async fn wait_drained(&self) {
+    pub async fn wait_idle(&self) {
         loop {
             {
                 let endpoint = &mut *self.inner.state.lock().unwrap();
@@ -399,15 +399,15 @@ impl Endpoint {
     /// Does not proactively close existing connections or cause incoming connections to be
     /// rejected. Consider calling [`close()`] if that is desired.
     ///
-    /// Unlike [`wait_drained()`], this doesn't wait for the full draining period, so it can't be
+    /// Unlike [`wait_idle()`], this doesn't wait for the full draining period, so it can't be
     /// used to wait for all now-idle [`Connection`]s to be dropped.
     ///
     /// See also this section in the QUIC RFC: <https://datatracker.ietf.org/doc/html/rfc9000#section-10.2-6>
     ///
     /// [`close()`]: Self::close
-    /// [`wait_drained()`]: Self::wait_drained
+    /// [`wait_idle()`]: Self::wait_idle
     /// [`Connection`]: crate::Connection
-    pub async fn wait_idle(&self) {
+    pub async fn wait_all_draining(&self) {
         loop {
             {
                 let endpoint = &mut *self.inner.state.lock().unwrap();
@@ -415,7 +415,7 @@ impl Endpoint {
                     break;
                 }
                 // Construct future while lock is held to avoid race
-                self.inner.shared.draining.notified()
+                self.inner.shared.all_draining.notified()
             }
             .await;
         }
@@ -589,7 +589,7 @@ pub(crate) struct Shared {
     /// Notifies subscribers when *all* connections have entered the draining state.
     ///
     /// This powers the `Endpoint::wait_idle` API.
-    draining: Notify,
+    all_draining: Notify,
     /// Notifies subscribesr when *all* connections have been dropped.
     ///
     /// This powers the `Endpoint::wait_drained` API.
@@ -647,7 +647,7 @@ impl State {
             if event.is_draining() {
                 self.recv_state.connections.active_connections -= 1;
                 if self.recv_state.connections.active_connections == 0 {
-                    shared.draining.notify_waiters();
+                    shared.all_draining.notify_waiters();
                 }
             } else if event.is_drained() {
                 self.recv_state.connections.senders.remove(&ch);
@@ -849,7 +849,7 @@ impl EndpointRef {
         Self(Arc::new(EndpointInner {
             shared: Shared {
                 incoming: Notify::new(),
-                draining: Notify::new(),
+                all_draining: Notify::new(),
                 idle: Notify::new(),
                 ref_count: AtomicUsize::new(0),
             },

@@ -79,7 +79,7 @@ async fn check_post_quantum_key_exchange(min_mtu: u16) {
     let _ = connection.accept_uni().await;
 
     // Make sure the server has a chance to clean up
-    endpoint.wait_idle().await;
+    endpoint.wait_all_draining().await;
     jh.await.unwrap();
 }
 

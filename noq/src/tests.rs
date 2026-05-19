@@ -408,7 +408,7 @@ async fn zero_rtt() {
 
     drop((stream, connection));
 
-    endpoint.wait_idle().await;
+    endpoint.wait_all_draining().await;
 }
 
 #[test]
@@ -583,7 +583,7 @@ fn run_echo(args: EchoArgs) {
                     tokio::spawn(echo(stream));
                 }
             });
-            server.wait_idle().await;
+            server.wait_all_draining().await;
         });
 
         info!("connecting from {} to {}", args.client_addr, server_addr);
@@ -614,7 +614,7 @@ fn run_echo(args: EchoArgs) {
                     assert_eq!(data[..], msg[..], "Data mismatch");
                 }
                 new_conn.close(0u32.into(), b"done");
-                client.wait_idle().await;
+                client.wait_all_draining().await;
             }
             .instrument(error_span!("client")),
         );
@@ -1207,7 +1207,7 @@ async fn weak_connection_handle() {
         assert!(weak.is_alive());
         drop(conn);
         // wait to ensure the connection is fully cleaned up
-        endpoint2.wait_drained().await;
+        endpoint2.wait_idle().await;
         assert!(!weak.is_alive());
     });
     let client_task = tokio::spawn(async move {
@@ -1257,7 +1257,7 @@ async fn dropped_connection_cleans_up() {
         },
         async { endpoint.accept().await.unwrap().await.unwrap() }
     );
-    endpoint.wait_idle().await;
+    endpoint.wait_all_draining().await;
 }
 
 /// Test that accessing stats from `Path` works as expected.
@@ -1343,7 +1343,7 @@ async fn path_clone_stats_after_abandon() {
 
         // After dropping the path, upgrading fails after the endpoint cleared the connection.
         drop(path_clone);
-        client.wait_drained().await;
+        client.wait_idle().await;
         assert!(weak_path.upgrade().is_none());
     }
     .instrument(info_span!("client"));
@@ -1477,7 +1477,7 @@ async fn close_path() -> TestResult {
 
         test_done_tx.send(()).expect("not dropped");
 
-        server.wait_idle().await;
+        server.wait_all_draining().await;
 
         TestResult::Ok(())
     }
@@ -1523,7 +1523,7 @@ async fn close_path() -> TestResult {
         test_done_rx.await.expect("not dropped");
 
         client.close(0u8.into(), b"test finished");
-        client.wait_idle().await;
+        client.wait_all_draining().await;
 
         TestResult::Ok(())
     }

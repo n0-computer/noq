@@ -35,7 +35,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
     );
 
     // Make sure the server has a chance to clean up
-    client.wait_idle().await;
+    client.wait_all_draining().await;
 
     Ok(())
 }

@@ -66,7 +66,7 @@ async fn run_client(server_addr: SocketAddr) -> Result<(), Box<dyn Error + Send 
     // Dropping handles allows the corresponding objects to automatically shut down
     drop(connection);
     // Make sure the server has a chance to clean up
-    endpoint.wait_idle().await;
+    endpoint.wait_all_draining().await;
 
     Ok(())
 }
