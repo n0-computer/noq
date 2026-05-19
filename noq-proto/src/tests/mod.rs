@@ -1409,9 +1409,7 @@ fn close_from_migrated_address() {
     pair.drive();
 
     // Change client address - server will see this as migration
-    pair.client.addr = SocketAddr::new(Ipv4Addr::new(127, 0, 0, 1).into(), 1);
-    assert_ne!(pair.client.addr, Pair::CLIENT_ADDR);
-    assert_ne!(pair.client.addr, Pair::SERVER_ADDR);
+    let client_addr = pair.routes.mut_basic().passive_migration(Client);
 
     // Client closes connection from the NEW address.  The server will see the migration and
     // close the connection on the new address.
@@ -1431,7 +1429,7 @@ fn close_from_migrated_address() {
     );
 
     let path = pair.conn(Server).network_path(PathId::ZERO).unwrap();
-    assert_eq!(path.remote(), pair.client.addr);
+    assert_eq!(path.remote(), client_addr);
 }
 
 #[test]
@@ -1463,9 +1461,7 @@ fn migration() {
 
     let client_stats_after_connect = pair.client_conn_mut(client_ch).stats();
 
-    pair.client.addr = SocketAddr::new(Ipv4Addr::new(127, 0, 0, 1).into(), 1);
-    assert_ne!(pair.client.addr, Pair::CLIENT_ADDR);
-    assert_ne!(pair.client.addr, Pair::SERVER_ADDR);
+    let client_addr = pair.routes.mut_basic().passive_migration(Client);
     pair.client_conn_mut(client_ch).ping();
 
     // Assert that just receiving the ping message is accounted into the servers
@@ -1480,7 +1476,7 @@ fn migration() {
         pair.server_conn_mut(server_ch)
             .network_path(PathId::ZERO)
             .map(|addrs| addrs.remote),
-        Ok(pair.client.addr)
+        Ok(client_addr)
     );
 
     // Assert that the client's response to the PATH_CHALLENGE was an IMMEDIATE_ACK, instead of a
@@ -1583,7 +1579,7 @@ fn regression_path_validation_stale_local_after_passive_migration() {
     // only *after* passive migration has changed the client's observed local IP.
     pair.client.inbound.clear();
 
-    pair.passive_migration(Client);
+    pair.routes.mut_basic().passive_migration(Client);
 
     // Send a ping so the server detects the migration and starts routing to the new ip.
     pair.conn_mut(Client).ping();
@@ -2693,9 +2689,7 @@ fn migrate_detects_new_mtu_and_respects_original_peer_max_udp_payload_size() {
 
     // Migrate client to a different port (and simulate a higher path MTU)
     pair.mtu = 1500;
-    pair.client.addr = SocketAddr::new(Ipv4Addr::new(127, 0, 0, 1).into(), 1);
-    assert_ne!(pair.client.addr, Pair::CLIENT_ADDR);
-    assert_ne!(pair.client.addr, Pair::SERVER_ADDR);
+    let client_addr = pair.routes.mut_basic().passive_migration(Client);
     pair.client_conn_mut(client_ch).ping();
     pair.drive();
 
@@ -2704,7 +2698,7 @@ fn migrate_detects_new_mtu_and_respects_original_peer_max_udp_payload_size() {
         pair.server_conn_mut(server_ch)
             .network_path(PathId::ZERO)
             .map(|addrs| addrs.remote),
-        Ok(pair.client.addr)
+        Ok(client_addr)
     );
 
     // MTU detection has successfully run after migrating
@@ -3977,14 +3971,16 @@ fn address_discovery_rebind_retransmission() {
     let time = pair.time;
     pair.client_conn_mut(client_ch)
         .handle_network_change(None, time);
-    pair.client
-        .addr
-        .set_port(pair.client.addr.port().overflowing_add(1).0);
+    let client_addr = pair.routes.mut_basic().passive_migration(Client);
 
     pair.drive();
     let conn = pair.client_conn_mut(client_ch);
     assert_matches!(conn.poll(), Some(Event::HandshakeConfirmed));
-    assert_matches!(conn.poll(), Some(Event::Path(PathEvent::ObservedAddr{id: PathId::ZERO, addr})) if addr == pair.client.addr);
+    assert_matches!(
+        conn.poll(),
+        Some(Event::Path(PathEvent::ObservedAddr{id: PathId::ZERO, addr}))
+            if addr == client_addr
+    );
 }
 
 /// Non-multipath: handle_network_change pings for liveness and rotates the CID
@@ -4000,7 +3996,7 @@ fn network_change_single_path_recovery() {
     let cid_seq_before = pair.conn(Client).active_remote_cid_seq();
 
     // Simulate a passive migration (port change) + network change notification
-    pair.passive_migration(Client);
+    pair.routes.mut_basic().passive_migration(Client);
     pair.handle_network_change(Client, None);
 
     // The path should NOT be closed and there should be no path events
