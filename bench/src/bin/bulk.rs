@@ -162,7 +162,7 @@ async fn client(
     // to `Arc`ing them
     connection.close(0u32.into(), b"Benchmark done");
 
-    endpoint.wait_idle().await;
+    endpoint.wait_all_draining().await;
 
     if opt.stats {
         println!("\nClient connection stats:\n{:#?}", connection.stats());

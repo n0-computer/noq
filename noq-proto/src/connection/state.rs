@@ -66,14 +66,20 @@ impl State {
     /// Moves to the drained state.
     ///
     /// Panics if the state was already drained.
-    pub(super) fn move_to_drained(&mut self, error: Option<ConnectionError>) {
-        let (error, is_local) = if let Some(error) = error {
-            (Some(error), false)
+    ///
+    /// Returns whether we were in the draining state before.
+    pub(super) fn move_to_drained(&mut self, error: Option<ConnectionError>) -> bool {
+        let (error, is_local, was_draining) = if let Some(error) = error {
+            (
+                Some(error),
+                false,
+                matches!(self.inner, InnerState::Draining { .. }),
+            )
         } else {
-            let error = match &mut self.inner {
-                InnerState::Draining { error, .. } => error.take(),
+            let (error, was_draining) = match &mut self.inner {
+                InnerState::Draining { error, .. } => (error.take(), true),
                 InnerState::Drained { .. } => panic!("invalid state transition drained -> drained"),
-                InnerState::Closed { error_read, .. } if *error_read => None,
+                InnerState::Closed { error_read, .. } if *error_read => (None, false),
                 InnerState::Closed { remote_reason, .. } => {
                     let error = match remote_reason.clone().into() {
                         ConnectionError::ConnectionClosed(close) => {
@@ -89,14 +95,15 @@ impl State {
                         }
                         e => e,
                     };
-                    Some(error)
+                    (Some(error), false)
                 }
-                InnerState::Handshake(_) | InnerState::Established => None,
+                InnerState::Handshake(_) | InnerState::Established => (None, false),
             };
-            (error, self.is_local_close())
+            (error, self.is_local_close(), was_draining)
         };
         self.inner = InnerState::Drained { error, is_local };
         trace!("connection state: drained");
+        was_draining
     }
 
     /// Moves to a draining state.

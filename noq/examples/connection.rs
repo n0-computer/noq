@@ -49,7 +49,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
     let _ = connection.accept_uni().await;
 
     // Make sure the server has a chance to clean up
-    endpoint.wait_idle().await;
+    endpoint.wait_all_draining().await;
 
     Ok(())
 }
