@@ -4498,7 +4498,7 @@ impl Connection {
                         continue;
                     };
 
-                    debug!(?frame, "processing frame in closed state");
+                    trace!(?frame, "processing frame in closed state");
 
                     self.path_stats
                         .for_path(path_id)
