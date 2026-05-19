@@ -9,7 +9,7 @@ use crate::{
     tests::{Pair, TestEndpoint},
 };
 
-use super::{BasicRouting, RoutingTable, proptests::RoutingTableKind};
+use super::RoutingTable;
 
 #[derive(Debug, Clone, Copy, Arbitrary)]
 pub(super) enum TestOp {
@@ -104,13 +104,7 @@ pub(super) struct State {
 }
 
 impl TestOp {
-    fn run(
-        self,
-        routing: RoutingTableKind,
-        pair: &mut Pair,
-        client: &mut State,
-        server: &mut State,
-    ) -> Option<()> {
+    fn run(self, pair: &mut Pair, client: &mut State, server: &mut State) -> Option<()> {
         let now = pair.time;
         match self {
             Self::Drive { side: Side::Client } => pair.drive_client(),
@@ -142,27 +136,25 @@ impl TestOp {
             Self::PassiveMigration {
                 side: Side::Client,
                 addr_idx,
-            } => match routing {
-                RoutingTableKind::Basic => {
-                    pair.downcast_routes_mut::<BasicRouting>()
-                        .passive_migration(Side::Client);
+            } => match pair.routes {
+                RoutingTable::Basic(ref mut routes) => {
+                    routes.passive_migration(Side::Client);
                 }
-                RoutingTableKind::OG => {
-                    pair.downcast_routes_mut::<RoutingTable>()
-                        .sim_client_migration(addr_idx, inc_last_addr_octet);
+                RoutingTable::SimpleFirewall(_) => unimplemented!(),
+                RoutingTable::ManyToMany(ref mut routes) => {
+                    routes.sim_client_migration(addr_idx, inc_last_addr_octet);
                 }
             },
             Self::PassiveMigration {
                 side: Side::Server,
                 addr_idx,
-            } => match routing {
-                RoutingTableKind::Basic => {
-                    pair.downcast_routes_mut::<BasicRouting>()
-                        .passive_migration(Side::Server);
+            } => match pair.routes {
+                RoutingTable::Basic(ref mut routes) => {
+                    routes.passive_migration(Side::Server);
                 }
-                RoutingTableKind::OG => {
-                    pair.downcast_routes_mut::<RoutingTable>()
-                        .sim_server_migration(addr_idx, inc_last_addr_octet);
+                RoutingTable::SimpleFirewall(_) => unimplemented!(),
+                RoutingTable::ManyToMany(ref mut routes) => {
+                    routes.sim_server_migration(addr_idx, inc_last_addr_octet);
                 }
             },
             Self::OpenPath {
@@ -170,21 +162,16 @@ impl TestOp {
                 status,
                 addr_idx,
             } => {
-                let remote = match routing {
-                    RoutingTableKind::Basic => {
-                        let routes = pair.downcast_routes_ref::<BasicRouting>();
-                        match side {
-                            Side::Client => routes.server_addr,
-                            Side::Server => routes.client_addr,
-                        }
-                    }
-                    RoutingTableKind::OG => {
-                        let routes = pair.downcast_routes_ref::<RoutingTable>();
-                        match side {
-                            Side::Client => routes.server_addr(addr_idx)?,
-                            Side::Server => routes.client_addr(addr_idx)?,
-                        }
-                    }
+                let remote = match pair.routes {
+                    RoutingTable::Basic(ref routes) => match side {
+                        Side::Client => routes.server_addr,
+                        Side::Server => routes.client_addr,
+                    },
+                    RoutingTable::SimpleFirewall(_) => unimplemented!(),
+                    RoutingTable::ManyToMany(ref routes) => match side {
+                        Side::Client => routes.server_addr(addr_idx)?,
+                        Side::Server => routes.client_addr(addr_idx)?,
+                    },
                 };
                 let state = match side {
                     Side::Client => client,
@@ -245,21 +232,16 @@ impl TestOp {
                 conn.close(now, error_code.into(), Bytes::new());
             }
             Self::AddHpAddr { side, addr_idx } => {
-                let address = match routing {
-                    RoutingTableKind::Basic => {
-                        let routes = pair.downcast_routes_ref::<BasicRouting>();
-                        match side {
-                            Side::Client => routes.client_addr,
-                            Side::Server => routes.server_addr,
-                        }
-                    }
-                    RoutingTableKind::OG => {
-                        let routes = pair.downcast_routes_ref::<RoutingTable>();
-                        match side {
-                            Side::Client => routes.client_addr(addr_idx)?,
-                            Side::Server => routes.server_addr(addr_idx)?,
-                        }
-                    }
+                let address = match pair.routes {
+                    RoutingTable::Basic(ref routes) => match side {
+                        Side::Client => routes.client_addr,
+                        Side::Server => routes.server_addr,
+                    },
+                    RoutingTable::SimpleFirewall(_) => unimplemented!(),
+                    RoutingTable::ManyToMany(ref routes) => match side {
+                        Side::Client => routes.client_addr(addr_idx)?,
+                        Side::Server => routes.server_addr(addr_idx)?,
+                    },
                 };
                 let state = match side {
                     Side::Client => client,
@@ -371,7 +353,6 @@ fn inc_last_addr_octet(addr: SocketAddr) -> SocketAddr {
 }
 
 pub(super) fn run_random_interaction(
-    routing: RoutingTableKind,
     pair: &mut Pair,
     interactions: Vec<TestOp>,
     client_config: ClientConfig,
@@ -384,7 +365,7 @@ pub(super) fn run_random_interaction(
 
     for interaction in interactions {
         info!(?interaction, "INTERACTION STEP");
-        interaction.run(routing, pair, &mut client, &mut server);
+        interaction.run(pair, &mut client, &mut server);
     }
     (client.handle, server.handle)
 }
