@@ -1320,7 +1320,7 @@ impl BasicRouting {
         match address {
             SocketAddr::V4(socket_addr_v4) => {
                 let [a, b, c, d] = socket_addr_v4.ip().octets();
-                let mut d = d.overflowing_add(1).0;
+                let mut d = d.wrapping_add(1);
                 if d == 0 {
                     // skip the (potential) broadcast address
                     d = d + 1;
@@ -1329,7 +1329,7 @@ impl BasicRouting {
             }
             SocketAddr::V6(socket_addr_v6) => {
                 let [a, b, c, d, e, f, g, h] = socket_addr_v6.ip().segments();
-                socket_addr_v6.set_ip(Ipv6Addr::new(a, b, c, d, e, f, g, h.overflowing_add(1).0));
+                socket_addr_v6.set_ip(Ipv6Addr::new(a, b, c, d, e, f, g, h.wrapping_add(1)));
             }
         }
         let new_port = address.port().checked_add(1).unwrap();
