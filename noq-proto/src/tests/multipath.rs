@@ -1782,3 +1782,36 @@ fn test_simple_nat_traversal_challenge_with_response() -> TestResult {
 
     Ok(())
 }
+
+/// If the client is not allowed to migrate, it should still be allowed to send NAT
+/// traversal probes.
+#[test]
+fn test_remote_may_probe() {
+    let _guard = subscribe();
+
+    let mut cfg = TransportConfig::default();
+    cfg.max_concurrent_multipath_paths(MAX_PATHS);
+    cfg.mtu_discovery_config(None);
+    cfg.initial_rtt(Duration::from_millis(10));
+    #[cfg(feature = "qlog")]
+    cfg.qlog_from_env("multipath_test");
+    cfg.max_remote_nat_traversal_addresses(8);
+    let transport_cfg = Arc::new(cfg);
+
+    let transport_cfg = Arc::new(TransportConfig {
+        max_concurrent_multipath_paths: NonZeroU32::new(3 as _),
+        // Assume a low-latency connection so pacing doesn't interfere with the test
+        initial_rtt: Duration::from_millis(10),
+        ..TransportConfig::default()
+    });
+    let server_cfg = ServerConfig {
+        transport: transport_cfg.clone(),
+        ..server_config()
+    };
+    let client_cfg = ClientConfig {
+        transport: transport_cfg,
+        ..client_config()
+    };
+
+    let mut pair = ConnPair::with_default_endpoint(server_cfg, client_cfg);
+}

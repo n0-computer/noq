@@ -2285,7 +2285,7 @@ impl Connection {
         //    once the client has been probing such a 4-tuple. These probes are currently
         //    not yet recognised and discarded here.
         //    See https://github.com/n0-computer/noq/issues/607.
-        let remote_may_migrate = self.remote_may_migrate();
+        let peer_may_probe = self.peer_may_probe();
 
         let local_ip_may_migrate = self.local_ip_may_migrate();
 
@@ -2293,7 +2293,7 @@ impl Connection {
         // forbids migration, drop the datagram. This could be relaxed to heuristically
         // permit NAT-rebinding-like migration.
         if let Some(known_path) = self.path_mut(path_id) {
-            if network_path.remote != known_path.network_path.remote && !remote_may_migrate {
+            if network_path.remote != known_path.network_path.remote && !peer_may_probe {
                 trace!(
                     %path_id,
                     %network_path,
@@ -2320,7 +2320,33 @@ impl Connection {
         false
     }
 
-    /// Whether a remote is allowed to migrate.
+    /// Whether the peer may probe new paths.
+    ///
+    /// RFC9000 §9 and QNT both have probing packets which may arrive from new paths. This
+    /// indicates whether these are allowed or not. This is a strict superset from
+    /// [`Self::remote_may_migrate`]: every network path that may be migrated to, may also
+    /// be probed. But e.g. servers may not migrate, but can be allowed to probe.
+    // TODO(flub): In RFC9000 the server is allowed to send off-path probing packets
+    //    once the client has been probing such a 4-tuple. These probes are currently
+    //    not yet recognised and will end up being discarded because of this.
+    //    See https://github.com/n0-computer/noq/issues/607.
+    fn peer_may_probe(&self) -> bool {
+        match &self.side {
+            ConnectionSide::Client { .. } => {
+                if let Some(hs) = self.state.as_handshake() {
+                    hs.allow_server_migration
+                } else {
+                    self.n0_nat_traversal.is_negotiated() && self.is_handshake_confirmed()
+                }
+            }
+            ConnectionSide::Server { server_config } => {
+                self.is_handshake_confirmed()
+                    && (server_config.migration || self.n0_nat_traversal.is_negotiated())
+            }
+        }
+    }
+
+    /// Whether the peer's remote address may migrate.
     ///
     /// QUIC relies on stable endpoints during the handshake. So other than the server's
     /// preferred_address transport parameter no side may migrate before the handshake is
