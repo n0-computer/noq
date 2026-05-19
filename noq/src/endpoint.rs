@@ -582,8 +582,17 @@ pub(crate) struct State {
 
 #[derive(Debug)]
 pub(crate) struct Shared {
+    /// Notifies subscribers of new incoming connections.
+    ///
+    /// This enables the `Endpoint::accept` API.
     incoming: Notify,
+    /// Notifies subscribers when *all* connections have entered the draining state.
+    ///
+    /// This powers the `Endpoint::wait_idle` API.
     draining: Notify,
+    /// Notifies subscribesr when *all* connections have been dropped.
+    ///
+    /// This powers the `Endpoint::wait_drained` API.
     idle: Notify,
     /// Number of live handles that can be used to initiate or handle I/O; excludes the driver
     ref_count: AtomicUsize,
@@ -637,12 +646,7 @@ impl State {
 
             if event.is_draining() {
                 self.recv_state.connections.active_connections -= 1;
-                tracing::error!(
-                    active_connections = self.recv_state.connections.active_connections,
-                    "active_connections -= 1"
-                );
                 if self.recv_state.connections.active_connections == 0 {
-                    tracing::error!("active_connections == 0, draining");
                     shared.draining.notify_waiters();
                 }
             } else if event.is_drained() {
@@ -744,6 +748,14 @@ struct ConnectionSet {
     /// Set if the endpoint has been manually closed
     close: Option<(VarInt, Bytes)>,
     /// Counter for all active (non-draining/drained) connections.
+    ///
+    /// This is directly related to the QUIC connection states "Initial", "Handshake",
+    /// "Established", "Closed", "Draining" and "Drained" (see also `proto/src/connection/state.rs`).
+    ///
+    /// Any connection state that is not "Draining" or "Drained" is considered active.
+    ///
+    /// This counter is updated when new connections are added ([`ConnectionSet::insert`]) and when
+    /// a connection informs us about entering the draining state ([`State::handle_events`]).
     active_connections: u64,
 }
 
@@ -766,7 +778,6 @@ impl ConnectionSet {
         self.senders.insert(handle, send);
         if self.close.is_none() {
             self.active_connections += 1;
-            tracing::error!(self.active_connections, "active_connections += 1");
         }
         Connecting::new(handle, conn, self.sender.clone(), recv, sender, runtime)
     }
