@@ -162,7 +162,7 @@
 <a href=#162 id=162 data-nosnippet>162</a>    // to `Arc`ing them
 <a href=#163 id=163 data-nosnippet>163</a>    </span>connection.close(<span class="number">0u32</span>.into(), <span class="string">b"Benchmark done"</span>);
 <a href=#164 id=164 data-nosnippet>164</a>
-<a href=#165 id=165 data-nosnippet>165</a>    endpoint.wait_idle().<span class="kw">await</span>;
+<a href=#165 id=165 data-nosnippet>165</a>    endpoint.wait_all_draining().<span class="kw">await</span>;
 <a href=#166 id=166 data-nosnippet>166</a>
 <a href=#167 id=167 data-nosnippet>167</a>    <span class="kw">if </span>opt.stats {
 <a href=#168 id=168 data-nosnippet>168</a>        <span class="macro">println!</span>(<span class="string">"\nClient connection stats:\n{:#?}"</span>, connection.stats());
