@@ -4338,36 +4338,40 @@ fn regression_close_without_connection_event() {
 /// ideal amount of time before allowing us to close the socket.
 #[test]
 fn timely_graceful_close() {
-    let mut pair = Pair::default();
-    pair.latency = Duration::from_millis(100);
-    let (client_ch, server_ch) = pair.connect();
+    const ONE_WAY_LATENCY: Duration = Duration::from_millis(100);
 
     let _guard = subscribe();
+    let mut pair = ConnPair::default();
+    pair.latency = ONE_WAY_LATENCY;
+
     let start = pair.time;
-    let now = pair.time;
-    pair.client_conn_mut(client_ch)
-        .close(now, 0u32.into(), Bytes::from_static(b"done!"));
+    pair.close(Client, 0u32.into(), b"done!");
 
-    assert!(!pair.client.draining_connections.contains(&client_ch));
-    assert!(!pair.server.draining_connections.contains(&server_ch));
+    assert!(!pair.is_draining(Client));
+    assert!(!pair.is_draining(Server));
 
+    // The client now sends CONNECTION_CLOSE to the server and it processes it.
+    // When the server receives CONNECTION_CLOSE, it responds with one of its own
+    // and enters the draining state.
     pair.drive_client();
     pair.advance_time();
     let now = pair.time;
     pair.drive_server();
 
-    assert!(pair.server.draining_connections.contains(&server_ch));
+    assert!(pair.is_draining(Server));
     let server_draining_delay = now.saturating_duration_since(start);
     info!(?server_draining_delay);
-    assert_eq!(server_draining_delay, Duration::from_millis(100));
+    assert_eq!(server_draining_delay, ONE_WAY_LATENCY);
 
+    // The server has now sent a CONNECTION_CLOSE back in response and the client processes it.
+    // The client then enters the draining state once it processed the response.
     // already drove server
     pair.advance_time();
     let now = pair.time;
     pair.drive_client();
 
-    assert!(pair.client.draining_connections.contains(&client_ch));
+    assert!(pair.is_draining(Client));
     let client_draining_delay = now.saturating_duration_since(start);
     info!(?client_draining_delay);
-    assert_eq!(client_draining_delay, Duration::from_millis(200));
+    assert_eq!(client_draining_delay, ONE_WAY_LATENCY * 2);
 }

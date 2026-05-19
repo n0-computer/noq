@@ -812,6 +812,13 @@ impl ConnPair {
         let now = self.pair.time;
         self.conn_mut(side).handle_network_change(hint, now);
     }
+
+    pub(super) fn is_draining(&self, side: Side) -> bool {
+        match side {
+            Client => self.client.draining_connections.contains(&self.client_ch),
+            Server => self.server.draining_connections.contains(&self.server_ch),
+        }
+    }
 }
 
 impl Default for Pair {
