@@ -7066,10 +7066,10 @@
 <a href=#7066 id=7066 data-nosnippet>7066</a>    }
 <a href=#7067 id=7067 data-nosnippet>7067</a>
 <a href=#7068 id=7068 data-nosnippet>7068</a>    <span class="doccomment">/// Returns whether this connection has a socket that supports IPv6.
-<a href=#7069 id=7069 data-nosnippet>7069</a>    </span><span class="comment">//
-<a href=#7070 id=7070 data-nosnippet>7070</a>    // TODO(matheus23): This is related to noq endpoint state's `ipv6` bool. We should move that info
-<a href=#7071 id=7071 data-nosnippet>7071</a>    // here instead of trying to hack around not knowing it exactly.
-<a href=#7072 id=7072 data-nosnippet>7072</a>    </span><span class="kw">pub fn </span>is_ipv6(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+<a href=#7069 id=7069 data-nosnippet>7069</a>    ///
+<a href=#7070 id=7070 data-nosnippet>7070</a>    /// TODO(matheus23): This is related to noq endpoint state's `ipv6` bool. We should move that info
+<a href=#7071 id=7071 data-nosnippet>7071</a>    /// here instead of trying to hack around not knowing it exactly.
+<a href=#7072 id=7072 data-nosnippet>7072</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>is_ipv6(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
 <a href=#7073 id=7073 data-nosnippet>7073</a>        <span class="self">self</span>.paths
 <a href=#7074 id=7074 data-nosnippet>7074</a>            .values()
 <a href=#7075 id=7075 data-nosnippet>7075</a>            .any(|p| p.data.network_path.remote.is_ipv6())
