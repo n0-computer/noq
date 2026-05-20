@@ -5323,7 +5323,7 @@ impl Connection {
                     }
 
                     let path = self.path_data_mut(path_id);
-                    if path.network_path.is_probably_same_path(&network_path) {
+                    if path.network_path.remote == network_path.remote {
                         if let Some(updated) = path.update_observed_addr_report(observed)
                             && path.open_status == paths::OpenStatus::Informed
                         {
