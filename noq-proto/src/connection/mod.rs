@@ -2359,7 +2359,7 @@ impl Connection {
     /// long as the client has not received an authenticated Handshake packet. This allows
     /// us to duplicate client Initial packets to multiple destinations. See
     /// [`state::Handshake::allow_server_migration`].
-    fn remote_may_migrate(&self) -> bool {
+    fn peer_may_migrate(&self) -> bool {
         match &self.side {
             ConnectionSide::Server { server_config } => {
                 server_config.migration && self.is_handshake_confirmed()
@@ -5639,10 +5639,10 @@ impl Connection {
         }
 
         // If the peer migrated to a new address, trigger migration.
-        if (migrate_on_any_packet || !is_probing_packet)
+        if self.peer_may_migrate()
+            && (migrate_on_any_packet || !is_probing_packet)
             && is_largest_received_pn
             && network_path.remote != self.path_data(path_id).network_path.remote
-            && self.remote_may_migrate()
         {
             self.migrate(path_id, now, network_path, migration_observed_addr);
             // Break linkability, if possible
