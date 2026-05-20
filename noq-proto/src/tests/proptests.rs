@@ -4,6 +4,7 @@ use std::{
     time::Duration,
 };
 
+use assert_matches::assert_matches;
 use proptest::{
     collection::vec,
     prelude::{Strategy, any},
@@ -16,13 +17,11 @@ use crate::{
     ClientConfig, Connection, ConnectionClose, ConnectionError, Event, PathStatus, Side,
     TransportConfig, TransportErrorCode,
     tests::{
-        ManyToManyRouting, Pair, client_config,
+        ManyToManyRouting, Pair, Routing, client_config,
         random_interaction::{TestOp, run_random_interaction},
         server_config, subscribe,
     },
 };
-
-use super::BasicRouting;
 
 // These TransportConfig constants are designed to match iroh for now.
 const MAX_MULTIPATH_PATHS: u32 = 8;
@@ -162,21 +161,13 @@ impl PairSetup {
 
         match self.routing_setup {
             RoutingSetup::Basic => {
-                pair.routes = BasicRouting {
-                    client_addr: pair.client.addr,
-                    server_addr: pair.server.addr,
-                }
-                .into();
+                assert_matches!(pair.routes, Routing::Basic(_));
             }
             RoutingSetup::SimpleSymmetric => {
                 let routes = ManyToManyRouting::simple_symmetric(CLIENT_ADDRS, SERVER_ADDRS);
-                pair.client.addr = routes.client_addr(0).unwrap();
-                pair.server.addr = routes.server_addr(0).unwrap();
                 pair.routes = routes.into();
             }
             RoutingSetup::Complex(routes) => {
-                pair.client.addr = routes.client_addr(0).unwrap();
-                pair.server.addr = routes.server_addr(0).unwrap();
                 pair.routes = routes.into();
             }
         }

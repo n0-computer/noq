@@ -558,9 +558,10 @@ fn zero_rtt_happypath() {
         .close(pair.time, VarInt(0), [][..].into());
     pair.drive();
 
-    pair.client.addr = SocketAddr::new(Ipv6Addr::LOCALHOST.into(), 1);
-    assert_ne!(pair.client.addr, Pair::CLIENT_ADDR);
-    assert_ne!(pair.client.addr, Pair::SERVER_ADDR);
+    let new_addr = SocketAddr::new(Ipv6Addr::LOCALHOST.into(), 1);
+    assert_ne!(new_addr, Pair::CLIENT_ADDR);
+    assert_ne!(new_addr, Pair::SERVER_ADDR);
+    pair.routes.as_basic_mut().client_addr = new_addr;
     info!("resuming session");
     let client_ch = pair.begin_connect(config);
     assert!(pair.client_conn_mut(client_ch).has_0rtt());
@@ -738,9 +739,10 @@ fn test_zero_rtt_incoming_limit<F: FnOnce(&mut ServerConfig)>(configure_server: 
         .close(pair.time, VarInt(0), [][..].into());
     pair.drive();
 
-    pair.client.addr = SocketAddr::new(Ipv6Addr::LOCALHOST.into(), 1);
-    assert_ne!(pair.client.addr, Pair::CLIENT_ADDR);
-    assert_ne!(pair.client.addr, Pair::SERVER_ADDR);
+    let new_addr = SocketAddr::new(Ipv6Addr::LOCALHOST.into(), 1);
+    assert_ne!(new_addr, Pair::CLIENT_ADDR);
+    assert_ne!(new_addr, Pair::SERVER_ADDR);
+    pair.routes.as_basic_mut().client_addr = new_addr;
     info!("resuming session");
     pair.server.handle_incoming = Box::new(|_| IncomingConnectionBehavior::Wait);
     let client_ch = pair.begin_connect(config);
@@ -3714,7 +3716,7 @@ fn address_discovery() {
     pair.drive();
 
     // check that the client received the correct address
-    let expected_addr = pair.client.addr;
+    let expected_addr = pair.routes.as_basic().client_addr;
     let conn = pair.client_conn_mut(conn_handle);
     assert_matches!(conn.poll(), Some(Event::HandshakeDataReady));
     assert_matches!(conn.poll(), Some(Event::Connected));
@@ -3724,7 +3726,7 @@ fn address_discovery() {
 
     // check that the server received the correct address
     let conn_handle = pair.server.assert_accept();
-    let expected_addr = pair.server.addr;
+    let expected_addr = pair.routes.as_basic().server_addr;
     let conn = pair.server_conn_mut(conn_handle);
     assert_matches!(conn.poll(), Some(Event::HandshakeDataReady));
     assert_matches!(conn.poll(), Some(Event::HandshakeConfirmed));
@@ -3776,9 +3778,10 @@ fn address_discovery_zero_rtt_accepted() {
         .close(pair.time, VarInt(0), [][..].into());
     pair.drive();
 
-    pair.client.addr = SocketAddr::new(Ipv6Addr::LOCALHOST.into(), 1);
-    assert_ne!(pair.client.addr, Pair::CLIENT_ADDR);
-    assert_ne!(pair.client.addr, Pair::SERVER_ADDR);
+    let new_addr = SocketAddr::new(Ipv6Addr::LOCALHOST.into(), 1);
+    assert_ne!(new_addr, Pair::CLIENT_ADDR);
+    assert_ne!(new_addr, Pair::SERVER_ADDR);
+    pair.routes.as_basic_mut().client_addr = new_addr;
     info!("resuming session");
     let client_ch = pair.begin_connect(alt_client_cfg);
     assert!(pair.client_conn_mut(client_ch).has_0rtt());
@@ -3929,7 +3932,11 @@ fn address_discovery_retransmission() {
     pair.drive();
     let conn = pair.client_conn_mut(client_ch);
     assert_matches!(conn.poll(), Some(Event::HandshakeConfirmed));
-    assert_matches!(conn.poll(), Some(Event::Path(PathEvent::ObservedAddr{id: PathId::ZERO, addr})) if addr == pair.client.addr);
+    assert_matches!(
+        conn.poll(),
+        Some(Event::Path(PathEvent::ObservedAddr{id: PathId::ZERO, addr}))
+            if addr == pair.routes.as_basic().client_addr
+    );
 }
 
 #[test]

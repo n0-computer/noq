@@ -87,8 +87,8 @@ impl Pair {
         let client_addr = SocketAddr::new(Ipv6Addr::LOCALHOST.into(), 44433);
         let now = Instant::now();
         Self {
-            server: TestEndpoint::new(server, server_addr),
-            client: TestEndpoint::new(client, client_addr),
+            server: TestEndpoint::new(server),
+            client: TestEndpoint::new(client),
             epoch: now,
             time: now,
             mtu: DEFAULT_MTU,
@@ -122,8 +122,8 @@ impl Pair {
     pub(super) fn new_from_endpoint(client: Endpoint, server: Endpoint) -> Self {
         let now = Instant::now();
         Self {
-            server: TestEndpoint::new(server, Self::SERVER_ADDR),
-            client: TestEndpoint::new(client, Self::CLIENT_ADDR),
+            server: TestEndpoint::new(server),
+            client: TestEndpoint::new(client),
             epoch: now,
             time: now,
             mtu: DEFAULT_MTU,
@@ -292,7 +292,12 @@ impl Pair {
         let _guard = span.enter();
         let (client_ch, client_conn) = self
             .client
-            .connect(self.time, config, self.server.addr, "localhost")
+            .connect(
+                self.time,
+                config,
+                self.routes.public_server_addr(),
+                "localhost",
+            )
             .unwrap();
         self.client.connections.insert(client_ch, client_conn);
         client_ch
@@ -364,20 +369,6 @@ impl Pair {
 
     pub(super) fn server_datagrams(&mut self, ch: ConnectionHandle) -> Datagrams<'_> {
         self.server_conn_mut(ch).datagrams()
-    }
-
-    pub(super) fn addrs_to_server(&self) -> FourTuple {
-        FourTuple {
-            remote: self.server.addr,
-            local_ip: Some(self.client.addr.ip()),
-        }
-    }
-
-    pub(super) fn addrs_to_client(&self) -> FourTuple {
-        FourTuple {
-            remote: self.client.addr,
-            local_ip: Some(self.server.addr.ip()),
-        }
     }
 }
 
@@ -791,7 +782,6 @@ impl Default for Pair {
 
 pub(super) struct TestEndpoint {
     pub(super) endpoint: Endpoint,
-    pub(super) addr: SocketAddr,
     timeout: Option<Instant>,
     pub(super) outbound: VecDeque<(Transmit, Bytes)>,
     delayed: VecDeque<(Transmit, Bytes)>,
@@ -831,10 +821,9 @@ pub(super) fn validate_incoming(incoming: &Incoming) -> IncomingConnectionBehavi
 }
 
 impl TestEndpoint {
-    fn new(endpoint: Endpoint, addr: SocketAddr) -> Self {
+    fn new(endpoint: Endpoint) -> Self {
         Self {
             endpoint,
-            addr,
             timeout: None,
             outbound: VecDeque::new(),
             delayed: VecDeque::new(),
@@ -1262,6 +1251,17 @@ pub(super) enum Routing {
 }
 
 impl Routing {
+    /// Returns the current public server address.
+    ///
+    /// This is the address that can be used to establish a connection with the server.
+    pub(super) fn public_server_addr(&self) -> SocketAddr {
+        match self {
+            Self::Basic(inner) => inner.public_server_addr(),
+            Self::SimpleFirewall(inner) => inner.public_server_addr(),
+            Self::ManyToMany(inner) => inner.public_server_addr(),
+        }
+    }
+
     /// Routes a datagram from client to server.
     fn route_client_to_server(&mut self, transmit: &Transmit) -> RoutingDecision {
         match self {
@@ -1343,6 +1343,10 @@ impl From<BasicRouting> for Routing {
 }
 
 impl BasicRouting {
+    fn public_server_addr(&self) -> SocketAddr {
+        self.server_addr
+    }
+
     fn route_client_to_server(&mut self, transmit: &Transmit) -> RoutingDecision {
         if transmit.destination == self.server_addr {
             RoutingDecision::Deliver {
@@ -1419,6 +1423,11 @@ impl From<ManyToManyRouting> for Routing {
 }
 
 impl ManyToManyRouting {
+    fn public_server_addr(&self) -> SocketAddr {
+        // Return the address that the first client address can send to.
+        self.server_routes[self.client_routes[0].1].0
+    }
+
     fn route_client_to_server(&mut self, transmit: &Transmit) -> RoutingDecision {
         let Some((_, client_addr_idx)) = self
             .server_routes
@@ -1606,6 +1615,10 @@ impl SimpleFirewallRouting {
             client_firewall_open: false,
             server_firewall_open: false,
         }
+    }
+
+    fn public_server_addr(&self) -> SocketAddr {
+        Self::SERVER_DIRECT_ADDR
     }
 
     /// Routes a datagram from client to server.
