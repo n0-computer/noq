@@ -7066,10 +7066,10 @@ impl Connection {
     }
 
     /// Returns whether this connection has a socket that supports IPv6.
-    //
-    // TODO(matheus23): This is related to noq endpoint state's `ipv6` bool. We should move that info
-    // here instead of trying to hack around not knowing it exactly.
-    pub fn is_ipv6(&self) -> bool {
+    ///
+    /// TODO(matheus23): This is related to noq endpoint state's `ipv6` bool. We should move that info
+    /// here instead of trying to hack around not knowing it exactly.
+    pub(crate) fn is_ipv6(&self) -> bool {
         self.paths
             .values()
             .any(|p| p.data.network_path.remote.is_ipv6())
