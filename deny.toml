@@ -28,8 +28,6 @@ skip = [
     # ring uses getrandom 0.2, newer crates use 0.3
     { crate = "getrandom", reason = "ring depends on 0.2, newer ecosystem uses 0.3" },
     { crate = "r-efi", reason = "proptest dev-dependency pulls in old getrandom" },
-    # follows getrandom versions
-    { crate = "wasi", reason = "follows getrandom version split" },
     # various transitive deps require different windows-sys versions
     { crate = "windows-sys", reason = "transitive deps require different versions" },
     { crate = "windows-targets", reason = "follows windows-sys" },
