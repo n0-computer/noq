@@ -1784,9 +1784,9 @@ fn test_simple_nat_traversal_challenge_with_response() -> TestResult {
 }
 
 /// If the client is not allowed to migrate, it should still be allowed to send NAT
-/// traversal probes.
+/// traversal probes and be able to hole-punch.
 #[test]
-fn test_remote_may_probe() {
+fn test_peer_may_probe() -> TestResult {
     let _guard = subscribe();
 
     let mut cfg = TransportConfig::default();
@@ -1798,14 +1798,9 @@ fn test_remote_may_probe() {
     cfg.max_remote_nat_traversal_addresses(8);
     let transport_cfg = Arc::new(cfg);
 
-    let transport_cfg = Arc::new(TransportConfig {
-        max_concurrent_multipath_paths: NonZeroU32::new(3 as _),
-        // Assume a low-latency connection so pacing doesn't interfere with the test
-        initial_rtt: Duration::from_millis(10),
-        ..TransportConfig::default()
-    });
     let server_cfg = ServerConfig {
         transport: transport_cfg.clone(),
+        migration: false,
         ..server_config()
     };
     let client_cfg = ClientConfig {
@@ -1813,5 +1808,34 @@ fn test_remote_may_probe() {
         ..client_config()
     };
 
-    let mut pair = ConnPair::with_default_endpoint(server_cfg, client_cfg);
+    let mut pair = Pair::new(Default::default(), server_cfg);
+    pair.routes = Some(Box::new(SimpleFirewallRoutingTable::new()));
+
+    let mut pair = ConnPair::connect_with(pair, client_cfg);
+    pair.add_nat_traversal_address(Server, SimpleFirewallRoutingTable::SERVER_FW_ADDR)?;
+    pair.add_nat_traversal_address(Client, SimpleFirewallRoutingTable::CLIENT_FW_ADDR)?;
+    pair.drive();
+
+    let event = pair.poll(Client).expect("should have event");
+    assert_matches!(
+        event,
+        Event::NatTraversal(n0_nat_traversal::Event::AddressAdded(_))
+    );
+
+    info!("init NAT traversal");
+    pair.initiate_nat_traversal_round(Client)?;
+
+    // Ensure we have no more events queued
+    assert_matches!(pair.poll(Client), None);
+    assert_matches!(pair.poll(Server), None);
+
+    pair.drive();
+
+    let event = pair.poll(Client).expect("should have event");
+    assert_matches!(event, Event::Path(PathEvent::Established { .. }));
+
+    let event = pair.poll(Server).expect("should have event");
+    assert_matches!(event, Event::Path(PathEvent::Established { .. }));
+
+    Ok(())
 }
