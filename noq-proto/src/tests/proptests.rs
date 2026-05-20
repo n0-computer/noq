@@ -1201,3 +1201,59 @@ fn regression_qnt_revalidating_path_forever() {
         pair.server_conn_mut(server_ch)
     )));
 }
+
+/// This reproduced a never-idle infinite loop where both the client and server would
+/// infinitely migration-probe each other.
+///
+/// This was fixed by disallowing migration probing on the client side (it was accidentally
+/// enabled).
+///
+/// This test would have both client and server swap back and forth the 4-tuple on one path
+/// between (1.1.1.2, 2.2.2.0) and (1.1.1.1, 2.2.2.2).
+///
+/// Each time the server detected the client's migration, it would switch its 4-tuple and
+/// probe the previous path.
+/// This would then trigger migration detection on the client side, making it probe both
+/// 4-tuples itself, causing the server to detect yet another migration and so on.
+#[test]
+fn regression_migration_probing_loop() {
+    let prefix = "regression_migration_probing_loop";
+    let setup = PairSetup {
+        seed: Seed::Zeroes,
+        extensions: Extensions::QntAndMultipath,
+        routing_setup: RoutingSetup::SimpleSymmetric,
+    };
+    let interactions = vec![
+        TestOp::OpenPath {
+            side: Side::Client,
+            status: PathStatus::Available,
+            addr_idx: 0,
+        },
+        TestOp::PassiveMigration {
+            side: Side::Client,
+            addr_idx: 0,
+        },
+        TestOp::Drive { side: Side::Client },
+        TestOp::ClosePath {
+            side: Side::Client,
+            path_idx: 0,
+            error_code: 0,
+        },
+        TestOp::PassiveMigration {
+            side: Side::Client,
+            addr_idx: 0,
+        },
+    ];
+
+    let _guard = subscribe();
+    let (mut pair, client_config) = setup.run(prefix);
+    let (client_ch, server_ch) = run_random_interaction(&mut pair, interactions, client_config);
+
+    assert!(!pair.drive_bounded(1000), "connection never became idle");
+    assert!(allowed_error(poll_to_close(
+        pair.client_conn_mut(client_ch)
+    )));
+    assert!(allowed_error(poll_to_close(
+        pair.server_conn_mut(server_ch)
+    )));
+}
