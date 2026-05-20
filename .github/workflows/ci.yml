@@ -125,7 +125,7 @@ jobs:
           ! wasm-tools print --skeleton target/wasm32-unknown-unknown/debug/noq.wasm | grep 'import "env"'
 
       # Match the version of wasm-bindgen used in Cargo.lock
-      - run: cargo binstall wasm-bindgen-cli@0.2.106 --locked --no-confirm
+      - run: cargo binstall wasm-bindgen-cli@0.2.121 --locked --no-confirm
       - name: wasm32 test (noq-proto)
         run: cargo test --locked -p noq-proto --target wasm32-unknown-unknown
 
