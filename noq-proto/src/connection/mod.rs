@@ -2364,13 +2364,8 @@ impl Connection {
             ConnectionSide::Server { server_config } => {
                 server_config.migration && self.is_handshake_confirmed()
             }
-            ConnectionSide::Client { .. } => {
-                if let Some(hs) = self.state.as_handshake() {
-                    hs.allow_server_migration
-                } else {
-                    self.n0_nat_traversal.is_negotiated() && self.is_handshake_confirmed()
-                }
-            }
+            // We don't allow servers to migrate
+            ConnectionSide::Client { .. } => false,
         }
     }
 
