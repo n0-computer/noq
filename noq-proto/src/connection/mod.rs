@@ -2324,7 +2324,7 @@ impl Connection {
     ///
     /// RFC9000 §9 and QNT both have probing packets which may arrive from new paths. This
     /// indicates whether these are allowed or not. This is a strict superset from
-    /// [`Self::remote_may_migrate`]: every network path that may be migrated to, may also
+    /// [`Self::peer_may_migrate`]: every network path that may be migrated to, may also
     /// be probed. But e.g. servers may not migrate, but can be allowed to probe.
     // TODO(flub): In RFC9000 the server is allowed to send off-path probing packets
     //    once the client has been probing such a 4-tuple. These probes are currently
