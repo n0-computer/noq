@@ -473,3 +473,9 @@ impl fmt::Debug for FourTuple {
         fmt::Display::fmt(&self, f)
     }
 }
+
+impl From<SocketAddr> for FourTuple {
+    fn from(value: SocketAddr) -> Self {
+        Self::from_remote(value)
+    }
+}

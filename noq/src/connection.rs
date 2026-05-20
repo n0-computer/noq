@@ -388,12 +388,13 @@ impl Connection {
     /// [`open_path`]: Self::open_path
     pub fn open_path_ensure(
         &self,
-        network_path: FourTuple,
+        network_path: impl Into<FourTuple>,
         initial_status: PathStatus,
     ) -> OpenPath {
+        let network_path = network_path.into();
         let mut state = self.0.lock_and_wake("open_path");
 
-        let network_path = match normalize_network_path(&state, network_path) {
+        let network_path = match normalize_network_path(network_path, &state.inner) {
             Ok(network_path) => network_path,
             Err(err) => return OpenPath::rejected(err),
         };
@@ -423,6 +424,11 @@ impl Connection {
 
     /// Opens an additional path if the multipath extension is negotiated.
     ///
+    /// This function takes a [`FourTuple`], which contains the remote address and an optional
+    /// local IP. If the local IP is set, the path will be opened with this source address,
+    /// and the endpoint must support sending from that IP address. You can also pass a
+    /// [`SocketAddr`] to only set the remote address and leave the local IP interface unspecified.
+    ///
     /// The returned future completes once the path is either fully opened and ready to
     /// carry application data, or if there was an error.
     ///
@@ -435,10 +441,15 @@ impl Connection {
     /// future, or at a later time.  If the failure is immediate [`OpenPath::path_id`] will
     /// return `None` and the future will be ready immediately.  If the failure happens
     /// later, a [`PathEvent`] will be emitted.
-    pub fn open_path(&self, network_path: FourTuple, initial_status: PathStatus) -> OpenPath {
+    pub fn open_path(
+        &self,
+        network_path: impl Into<FourTuple>,
+        initial_status: PathStatus,
+    ) -> OpenPath {
+        let network_path = network_path.into();
         let mut state = self.0.lock_and_wake("open_path");
 
-        let network_path = match normalize_network_path(&state, network_path) {
+        let network_path = match normalize_network_path(network_path, &state.inner) {
             Ok(network_path) => network_path,
             Err(err) => return OpenPath::rejected(err),
         };
@@ -460,44 +471,7 @@ impl Connection {
     pub fn path(&self, id: PathId) -> Option<Path> {
         Path::new(&self.0, id)
     }
-}
 
-/// Normalizes a [`FourTuple`] against the connection's address family.
-///
-/// If the connection already uses IPv6 paths, the remote is canonicalised via
-/// [`ensure_ipv6`]. If it uses IPv4 and the requested remote is IPv6, this returns
-/// [`PathError::InvalidRemoteAddress`].
-fn normalize_network_path(state: &State, network_path: FourTuple) -> Result<FourTuple, PathError> {
-    // If endpoint::State::ipv6 is true we want to keep all our IP addresses as IPv6.
-    // If not, we do not support IPv6.  We can not access endpoint::State from here
-    // however, but either all our paths use an IPv6 address, or all our paths use an
-    // IPv4 address.  So we can use that information.
-    let ipv6 = state
-        .inner
-        .paths()
-        .iter()
-        .filter_map(|id| {
-            state
-                .inner
-                .network_path(*id)
-                .map(|addrs| addrs.remote().is_ipv6())
-                .ok()
-        })
-        .next()
-        .unwrap_or_default();
-    let remote = network_path.remote();
-    if remote.is_ipv6() && !ipv6 {
-        return Err(PathError::InvalidRemoteAddress(remote));
-    }
-    let network_path = if ipv6 {
-        FourTuple::new(SocketAddr::V6(ensure_ipv6(remote)), network_path.local_ip())
-    } else {
-        network_path
-    };
-    Ok(network_path)
-}
-
-impl Connection {
     /// A stream of [`PathEvent`]s for all paths in this connection.
     ///
     /// The stream will yield a [`PathEvent`] whenever there is a change in the state of any path in this connection.
@@ -938,6 +912,31 @@ impl Connection {
         let mut conn = self.0.lock_and_wake("initiate_nat_traversal_round");
         let now = conn.runtime.now();
         conn.inner.initiate_nat_traversal_round(now)
+    }
+}
+
+/// Normalizes a [`FourTuple`] against the connection's address family.
+///
+/// If the connection already uses IPv6 paths, the remote is canonicalised via
+/// [`ensure_ipv6`]. If it uses IPv4 and the requested remote is IPv6, this returns
+/// [`PathError::InvalidRemoteAddress`].
+fn normalize_network_path(
+    network_path: FourTuple,
+    conn: &proto::Connection,
+) -> Result<FourTuple, PathError> {
+    // If endpoint::State::ipv6 is true we want to keep all our IP addresses as IPv6.
+    // If not, we do not support IPv6.  We can not access endpoint::State from here
+    // however, but [`proto::Connection::is_ipv6`] returns whether any of our paths use
+    // an IPv6 address, which provides us the necessary information.
+    let ipv6 = conn.is_ipv6();
+    let remote = network_path.remote();
+    if remote.is_ipv6() && !ipv6 {
+        Err(PathError::InvalidRemoteAddress(remote))
+    } else if ipv6 {
+        let remote = SocketAddr::V6(ensure_ipv6(remote));
+        Ok(FourTuple::new(remote, network_path.local_ip()))
+    } else {
+        Ok(network_path)
     }
 }
 
