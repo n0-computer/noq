@@ -9,7 +9,7 @@ use crate::{
     tests::{Pair, TestEndpoint},
 };
 
-use super::RoutingTable;
+use super::Routing;
 
 #[derive(Debug, Clone, Copy, Arbitrary)]
 pub(super) enum TestOp {
@@ -137,11 +137,11 @@ impl TestOp {
                 side: Side::Client,
                 addr_idx,
             } => match pair.routes {
-                RoutingTable::Basic(ref mut routes) => {
+                Routing::Basic(ref mut routes) => {
                     routes.passive_migration(Side::Client);
                 }
-                RoutingTable::SimpleFirewall(_) => unimplemented!(),
-                RoutingTable::ManyToMany(ref mut routes) => {
+                Routing::SimpleFirewall(_) => unimplemented!(),
+                Routing::ManyToMany(ref mut routes) => {
                     routes.sim_client_migration(addr_idx, inc_last_addr_octet);
                 }
             },
@@ -149,11 +149,11 @@ impl TestOp {
                 side: Side::Server,
                 addr_idx,
             } => match pair.routes {
-                RoutingTable::Basic(ref mut routes) => {
+                Routing::Basic(ref mut routes) => {
                     routes.passive_migration(Side::Server);
                 }
-                RoutingTable::SimpleFirewall(_) => unimplemented!(),
-                RoutingTable::ManyToMany(ref mut routes) => {
+                Routing::SimpleFirewall(_) => unimplemented!(),
+                Routing::ManyToMany(ref mut routes) => {
                     routes.sim_server_migration(addr_idx, inc_last_addr_octet);
                 }
             },
@@ -163,12 +163,12 @@ impl TestOp {
                 addr_idx,
             } => {
                 let remote = match pair.routes {
-                    RoutingTable::Basic(ref routes) => match side {
+                    Routing::Basic(ref routes) => match side {
                         Side::Client => routes.server_addr,
                         Side::Server => routes.client_addr,
                     },
-                    RoutingTable::SimpleFirewall(_) => unimplemented!(),
-                    RoutingTable::ManyToMany(ref routes) => match side {
+                    Routing::SimpleFirewall(_) => unimplemented!(),
+                    Routing::ManyToMany(ref routes) => match side {
                         Side::Client => routes.server_addr(addr_idx)?,
                         Side::Server => routes.client_addr(addr_idx)?,
                     },
@@ -233,12 +233,12 @@ impl TestOp {
             }
             Self::AddHpAddr { side, addr_idx } => {
                 let address = match pair.routes {
-                    RoutingTable::Basic(ref routes) => match side {
+                    Routing::Basic(ref routes) => match side {
                         Side::Client => routes.client_addr,
                         Side::Server => routes.server_addr,
                     },
-                    RoutingTable::SimpleFirewall(_) => unimplemented!(),
-                    RoutingTable::ManyToMany(ref routes) => match side {
+                    Routing::SimpleFirewall(_) => unimplemented!(),
+                    Routing::ManyToMany(ref routes) => match side {
                         Side::Client => routes.client_addr(addr_idx)?,
                         Side::Server => routes.server_addr(addr_idx)?,
                     },

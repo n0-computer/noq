@@ -1409,7 +1409,7 @@ fn close_from_migrated_address() {
     pair.drive();
 
     // Change client address - server will see this as migration
-    let client_addr = pair.routes.mut_basic().passive_migration(Client);
+    let client_addr = pair.routes.as_basic_mut().passive_migration(Client);
 
     // Client closes connection from the NEW address.  The server will see the migration and
     // close the connection on the new address.
@@ -1461,7 +1461,7 @@ fn migration() {
 
     let client_stats_after_connect = pair.client_conn_mut(client_ch).stats();
 
-    let client_addr = pair.routes.mut_basic().passive_migration(Client);
+    let client_addr = pair.routes.as_basic_mut().passive_migration(Client);
     pair.client_conn_mut(client_ch).ping();
 
     // Assert that just receiving the ping message is accounted into the servers
@@ -1579,7 +1579,7 @@ fn regression_path_validation_stale_local_after_passive_migration() {
     // only *after* passive migration has changed the client's observed local IP.
     pair.client.inbound.clear();
 
-    pair.routes.mut_basic().passive_migration(Client);
+    pair.routes.as_basic_mut().passive_migration(Client);
 
     // Send a ping so the server detects the migration and starts routing to the new ip.
     pair.conn_mut(Client).ping();
@@ -2689,7 +2689,7 @@ fn migrate_detects_new_mtu_and_respects_original_peer_max_udp_payload_size() {
 
     // Migrate client to a different port (and simulate a higher path MTU)
     pair.mtu = 1500;
-    let client_addr = pair.routes.mut_basic().passive_migration(Client);
+    let client_addr = pair.routes.as_basic_mut().passive_migration(Client);
     pair.client_conn_mut(client_ch).ping();
     pair.drive();
 
@@ -3973,7 +3973,7 @@ fn address_discovery_rebind_retransmission() {
     let time = pair.time;
     pair.client_conn_mut(client_ch)
         .handle_network_change(None, time);
-    let client_addr = pair.routes.mut_basic().passive_migration(Client);
+    let client_addr = pair.routes.as_basic_mut().passive_migration(Client);
 
     pair.drive();
     let conn = pair.client_conn_mut(client_ch);
@@ -3998,7 +3998,7 @@ fn network_change_single_path_recovery() {
     let cid_seq_before = pair.conn(Client).active_remote_cid_seq();
 
     // Simulate a passive migration (port change) + network change notification
-    pair.routes.mut_basic().passive_migration(Client);
+    pair.routes.as_basic_mut().passive_migration(Client);
     pair.handle_network_change(Client, None);
 
     // The path should NOT be closed and there should be no path events

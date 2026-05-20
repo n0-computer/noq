@@ -42,7 +42,7 @@ pub(super) struct Pair {
     pub(super) spins: u64,
     /// The routing table used for resolving addresses observed for incoming packets
     /// and determining whether they should get lost.
-    pub(super) routes: RoutingTable,
+    pub(super) routes: Routing,
     last_spin: bool,
 }
 
@@ -1255,13 +1255,13 @@ impl TokenLog for SimpleTokenLog {
 }
 
 #[derive(Debug)]
-pub(super) enum RoutingTable {
+pub(super) enum Routing {
     Basic(BasicRouting),
     SimpleFirewall(SimpleFirewallRouting),
     ManyToMany(ManyToManyRouting),
 }
 
-impl RoutingTable {
+impl Routing {
     /// Routes a datagram from client to server.
     fn route_client_to_server(&mut self, transmit: &Transmit) -> RoutingDecision {
         match self {
@@ -1282,28 +1282,28 @@ impl RoutingTable {
     pub(super) fn as_basic(&self) -> &BasicRouting {
         match self {
             Self::Basic(inner) => inner,
-            _ => panic!("wrong type"),
+            _ => panic!("cast to BasicRouting failed, a different routing table is set"),
         }
     }
 
-    pub(super) fn mut_basic(&mut self) -> &mut BasicRouting {
+    pub(super) fn as_basic_mut(&mut self) -> &mut BasicRouting {
         match self {
             Self::Basic(inner) => inner,
-            _ => panic!("wrong type"),
+            _ => panic!("cast to BasicRouting failed, a different routing table is set"),
         }
     }
 
     pub(super) fn as_many_to_many(&self) -> &ManyToManyRouting {
         match self {
             Self::ManyToMany(inner) => inner,
-            _ => panic!("wrong type"),
+            _ => panic!("cast to ManyToManyRouting failed, a different routing table is set"),
         }
     }
 
-    pub(super) fn mut_many_to_many(&mut self) -> &mut ManyToManyRouting {
+    pub(super) fn as_many_to_many_mut(&mut self) -> &mut ManyToManyRouting {
         match self {
             Self::ManyToMany(inner) => inner,
-            _ => panic!("wrong type"),
+            _ => panic!("cast to ManyToManyRouting failed, a different routing table is set"),
         }
     }
 }
@@ -1336,7 +1336,7 @@ pub(super) struct BasicRouting {
     pub(super) server_addr: SocketAddr,
 }
 
-impl From<BasicRouting> for RoutingTable {
+impl From<BasicRouting> for Routing {
     fn from(value: BasicRouting) -> Self {
         Self::Basic(value)
     }
@@ -1412,7 +1412,7 @@ pub(super) struct ManyToManyRouting {
     server_routes: Vec<(SocketAddr, usize)>,
 }
 
-impl From<ManyToManyRouting> for RoutingTable {
+impl From<ManyToManyRouting> for Routing {
     fn from(value: ManyToManyRouting) -> Self {
         Self::ManyToMany(value)
     }
@@ -1567,7 +1567,7 @@ pub(super) struct SimpleFirewallRouting {
     server_firewall_open: bool,
 }
 
-impl From<SimpleFirewallRouting> for RoutingTable {
+impl From<SimpleFirewallRouting> for Routing {
     fn from(value: SimpleFirewallRouting) -> Self {
         Self::SimpleFirewall(value)
     }
