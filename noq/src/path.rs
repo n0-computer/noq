@@ -431,7 +431,9 @@ impl AddressDiscovery {
         let filter = async move {
             loop {
                 match path_events.recv().await {
-                    Ok(PathEvent::ObservedAddr { id, addr: observed }) if id == path_id => {
+                    Ok(PathEvent::ObservedAddr {
+                        id, addr: observed, ..
+                    }) if id == path_id => {
                         tx.send_if_modified(|addr| {
                             let old = std::mem::replace(addr, observed);
                             old != *addr

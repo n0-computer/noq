@@ -1462,7 +1462,7 @@ async fn close_path() -> TestResult {
         // The server learns the path ID from the Opened event
         let mut path_id = None;
         while let Some(Ok(evt)) = path_events.next().await {
-            if let proto::PathEvent::Established { id } = evt {
+            if let proto::PathEvent::Established { id, .. } = evt {
                 path_id = Some(id);
                 break;
             }

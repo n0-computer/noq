@@ -1647,13 +1647,17 @@ impl State {
                         old != *addr
                     });
                 }
-                Path(ref evt @ PathEvent::Established { id }) => {
+                Path(ref evt @ PathEvent::Established { id, .. }) => {
                     self.path_events.send(evt.clone()).ok();
                     if let Some(sender) = self.open_path.remove(&id) {
                         sender.send_modify(|value| *value = Ok(()));
                     }
                 }
-                Path(ref evt @ PathEvent::Discarded { id, ref path_stats }) => {
+                Path(
+                    ref evt @ PathEvent::Discarded {
+                        id, ref path_stats, ..
+                    },
+                ) => {
                     if self.path_refs.contains_key(&id) {
                         self.final_path_stats.insert(id, *path_stats.clone());
                     }
