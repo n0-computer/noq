@@ -40,7 +40,7 @@ waiting on the <a href="struct.RecvStream.html" title="struct noq::RecvStream"><
 <p>This function takes a <a href="struct.FourTuple.html" title="struct noq::FourTuple"><code>FourTuple</code></a>, which contains the remote address and an optional
 local IP. If the local IP is set, the path will be opened with this source address,
 and the endpoint must support sending from that IP address. You can also pass a
-<a href="https://doc.rust-lang.org/nightly/core/net/socket_addr/enum.SocketAddr.html" title="enum core::net::socket_addr::SocketAddr"><code>SocketAddr</code></a> to only set the remote adress and leave the local IP interface unspecified.</p>
+<a href="https://doc.rust-lang.org/nightly/core/net/socket_addr/enum.SocketAddr.html" title="enum core::net::socket_addr::SocketAddr"><code>SocketAddr</code></a> to only set the remote address and leave the local IP interface unspecified.</p>
 <p>The returned future completes once the path is either fully opened and ready to
 carry application data, or if there was an error.</p>
 <p>Dropping the returned future does not cancel the opening of the path, the
