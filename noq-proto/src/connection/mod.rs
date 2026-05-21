@@ -520,18 +520,18 @@ impl Connection {
 
     /// Opens a new path only if no path on the same network path currently exists.
     ///
-    /// This comparison will use [`FourTuple::is_probably_same_path`] on the given `network_path`
-    /// and pass it existing path's network paths.
+    /// Returns `(path_id, true)` if the path already existed, or `(path_id, false)`
+    /// if was opened.
     ///
-    /// This means that you can pass `local_ip: None` to make the comparison only compare
-    /// remote addresses.
+    /// If `network_path` has no local IP set, then this will open a new path
+    /// if no path exists for this remote address, independent of the existing
+    /// path's local IP. If a local IP is set, it will match against the full
+    /// four-tuple of existing paths. Not setting the local IP avoids having to
+    /// guess which local interface will be used to communicate with the remote,
+    /// should it not be known yet. We assume that if we already have a path to
+    /// the remote, the OS is likely to use the same interface to talk to said remote.
     ///
-    /// This avoids having to guess which local interface will be used to communicate with the
-    /// remote, should it not be known yet. We assume that if we already have a path to the remote,
-    /// the OS is likely to use the same interface to talk to said remote.
-    ///
-    /// See also [`open_path`]. Returns `(path_id, true)` if the path already existed. `(path_id,
-    /// false)` if was opened.
+    /// See also [`open_path`].
     ///
     /// [`open_path`]: Connection::open_path
     pub fn open_path_ensure(
@@ -7069,7 +7069,7 @@ impl Connection {
     ///
     /// TODO(matheus23): This is related to noq endpoint state's `ipv6` bool. We should move that info
     /// here instead of trying to hack around not knowing it exactly.
-    fn is_ipv6(&self) -> bool {
+    pub(crate) fn is_ipv6(&self) -> bool {
         self.paths
             .values()
             .any(|p| p.data.network_path.remote.is_ipv6())
