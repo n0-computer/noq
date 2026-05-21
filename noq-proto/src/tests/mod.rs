@@ -691,10 +691,10 @@ fn zero_rtt_rejection() {
     let s2 = pair.client_streams(client_ch).open(Dir::Uni).unwrap();
     assert_eq!(s, s2);
 
+    // `s2` was never successfully received by the server, so from its perspective the
+    // stream has never been opened. We currently surface that as `ClosedStream`.
     let mut recv = pair.server_recv(server_ch, s2);
-    let mut chunks = recv.read(false).unwrap();
-    assert_eq!(chunks.next(usize::MAX), Err(ReadError::Blocked));
-    let _ = chunks.finalize();
+    assert_eq!(recv.read(false).err(), Some(ReadableError::ClosedStream));
     assert_eq!(
         pair.client_conn_mut(client_ch)
             .path_stats(PathId::ZERO)
@@ -3947,6 +3947,7 @@ fn address_discovery_rebind_retransmission() {
             address_discovery_role: crate::address_discovery::Role::Both,
             // Assume a low-latency connection so pacing doesn't interfere with the test
             initial_rtt: Duration::from_millis(10),
+            mtu_discovery_config: None,
             ..TransportConfig::default()
         }),
         ..server_config()
@@ -3957,6 +3958,7 @@ fn address_discovery_rebind_retransmission() {
             address_discovery_role: crate::address_discovery::Role::Both,
             // Assume a low-latency connection so pacing doesn't interfere with the test
             initial_rtt: Duration::from_millis(10),
+            mtu_discovery_config: None,
             ..TransportConfig::default()
         }),
         ..client_config()
