@@ -520,18 +520,18 @@
 <a href=#520 id=520 data-nosnippet>520</a>
 <a href=#521 id=521 data-nosnippet>521</a>    <span class="doccomment">/// Opens a new path only if no path on the same network path currently exists.
 <a href=#522 id=522 data-nosnippet>522</a>    ///
-<a href=#523 id=523 data-nosnippet>523</a>    /// This comparison will use [`FourTuple::is_probably_same_path`] on the given `network_path`
-<a href=#524 id=524 data-nosnippet>524</a>    /// and pass it existing path's network paths.
+<a href=#523 id=523 data-nosnippet>523</a>    /// Returns `(path_id, true)` if the path already existed, or `(path_id, false)`
+<a href=#524 id=524 data-nosnippet>524</a>    /// if was opened.
 <a href=#525 id=525 data-nosnippet>525</a>    ///
-<a href=#526 id=526 data-nosnippet>526</a>    /// This means that you can pass `local_ip: None` to make the comparison only compare
-<a href=#527 id=527 data-nosnippet>527</a>    /// remote addresses.
-<a href=#528 id=528 data-nosnippet>528</a>    ///
-<a href=#529 id=529 data-nosnippet>529</a>    /// This avoids having to guess which local interface will be used to communicate with the
-<a href=#530 id=530 data-nosnippet>530</a>    /// remote, should it not be known yet. We assume that if we already have a path to the remote,
-<a href=#531 id=531 data-nosnippet>531</a>    /// the OS is likely to use the same interface to talk to said remote.
-<a href=#532 id=532 data-nosnippet>532</a>    ///
-<a href=#533 id=533 data-nosnippet>533</a>    /// See also [`open_path`]. Returns `(path_id, true)` if the path already existed. `(path_id,
-<a href=#534 id=534 data-nosnippet>534</a>    /// false)` if was opened.
+<a href=#526 id=526 data-nosnippet>526</a>    /// If `network_path` has no local IP set, then this will open a new path
+<a href=#527 id=527 data-nosnippet>527</a>    /// if no path exists for this remote address, independent of the existing
+<a href=#528 id=528 data-nosnippet>528</a>    /// path's local IP. If a local IP is set, it will match against the full
+<a href=#529 id=529 data-nosnippet>529</a>    /// four-tuple of existing paths. Not setting the local IP avoids having to
+<a href=#530 id=530 data-nosnippet>530</a>    /// guess which local interface will be used to communicate with the remote,
+<a href=#531 id=531 data-nosnippet>531</a>    /// should it not be known yet. We assume that if we already have a path to
+<a href=#532 id=532 data-nosnippet>532</a>    /// the remote, the OS is likely to use the same interface to talk to said remote.
+<a href=#533 id=533 data-nosnippet>533</a>    ///
+<a href=#534 id=534 data-nosnippet>534</a>    /// See also [`open_path`].
 <a href=#535 id=535 data-nosnippet>535</a>    ///
 <a href=#536 id=536 data-nosnippet>536</a>    /// [`open_path`]: Connection::open_path
 <a href=#537 id=537 data-nosnippet>537</a>    </span><span class="kw">pub fn </span>open_path_ensure(
@@ -5344,7 +5344,7 @@
 <a href=#5344 id=5344 data-nosnippet>5344</a>                    }
 <a href=#5345 id=5345 data-nosnippet>5345</a>
 <a href=#5346 id=5346 data-nosnippet>5346</a>                    <span class="kw">let </span>path = <span class="self">self</span>.path_data_mut(path_id);
-<a href=#5347 id=5347 data-nosnippet>5347</a>                    <span class="kw">if </span>path.network_path.is_probably_same_path(<span class="kw-2">&amp;</span>network_path) {
+<a href=#5347 id=5347 data-nosnippet>5347</a>                    <span class="kw">if </span>path.network_path.remote == network_path.remote {
 <a href=#5348 id=5348 data-nosnippet>5348</a>                        <span class="kw">if let </span><span class="prelude-val">Some</span>(updated) = path.update_observed_addr_report(observed)
 <a href=#5349 id=5349 data-nosnippet>5349</a>                            &amp;&amp; path.open_status == paths::OpenStatus::Informed
 <a href=#5350 id=5350 data-nosnippet>5350</a>                        {
@@ -7090,7 +7090,7 @@
 <a href=#7090 id=7090 data-nosnippet>7090</a>    ///
 <a href=#7091 id=7091 data-nosnippet>7091</a>    /// TODO(matheus23): This is related to noq endpoint state's `ipv6` bool. We should move that info
 <a href=#7092 id=7092 data-nosnippet>7092</a>    /// here instead of trying to hack around not knowing it exactly.
-<a href=#7093 id=7093 data-nosnippet>7093</a>    </span><span class="kw">fn </span>is_ipv6(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+<a href=#7093 id=7093 data-nosnippet>7093</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>is_ipv6(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
 <a href=#7094 id=7094 data-nosnippet>7094</a>        <span class="self">self</span>.paths
 <a href=#7095 id=7095 data-nosnippet>7095</a>            .values()
 <a href=#7096 id=7096 data-nosnippet>7096</a>            .any(|p| p.data.network_path.remote.is_ipv6())

@@ -57,14 +57,16 @@ events or timeouts with different instants must not be interleaved.</p>
     initial_status: <a class="enum" href="enum.PathStatus.html" title="enum noq_proto::PathStatus">PathStatus</a>,
     now: <a class="struct" href="https://doc.rust-lang.org/nightly/std/time/struct.Instant.html" title="struct std::time::Instant">Instant</a>,
 ) -&gt; <a class="enum" href="https://doc.rust-lang.org/nightly/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;(<a class="struct" href="struct.PathId.html" title="struct noq_proto::PathId">PathId</a>, <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.bool.html">bool</a>), <a class="enum" href="enum.PathError.html" title="enum noq_proto::PathError">PathError</a>&gt;</h4></section></summary><div class="docblock"><p>Opens a new path only if no path on the same network path currently exists.</p>
-<p>This comparison will use <a href="struct.FourTuple.html#method.is_probably_same_path" title="method noq_proto::FourTuple::is_probably_same_path"><code>FourTuple::is_probably_same_path</code></a> on the given <code>network_path</code>
-and pass it existing path’s network paths.</p>
-<p>This means that you can pass <code>local_ip: None</code> to make the comparison only compare
-remote addresses.</p>
-<p>This avoids having to guess which local interface will be used to communicate with the
-remote, should it not be known yet. We assume that if we already have a path to the remote,
-the OS is likely to use the same interface to talk to said remote.</p>
-<p>See also <a href="struct.Connection.html#method.open_path" title="method noq_proto::Connection::open_path"><code>open_path</code></a>. Returns <code>(path_id, true)</code> if the path already existed. <code>(path_id, false)</code> if was opened.</p>
+<p>Returns <code>(path_id, true)</code> if the path already existed, or <code>(path_id, false)</code>
+if was opened.</p>
+<p>If <code>network_path</code> has no local IP set, then this will open a new path
+if no path exists for this remote address, independent of the existing
+path’s local IP. If a local IP is set, it will match against the full
+four-tuple of existing paths. Not setting the local IP avoids having to
+guess which local interface will be used to communicate with the remote,
+should it not be known yet. We assume that if we already have a path to
+the remote, the OS is likely to use the same interface to talk to said remote.</p>
+<p>See also <a href="struct.Connection.html#method.open_path" title="method noq_proto::Connection::open_path"><code>open_path</code></a>.</p>
 </div></details><details class="toggle method-toggle" open><summary><section id="method.open_path" class="method"><a class="src rightside" href="../src/noq_proto/connection/mod.rs.html#558-602">Source</a><h4 class="code-header">pub fn <a href="#method.open_path" class="fn">open_path</a>(
     &amp;mut self,
     network_path: <a class="struct" href="struct.FourTuple.html" title="struct noq_proto::FourTuple">FourTuple</a>,

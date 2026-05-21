@@ -56,7 +56,7 @@
 <a href=#56 id=56 data-nosnippet>56</a>
 <a href=#57 id=57 data-nosnippet>57</a>        <span class="self">self</span>.state.next[dir <span class="kw">as </span>usize] += <span class="number">1</span>;
 <a href=#58 id=58 data-nosnippet>58</a>        <span class="kw">let </span>id = StreamId::new(<span class="self">self</span>.state.side, dir, <span class="self">self</span>.state.next[dir <span class="kw">as </span>usize] - <span class="number">1</span>);
-<a href=#59 id=59 data-nosnippet>59</a>        <span class="self">self</span>.state.insert(<span class="bool-val">false</span>, id);
+<a href=#59 id=59 data-nosnippet>59</a>        <span class="self">self</span>.state.insert_local(id);
 <a href=#60 id=60 data-nosnippet>60</a>        <span class="self">self</span>.state.send_streams += <span class="number">1</span>;
 <a href=#61 id=61 data-nosnippet>61</a>        <span class="prelude-val">Some</span>(id)
 <a href=#62 id=62 data-nosnippet>62</a>    }
