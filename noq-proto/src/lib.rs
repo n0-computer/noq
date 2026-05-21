@@ -366,6 +366,8 @@ const MAX_STREAM_COUNT: u64 = 1 << 60;
 /// Including the local ensures good behavior when the host has multiple IP addresses on the same
 /// subnet and zero-length connection IDs are in use or when multipath is enabled and multiple
 /// paths exist with the same remote, but different local IP interfaces.
+///
+/// `FourTuple` implements `From<SocketAddr>`, which expands to [`Self::from_remote`].
 #[derive(Hash, Eq, PartialEq, Copy, Clone)]
 pub struct FourTuple {
     /// The remote side of this tuple.
@@ -431,7 +433,7 @@ impl FourTuple {
     /// Note that because of this, the following calls might differ:
     /// - `a.is_probably_same_path(b)`
     /// - `b.is_probably_same_path(a)`
-    pub fn is_probably_same_path(&self, other: &Self) -> bool {
+    pub(crate) fn is_probably_same_path(&self, other: &Self) -> bool {
         self.remote == other.remote && (self.local_ip.is_none() || self.local_ip == other.local_ip)
     }
 
@@ -441,7 +443,7 @@ impl FourTuple {
     /// - the other tuple has a local address set.
     ///
     /// Returns whether this and the other remote are now fully equal.
-    pub fn update_local_if_same_remote(&mut self, other: &Self) -> bool {
+    pub(crate) fn update_local_if_same_remote(&mut self, other: &Self) -> bool {
         if self.remote != other.remote {
             return false;
         }
@@ -471,5 +473,12 @@ impl fmt::Display for FourTuple {
 impl fmt::Debug for FourTuple {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(&self, f)
+    }
+}
+
+/// Converts a [`SocketAddr`] to a [`FourTuple`] via [`FourTuple::from_remote`].
+impl From<SocketAddr> for FourTuple {
+    fn from(value: SocketAddr) -> Self {
+        Self::from_remote(value)
     }
 }
