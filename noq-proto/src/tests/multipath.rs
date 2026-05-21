@@ -9,7 +9,7 @@ use assert_matches::assert_matches;
 use testresult::TestResult;
 use tracing::info;
 
-use crate::tests::RoutingTable;
+use crate::tests::ManyToManyRouting;
 use crate::tests::util::ConnPair;
 use crate::{
     ClientConfig, ConnectionId, ConnectionIdGenerator, Endpoint, EndpointConfig, FourTuple,
@@ -22,7 +22,7 @@ use crate::{
 };
 
 use super::util::{min_opt, subscribe};
-use super::{Pair, SimpleFirewallRoutingTable, client_config, server_config};
+use super::{Pair, SimpleFirewallRouting, client_config, server_config};
 
 const MAX_PATHS: u32 = 3;
 
@@ -550,10 +550,11 @@ fn open_path_ensure_after_abandon() -> TestResult {
     let mut second_server_addr = pair.server.addr;
     second_client_addr.set_port(second_client_addr.port() + 1);
     second_server_addr.set_port(second_server_addr.port() + 1);
-    pair.routes = Some(Box::new(RoutingTable::simple_symmetric(
+    pair.routes = ManyToManyRouting::simple_symmetric(
         [pair.client.addr, second_client_addr],
         [pair.server.addr, second_server_addr],
-    )));
+    )
+    .into();
 
     let second_path = FourTuple {
         local_ip: Some(second_client_addr.ip()),
@@ -692,16 +693,24 @@ fn per_path_observed_address() -> TestResult {
 
     // check that the client received the correct address
     let expected_addr = pair.client.addr;
-    assert_matches!(pair.poll(Client), Some(Event::Path(PathEvent::ObservedAddr{id: PathId::ZERO, addr})) if addr == expected_addr);
+    assert_matches!(
+        pair.poll(Client),
+        Some(Event::Path(PathEvent::ObservedAddr{id: PathId::ZERO, addr}))
+            if addr == expected_addr
+    );
     assert_matches!(pair.poll(Client), None);
 
     // check that the server received the correct address
     let expected_addr = pair.server.addr;
-    assert_matches!(pair.poll(Server), Some(Event::Path(PathEvent::ObservedAddr{id: PathId::ZERO, addr})) if addr == expected_addr);
+    assert_matches!(
+        pair.poll(Server),
+        Some(Event::Path(PathEvent::ObservedAddr{id: PathId::ZERO, addr}))
+            if addr == expected_addr
+    );
     assert_matches!(pair.poll(Server), None);
 
     // simulate a rebind on the client, this will close the current path and open a new one
-    let our_addr = pair.passive_migration(Client);
+    let our_addr = pair.routes.as_basic_mut().passive_migration(Client);
     pair.handle_network_change(Client, None);
 
     pair.drive();
@@ -804,7 +813,7 @@ fn remote_can_close_last_validated_path() -> TestResult {
     let _guard = subscribe();
     let mut pair = multipath_pair();
 
-    pair.passive_migration(Client);
+    pair.routes.as_basic_mut().passive_migration(Client);
     let route = FourTuple {
         remote: pair.server.addr,
         local_ip: None,
@@ -836,7 +845,7 @@ fn network_change_multipath_no_hint_replaces_path() -> TestResult {
     let mut pair = multipath_pair();
 
     // Simulate a passive migration + network change with no hint
-    pair.passive_migration(Client);
+    pair.routes.as_basic_mut().passive_migration(Client);
     pair.handle_network_change(Client, None);
 
     pair.drive();
@@ -938,7 +947,7 @@ fn network_change_selective_hint() -> TestResult {
     }
     let hint = SelectiveHint(PathId::ZERO);
 
-    pair.passive_migration(Client);
+    pair.routes.as_basic_mut().passive_migration(Client);
     pair.handle_network_change(Client, Some(&hint));
 
     pair.drive();
@@ -1199,7 +1208,7 @@ fn server_abandon_last_verified_path() -> TestResult {
     // will assume the 2nd path is validated but to the server it will be
     // un-validated. Otherwise the client would not allow closing path 0 since there would
     // be no validated path left over.
-    pair.passive_migration(Client);
+    pair.routes.as_basic_mut().passive_migration(Client);
     let route = FourTuple {
         remote: pair.server.addr,
         local_ip: None,
@@ -1490,10 +1499,8 @@ fn abandon_cycle() -> TestResult {
         sa.set_port(sa.port() + i);
         addrs_server.push(sa);
     }
-    pair.routes = Some(Box::new(RoutingTable::simple_symmetric(
-        addrs_client.clone(),
-        addrs_server.clone(),
-    )));
+    pair.routes =
+        ManyToManyRouting::simple_symmetric(addrs_client.clone(), addrs_server.clone()).into();
 
     // Cycle: open a second path, abandon path 0, verify cleanup, repeat with new paths.
     // Each cycle uses a fresh pair of addresses.
@@ -1699,9 +1706,9 @@ fn test_simple_nat_traveral_opens_path() -> TestResult {
     let mut pair = multipath_pair_with_nat_traversal(true);
 
     info!("setting routes, adding addrs");
-    pair.routes = Some(Box::new(SimpleFirewallRoutingTable::new()));
-    pair.add_nat_traversal_address(Server, SimpleFirewallRoutingTable::SERVER_FW_ADDR)?;
-    pair.add_nat_traversal_address(Client, SimpleFirewallRoutingTable::CLIENT_FW_ADDR)?;
+    pair.routes = SimpleFirewallRouting::new().into();
+    pair.add_nat_traversal_address(Server, SimpleFirewallRouting::SERVER_FW_ADDR)?;
+    pair.add_nat_traversal_address(Client, SimpleFirewallRouting::CLIENT_FW_ADDR)?;
     pair.drive();
 
     let event = pair.poll(Client).expect("should have event");
@@ -1735,9 +1742,9 @@ fn test_simple_nat_traversal_challenge_with_response() -> TestResult {
     let mut pair = multipath_pair_with_nat_traversal(true);
 
     info!("setting routes, adding addrs");
-    pair.routes = Some(Box::new(SimpleFirewallRoutingTable::new()));
-    pair.add_nat_traversal_address(Server, SimpleFirewallRoutingTable::SERVER_FW_ADDR)?;
-    pair.add_nat_traversal_address(Client, SimpleFirewallRoutingTable::CLIENT_FW_ADDR)?;
+    pair.routes = SimpleFirewallRouting::new().into();
+    pair.add_nat_traversal_address(Server, SimpleFirewallRouting::SERVER_FW_ADDR)?;
+    pair.add_nat_traversal_address(Client, SimpleFirewallRouting::CLIENT_FW_ADDR)?;
     pair.drive();
 
     let event = pair.poll(Client).expect("should have event");

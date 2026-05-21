@@ -1409,9 +1409,7 @@ fn close_from_migrated_address() {
     pair.drive();
 
     // Change client address - server will see this as migration
-    pair.client.addr = SocketAddr::new(Ipv4Addr::new(127, 0, 0, 1).into(), 1);
-    assert_ne!(pair.client.addr, Pair::CLIENT_ADDR);
-    assert_ne!(pair.client.addr, Pair::SERVER_ADDR);
+    let client_addr = pair.routes.as_basic_mut().passive_migration(Client);
 
     // Client closes connection from the NEW address.  The server will see the migration and
     // close the connection on the new address.
@@ -1431,7 +1429,7 @@ fn close_from_migrated_address() {
     );
 
     let path = pair.conn(Server).network_path(PathId::ZERO).unwrap();
-    assert_eq!(path.remote(), pair.client.addr);
+    assert_eq!(path.remote(), client_addr);
 }
 
 #[test]
@@ -1463,9 +1461,7 @@ fn migration() {
 
     let client_stats_after_connect = pair.client_conn_mut(client_ch).stats();
 
-    pair.client.addr = SocketAddr::new(Ipv4Addr::new(127, 0, 0, 1).into(), 1);
-    assert_ne!(pair.client.addr, Pair::CLIENT_ADDR);
-    assert_ne!(pair.client.addr, Pair::SERVER_ADDR);
+    let client_addr = pair.routes.as_basic_mut().passive_migration(Client);
     pair.client_conn_mut(client_ch).ping();
 
     // Assert that just receiving the ping message is accounted into the servers
@@ -1480,7 +1476,7 @@ fn migration() {
         pair.server_conn_mut(server_ch)
             .network_path(PathId::ZERO)
             .map(|addrs| addrs.remote),
-        Ok(pair.client.addr)
+        Ok(client_addr)
     );
 
     // Assert that the client's response to the PATH_CHALLENGE was an IMMEDIATE_ACK, instead of a
@@ -1583,7 +1579,7 @@ fn regression_path_validation_stale_local_after_passive_migration() {
     // only *after* passive migration has changed the client's observed local IP.
     pair.client.inbound.clear();
 
-    pair.passive_migration(Client);
+    pair.routes.as_basic_mut().passive_migration(Client);
 
     // Send a ping so the server detects the migration and starts routing to the new ip.
     pair.conn_mut(Client).ping();
@@ -2693,9 +2689,7 @@ fn migrate_detects_new_mtu_and_respects_original_peer_max_udp_payload_size() {
 
     // Migrate client to a different port (and simulate a higher path MTU)
     pair.mtu = 1500;
-    pair.client.addr = SocketAddr::new(Ipv4Addr::new(127, 0, 0, 1).into(), 1);
-    assert_ne!(pair.client.addr, Pair::CLIENT_ADDR);
-    assert_ne!(pair.client.addr, Pair::SERVER_ADDR);
+    let client_addr = pair.routes.as_basic_mut().passive_migration(Client);
     pair.client_conn_mut(client_ch).ping();
     pair.drive();
 
@@ -2704,7 +2698,7 @@ fn migrate_detects_new_mtu_and_respects_original_peer_max_udp_payload_size() {
         pair.server_conn_mut(server_ch)
             .network_path(PathId::ZERO)
             .map(|addrs| addrs.remote),
-        Ok(pair.client.addr)
+        Ok(client_addr)
     );
 
     // MTU detection has successfully run after migrating
@@ -3979,14 +3973,16 @@ fn address_discovery_rebind_retransmission() {
     let time = pair.time;
     pair.client_conn_mut(client_ch)
         .handle_network_change(None, time);
-    pair.client
-        .addr
-        .set_port(pair.client.addr.port().overflowing_add(1).0);
+    let client_addr = pair.routes.as_basic_mut().passive_migration(Client);
 
     pair.drive();
     let conn = pair.client_conn_mut(client_ch);
     assert_matches!(conn.poll(), Some(Event::HandshakeConfirmed));
-    assert_matches!(conn.poll(), Some(Event::Path(PathEvent::ObservedAddr{id: PathId::ZERO, addr})) if addr == pair.client.addr);
+    assert_matches!(
+        conn.poll(),
+        Some(Event::Path(PathEvent::ObservedAddr{id: PathId::ZERO, addr}))
+            if addr == client_addr
+    );
 }
 
 /// Non-multipath: handle_network_change pings for liveness and rotates the CID
@@ -4002,7 +3998,7 @@ fn network_change_single_path_recovery() {
     let cid_seq_before = pair.conn(Client).active_remote_cid_seq();
 
     // Simulate a passive migration (port change) + network change notification
-    pair.passive_migration(Client);
+    pair.routes.as_basic_mut().passive_migration(Client);
     pair.handle_network_change(Client, None);
 
     // The path should NOT be closed and there should be no path events
@@ -4321,4 +4317,60 @@ fn regression_close_without_connection_event() {
         pair.client_conn_mut(client_ch).poll(),
         Some(Event::ConnectionLost { .. })
     );
+}
+
+/// Ensures that the draining delay for the server is exactly 0.5 RTT and 1 RTT for the client.
+///
+/// The draining delay is the time between the connection being closed and the connection
+/// entering the "draining" state (either on the same or on the other side).
+///
+/// We expect the side that *receives* the CONNECTION_CLOSE to immediately enter the draining
+/// state. However in absolute terms, it'll be delayed by 0.5 RTT (exactly the latency) compared
+/// to when `connection.close()` was called.
+/// On the side that called `connection.close()` we first enter the "closed" state, and only
+/// enter the "draining" state once we *receive* a "reciprocal" CONNECTION_CLOSE from the other
+/// side. In the normal case this will be exactly 1 RTT after calling `connection.close()` to
+/// account for the latency of CONNECTION_CLOSE going one way and then coming back.
+///
+/// The "draining" state from noq-proto is observed by noq to enable `wait_idle` waiting the
+/// ideal amount of time before allowing us to close the socket.
+#[test]
+fn timely_graceful_close() {
+    const ONE_WAY_LATENCY: Duration = Duration::from_millis(100);
+
+    let _guard = subscribe();
+    let mut pair = Pair::default();
+    pair.latency = ONE_WAY_LATENCY;
+    let mut pair = ConnPair::connect_with(pair, client_config());
+
+    let start = pair.time;
+    pair.close(Client, 0, b"done!");
+
+    assert!(!pair.is_draining(Client));
+    assert!(!pair.is_draining(Server));
+
+    // The client now sends CONNECTION_CLOSE to the server and it processes it.
+    // When the server receives CONNECTION_CLOSE, it responds with one of its own
+    // and enters the draining state.
+    pair.drive_client();
+    pair.advance_time();
+    let now = pair.time;
+    pair.drive_server();
+
+    assert!(pair.is_draining(Server));
+    let server_draining_delay = now.saturating_duration_since(start);
+    info!(?server_draining_delay);
+    assert_eq!(server_draining_delay, ONE_WAY_LATENCY);
+
+    // The server has now sent a CONNECTION_CLOSE back in response and the client processes it.
+    // The client then enters the draining state once it processed the response.
+    // already drove server
+    pair.advance_time();
+    let now = pair.time;
+    pair.drive_client();
+
+    assert!(pair.is_draining(Client));
+    let client_draining_delay = now.saturating_duration_since(start);
+    info!(?client_draining_delay);
+    assert_eq!(client_draining_delay, ONE_WAY_LATENCY * 2);
 }
