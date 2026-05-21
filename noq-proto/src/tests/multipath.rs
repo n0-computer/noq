@@ -1816,11 +1816,11 @@ fn test_peer_may_probe() -> TestResult {
     };
 
     let mut pair = Pair::new(Default::default(), server_cfg);
-    pair.routes = Some(Box::new(SimpleFirewallRoutingTable::new()));
+    pair.routes = SimpleFirewallRouting::new().into();
 
     let mut pair = ConnPair::connect_with(pair, client_cfg);
-    pair.add_nat_traversal_address(Server, SimpleFirewallRoutingTable::SERVER_FW_ADDR)?;
-    pair.add_nat_traversal_address(Client, SimpleFirewallRoutingTable::CLIENT_FW_ADDR)?;
+    pair.add_nat_traversal_address(Server, SimpleFirewallRouting::SERVER_FW_ADDR)?;
+    pair.add_nat_traversal_address(Client, SimpleFirewallRouting::CLIENT_FW_ADDR)?;
     pair.drive();
 
     let event = pair.poll(Client).expect("should have event");
