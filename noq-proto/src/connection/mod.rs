@@ -2281,12 +2281,7 @@ impl Connection {
             return true;
         }
 
-        // TODO(flub): In RFC9000 the server is allowed to send off-path probing packets
-        //    once the client has been probing such a 4-tuple. These probes are currently
-        //    not yet recognised and discarded here.
-        //    See https://github.com/n0-computer/noq/issues/607.
         let peer_may_probe = self.peer_may_probe();
-
         let local_ip_may_migrate = self.local_ip_may_migrate();
 
         // If this packet could initiate a migration and we're a client or a server that
@@ -2348,23 +2343,20 @@ impl Connection {
 
     /// Whether the peer's remote address may migrate.
     ///
+    /// In RFC9000 only the client may migrate.
+    ///
     /// QUIC relies on stable endpoints during the handshake. So other than the server's
     /// preferred_address transport parameter no side may migrate before the handshake is
     /// completed.
     ///
-    /// In RFC9000 only the client may migrate. If QNT is negotiated the server may migrate
-    /// as well.
-    ///
-    /// Additionally for iroh we allow the server to migrate once during the handshake as
-    /// long as the client has not received an authenticated Handshake packet. This allows
-    /// us to duplicate client Initial packets to multiple destinations. See
-    /// [`state::Handshake::allow_server_migration`].
+    /// It is noteworthy that for iroh we allow server migrations during the handshake when
+    /// [`state::Handshake::allow_server_migration`] is enabled, but that is handled earlier
+    /// in [`Self::handle_packet`] and without probing the current and previous paths.
     fn peer_may_migrate(&self) -> bool {
         match &self.side {
             ConnectionSide::Server { server_config } => {
                 server_config.migration && self.is_handshake_confirmed()
             }
-            // We don't allow servers to migrate
             ConnectionSide::Client { .. } => false,
         }
     }
