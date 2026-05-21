@@ -3947,6 +3947,7 @@ fn address_discovery_rebind_retransmission() {
             address_discovery_role: crate::address_discovery::Role::Both,
             // Assume a low-latency connection so pacing doesn't interfere with the test
             initial_rtt: Duration::from_millis(10),
+            mtu_discovery_config: None,
             ..TransportConfig::default()
         }),
         ..server_config()
@@ -3957,6 +3958,7 @@ fn address_discovery_rebind_retransmission() {
             address_discovery_role: crate::address_discovery::Role::Both,
             // Assume a low-latency connection so pacing doesn't interfere with the test
             initial_rtt: Duration::from_millis(10),
+            mtu_discovery_config: None,
             ..TransportConfig::default()
         }),
         ..client_config()
