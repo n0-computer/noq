@@ -616,10 +616,15 @@ impl ClientState {
             let remote = (network_path.remote().ip(), network_path.remote().port());
             if *entry.get() == remote {
                 entry.remove();
+                trace!(
+                    ?network_path,
+                    challenge = %display(format_args!("0x{challenge:x}")),
+                    "Received valid NAT traversal probe response",
+                );
+                self.paths_to_be_opened.push(network_path);
 
-                // self.remote_addresses is stored in canonical form.
-                let remote = CanonicalIpPort::from(remote);
                 // TODO: linear search is sad.
+                let remote = CanonicalIpPort::from(remote);
                 if let Some(seq) = self
                     .remote_addresses
                     .iter()
@@ -630,18 +635,17 @@ impl ClientState {
                     )
                     .next()
                 {
-                    trace!(
-                        ?network_path,
-                        challenge = %display(format_args!("0x{challenge:x}")),
-                        "Received valid NAT traversal probe response",
-                    );
+                    // Stop probing this remote address.
                     self.remote_addresses
                         .insert(seq, (remote, ProbeState::Succeeded));
-                    self.paths_to_be_opened.push(network_path);
-                    return true;
                 } else {
-                    debug!("inconsistent remote addrs and seq");
+                    // Nothing to stop probing, the remote was only challenged because a
+                    // PATH_RESPONSE was being sent to it. These are not retried locally
+                    // since the peer is responsible for retrying the challenges until it
+                    // receives a response, at which time the local challenge is delivered.
+                    trace!("probe opened un-advertised address, peer likely behind DEDN");
                 }
+                return true;
             } else {
                 debug!(
                     ?network_path.remote,
