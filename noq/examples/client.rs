@@ -162,7 +162,7 @@ async fn run(options: Opt) -> Result<()> {
     conn.close(0u32.into(), b"done");
 
     // Give the server a fair chance to receive the close packet
-    endpoint.wait_idle().await;
+    endpoint.wait_all_draining().await;
 
     Ok(())
 }

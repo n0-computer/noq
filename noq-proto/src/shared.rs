@@ -48,10 +48,17 @@ impl EndpointEvent {
     pub fn is_drained(&self) -> bool {
         self.0 == EndpointEventInner::Drained
     }
+
+    /// Whether this is the event is the event indicating the start of the draining period.
+    pub fn is_draining(&self) -> bool {
+        self.0 == EndpointEventInner::Draining
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum EndpointEventInner {
+    /// The connection started draining
+    Draining,
     /// The connection has been drained
     Drained,
     /// The connection has a new active reset token

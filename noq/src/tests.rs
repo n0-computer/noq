@@ -23,7 +23,10 @@ use std::{
 use crate::runtime::TokioRuntime;
 use crate::{Duration, Instant};
 use bytes::Bytes;
-use proto::{ConnectionError, PathId, RandomConnectionIdGenerator, crypto::rustls::QuicClientConfig};
+use proto::{
+    ConnectionError, FourTuple, PathId, PathStatus, RandomConnectionIdGenerator,
+    crypto::rustls::QuicClientConfig,
+};
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use rustls::{
     RootCertStore,
@@ -408,7 +411,7 @@ async fn zero_rtt() {
 
     drop((stream, connection));
 
-    endpoint.wait_idle().await;
+    endpoint.wait_all_draining().await;
 }
 
 #[test]
@@ -583,7 +586,7 @@ fn run_echo(args: EchoArgs) {
                     tokio::spawn(echo(stream));
                 }
             });
-            server.wait_idle().await;
+            server.wait_all_draining().await;
         });
 
         info!("connecting from {} to {}", args.client_addr, server_addr);
@@ -614,7 +617,7 @@ fn run_echo(args: EchoArgs) {
                     assert_eq!(data[..], msg[..], "Data mismatch");
                 }
                 new_conn.close(0u32.into(), b"done");
-                client.wait_idle().await;
+                client.wait_all_draining().await;
             }
             .instrument(error_span!("client")),
         );
@@ -1024,7 +1027,7 @@ async fn test_open_path_ensure_existing_path() {
 
         // Re-ensuring the already-established path (PathId::ZERO) takes the
         // `existed` branch in `open_path_ensure`.
-        let fut = conn.open_path_ensure(server_addr, proto::PathStatus::Available);
+        let fut = conn.open_path_ensure(FourTuple::from_remote(server_addr), PathStatus::Available);
         let expected_path_id = fut
             .path_id()
             .expect("open_path_ensure should allocate or reuse a path id");
@@ -1078,7 +1081,7 @@ async fn test_multipath_observed_address() {
         // this sleep after the poll_transmit unwraps have been addressed
         tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
         let path = conn
-            .open_path(server_addr, proto::PathStatus::Available)
+            .open_path(FourTuple::from_remote(server_addr), PathStatus::Available)
             .await
             .unwrap();
         let mut reports = path.observed_external_addr().unwrap();
@@ -1257,7 +1260,7 @@ async fn dropped_connection_cleans_up() {
         },
         async { endpoint.accept().await.unwrap().await.unwrap() }
     );
-    endpoint.wait_idle().await;
+    endpoint.wait_all_draining().await;
 }
 
 /// Test that accessing stats from `Path` works as expected.
@@ -1293,7 +1296,7 @@ async fn path_clone_stats_after_abandon() {
         let path = tokio::time::timeout(Duration::from_secs(1), async {
             loop {
                 match conn
-                    .open_path(server_addr, proto::PathStatus::Available)
+                    .open_path(FourTuple::from_remote(server_addr), PathStatus::Available)
                     .await
                 {
                     Ok(path) => break path,
@@ -1380,7 +1383,7 @@ async fn closed_includes_path_stats_for_all_known_paths() -> TestResult {
         // Open a second path.
         let path2 = loop {
             match conn
-                .open_path(server_addr, proto::PathStatus::Available)
+                .open_path(FourTuple::from_remote(server_addr), PathStatus::Available)
                 .await
             {
                 Ok(p) => break p,
@@ -1459,7 +1462,7 @@ async fn close_path() -> TestResult {
         // The server learns the path ID from the Opened event
         let mut path_id = None;
         while let Some(Ok(evt)) = path_events.next().await {
-            if let proto::PathEvent::Established { id } = evt {
+            if let proto::PathEvent::Established { id, .. } = evt {
                 path_id = Some(id);
                 break;
             }
@@ -1477,7 +1480,7 @@ async fn close_path() -> TestResult {
 
         test_done_tx.send(()).expect("not dropped");
 
-        server.wait_idle().await;
+        server.wait_all_draining().await;
 
         TestResult::Ok(())
     }
@@ -1494,7 +1497,7 @@ async fn close_path() -> TestResult {
         // Open a second path, retrying until remote CIDs are available
         let path = loop {
             match conn
-                .open_path(server_addr, proto::PathStatus::Available)
+                .open_path(FourTuple::from_remote(server_addr), PathStatus::Available)
                 .await
             {
                 Ok(path) => break path,
@@ -1523,7 +1526,7 @@ async fn close_path() -> TestResult {
         test_done_rx.await.expect("not dropped");
 
         client.close(0u8.into(), b"test finished");
-        client.wait_idle().await;
+        client.wait_all_draining().await;
 
         TestResult::Ok(())
     }

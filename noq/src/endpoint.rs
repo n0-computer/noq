@@ -366,16 +366,16 @@ impl Endpoint {
         }
     }
 
-    /// Wait for all connections on the endpoint to be cleanly shut down
+    /// Waits for all connections on the endpoint to be cleanly shut down and drained.
     ///
-    /// Waiting for this condition before exiting ensures that a good-faith effort is made to notify
-    /// peers of recent connection closes, whereas exiting immediately could force them to wait out
-    /// the idle timeout period.
+    /// This is equivalent to [`wait_all_draining()`] with additionally waiting for the connections to be
+    /// drained. Please see its documentation for more information.
     ///
-    /// Does not proactively close existing connections or cause incoming connections to be
-    /// rejected. Consider calling [`close()`] if that is desired.
+    /// Use `wait_idle()` in favor of `wait_all_draining()` if you care about waiting for the
+    /// [`Connection`] structs to be dropped.
     ///
-    /// [`close()`]: Endpoint::close
+    /// [`wait_all_draining()`]: Self::wait_all_draining
+    /// [`Connection`]: crate::Connection
     pub async fn wait_idle(&self) {
         loop {
             {
@@ -385,6 +385,37 @@ impl Endpoint {
                 }
                 // Construct future while lock is held to avoid race
                 self.inner.shared.idle.notified()
+            }
+            .await;
+        }
+    }
+
+    /// Waits for all connections on the endpoint to be ready for shutting down.
+    ///
+    /// Waiting for this condition before exiting ensures that a good-faith effort is made to notify
+    /// peers of recent connection closes, whereas exiting immediately could force them to wait out
+    /// the idle timeout period.
+    ///
+    /// Does not proactively close existing connections or cause incoming connections to be
+    /// rejected. Consider calling [`close()`] if that is desired.
+    ///
+    /// Unlike [`wait_idle()`], this doesn't wait for the full draining period, so it can't be
+    /// used to wait for all now-idle [`Connection`]s to be dropped.
+    ///
+    /// See also this section in the QUIC RFC: <https://datatracker.ietf.org/doc/html/rfc9000#section-10.2-6>
+    ///
+    /// [`close()`]: Self::close
+    /// [`wait_idle()`]: Self::wait_idle
+    /// [`Connection`]: crate::Connection
+    pub async fn wait_all_draining(&self) {
+        loop {
+            {
+                let endpoint = &mut *self.inner.state.lock().unwrap();
+                if endpoint.recv_state.connections.active_connections == 0 {
+                    break;
+                }
+                // Construct future while lock is held to avoid race
+                self.inner.shared.all_draining.notified()
             }
             .await;
         }
@@ -467,6 +498,7 @@ impl Drop for EndpointDriver {
         // Drop all outgoing channels, signaling the termination of the endpoint to the associated
         // connections.
         endpoint.recv_state.connections.senders.clear();
+        endpoint.recv_state.connections.active_connections = 0;
     }
 }
 
@@ -550,7 +582,17 @@ pub(crate) struct State {
 
 #[derive(Debug)]
 pub(crate) struct Shared {
+    /// Notifies subscribers of new incoming connections.
+    ///
+    /// This enables the `Endpoint::accept` API.
     incoming: Notify,
+    /// Notifies subscribers when *all* connections have entered the draining state.
+    ///
+    /// This powers the `Endpoint::wait_idle` API.
+    all_draining: Notify,
+    /// Notifies subscribesr when *all* connections have been dropped.
+    ///
+    /// This powers the `Endpoint::wait_drained` API.
     idle: Notify,
     /// Number of live handles that can be used to initiate or handle I/O; excludes the driver
     ref_count: AtomicUsize,
@@ -602,7 +644,12 @@ impl State {
                 }
             };
 
-            if event.is_drained() {
+            if event.is_draining() {
+                self.recv_state.connections.active_connections -= 1;
+                if self.recv_state.connections.active_connections == 0 {
+                    shared.all_draining.notify_waiters();
+                }
+            } else if event.is_drained() {
                 self.recv_state.connections.senders.remove(&ch);
                 if self.recv_state.connections.is_empty() {
                     shared.idle.notify_waiters();
@@ -700,6 +747,16 @@ struct ConnectionSet {
     sender: mpsc::UnboundedSender<(ConnectionHandle, EndpointEvent)>,
     /// Set if the endpoint has been manually closed
     close: Option<(VarInt, Bytes)>,
+    /// Counter for all active (non-draining/drained) connections.
+    ///
+    /// This is directly related to the QUIC connection states "Initial", "Handshake",
+    /// "Established", "Closed", "Draining" and "Drained" (see also `proto/src/connection/state.rs`).
+    ///
+    /// Any connection state that is not "Draining" or "Drained" is considered active.
+    ///
+    /// This counter is updated when new connections are added ([`ConnectionSet::insert`]) and when
+    /// a connection informs us about entering the draining state ([`State::handle_events`]).
+    active_connections: u64,
 }
 
 impl ConnectionSet {
@@ -719,6 +776,9 @@ impl ConnectionSet {
             .unwrap();
         }
         self.senders.insert(handle, send);
+        if self.close.is_none() {
+            self.active_connections += 1;
+        }
         Connecting::new(handle, conn, self.sender.clone(), recv, sender, runtime)
     }
 
@@ -789,6 +849,7 @@ impl EndpointRef {
         Self(Arc::new(EndpointInner {
             shared: Shared {
                 incoming: Notify::new(),
+                all_draining: Notify::new(),
                 idle: Notify::new(),
                 ref_count: AtomicUsize::new(0),
             },
@@ -864,6 +925,7 @@ impl RecvState {
                 senders: FxHashMap::default(),
                 sender,
                 close: None,
+                active_connections: 0,
             },
             incoming: VecDeque::new(),
             recv_buf: recv_buf.into(),

@@ -201,7 +201,7 @@ pub async fn run(opt: Opt) -> Result<()> {
         }
     }
 
-    endpoint.wait_idle().await;
+    endpoint.wait_all_draining().await;
 
     #[cfg(feature = "json-output")]
     if let Some(path) = opt.json {

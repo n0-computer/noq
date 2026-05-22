@@ -7,7 +7,7 @@ use std::task::{Context, Poll, ready};
 use std::time::Duration;
 
 use proto::{
-    ClosePathError, ClosedPath, PathError, PathEvent, PathId, PathStats, PathStatus,
+    ClosePathError, ClosedPath, FourTuple, PathError, PathEvent, PathId, PathStats, PathStatus,
     SetPathStatusError, TransportErrorCode,
 };
 use tokio::sync::watch;
@@ -269,6 +269,14 @@ impl Path {
         Ok(state.inner.network_path(self.id())?.local_ip())
     }
 
+    /// The network path used for this path.
+    ///
+    /// Returns a [`FourTuple`], combining [`Self::remote_address`] and [`Self::local_ip`].
+    pub fn network_path(&self) -> Result<FourTuple, ClosedPath> {
+        let state = self.conn.lock_without_waking("per_path_local_ip");
+        state.inner.network_path(self.id())
+    }
+
     /// Ping the remote endpoint over this path.
     pub fn ping(&self) -> Result<(), ClosedPath> {
         let mut state = self.conn.lock_and_wake("ping");
@@ -423,7 +431,9 @@ impl AddressDiscovery {
         let filter = async move {
             loop {
                 match path_events.recv().await {
-                    Ok(PathEvent::ObservedAddr { id, addr: observed }) if id == path_id => {
+                    Ok(PathEvent::ObservedAddr {
+                        id, addr: observed, ..
+                    }) if id == path_id => {
                         tx.send_if_modified(|addr| {
                             let old = std::mem::replace(addr, observed);
                             old != *addr

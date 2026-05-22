@@ -1039,8 +1039,10 @@ pub enum PathStatus {
 
 /// Application events about paths
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PathEvent {
     /// A new path has established connection with the peer.
+    #[non_exhaustive]
     Established {
         /// The path which can now be used for application data.
         id: PathId,
@@ -1048,6 +1050,7 @@ pub enum PathEvent {
     /// A path was abandoned and is no longer usable.
     ///
     /// This event will always be followed by [`Self::Discarded`] after some time.
+    #[non_exhaustive]
     Abandoned {
         /// With path was abandoned.
         id: PathId,
@@ -1057,6 +1060,7 @@ pub enum PathEvent {
     /// A path was discarded and all remaining state for it has been removed.
     ///
     /// This event is the last event for a path, and is always emitted after [`Self::Abandoned`].
+    #[non_exhaustive]
     Discarded {
         /// Which path had its state dropped
         id: PathId,
@@ -1070,6 +1074,7 @@ pub enum PathEvent {
     /// The local status is not changed because of this event. It is up to the application
     /// to update the local status, which is used for packet scheduling, when the remote
     /// changes the status.
+    #[non_exhaustive]
     RemoteStatus {
         /// Path which has changed status
         id: PathId,
@@ -1077,6 +1082,7 @@ pub enum PathEvent {
         status: PathStatus,
     },
     /// Received an observation of our external address from the peer.
+    #[non_exhaustive]
     ObservedAddr {
         /// Path over which the observed address was reported, [`PathId::ZERO`] when multipath is
         /// not negotiated
@@ -1100,8 +1106,6 @@ pub enum PathAbandonReason {
     TimedOut,
     /// The path became unusable after a local network change.
     UnusableAfterNetworkChange,
-    /// The path was opened in a NAT traversal round which was terminated.
-    NatTraversalRoundEnded,
     /// The remote closed the path.
     RemoteAbandoned {
         /// The error that was sent with the abandon frame.
@@ -1119,7 +1123,6 @@ impl PathAbandonReason {
     pub(crate) fn error_code(&self) -> TransportErrorCode {
         match self {
             Self::ApplicationClosed { error_code } => (*error_code).into(),
-            Self::NatTraversalRoundEnded => TransportErrorCode::APPLICATION_ABANDON_PATH,
             Self::ValidationFailed | Self::TimedOut | Self::UnusableAfterNetworkChange => {
                 TransportErrorCode::PATH_UNSTABLE_OR_POOR
             }

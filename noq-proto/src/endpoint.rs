@@ -129,6 +129,9 @@ impl Endpoint {
                     }
                 }
             }
+            Draining => {
+                // Nothing to do.
+            }
             Drained => {
                 if let Some(conn) = self.connections.try_remove(ch.0) {
                     self.index.remove(&conn);

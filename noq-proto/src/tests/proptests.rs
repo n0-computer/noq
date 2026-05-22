@@ -16,11 +16,13 @@ use crate::{
     ClientConfig, Connection, ConnectionClose, ConnectionError, Event, PathStatus, Side,
     TransportConfig, TransportErrorCode,
     tests::{
-        Pair, RoutingTable, client_config,
+        ManyToManyRouting, Pair, client_config,
         random_interaction::{TestOp, run_random_interaction},
         server_config, subscribe,
     },
 };
+
+use super::BasicRouting;
 
 // These TransportConfig constants are designed to match iroh for now.
 const MAX_MULTIPATH_PATHS: u32 = 8;
@@ -88,13 +90,13 @@ enum Extensions {
 /// The advantage of using this is very efficient shrinking: The first attempt at shrinking the
 /// routing setup will be to reduce the routing setup to nothing or a simple symmetric one.
 #[derive(Debug, test_strategy::Arbitrary)]
-enum RoutingSetup {
-    /// Set [`Pair::routes`] to `None`
-    None,
+pub(super) enum RoutingSetup {
+    /// Set [`Pair::routes`] to [`BasicRouting`]
+    Basic,
     /// Use [`RoutingTable::simple_symmetric`] with the default [`CLIENT_ADDRS`] and [`SERVER_ADDRS`].
     SimpleSymmetric,
     /// Use given generated routing table.
-    Complex(#[strategy(routing_table())] RoutingTable),
+    Complex(#[strategy(routing_table())] ManyToManyRouting),
 }
 
 /// Which seed to use in the test setup.
@@ -159,19 +161,23 @@ impl PairSetup {
         // Add routing, if enabled
 
         match self.routing_setup {
-            RoutingSetup::None => {
-                pair.routes = None;
+            RoutingSetup::Basic => {
+                pair.routes = BasicRouting {
+                    client_addr: pair.client.addr,
+                    server_addr: pair.server.addr,
+                }
+                .into();
             }
             RoutingSetup::SimpleSymmetric => {
-                let routes = RoutingTable::simple_symmetric(CLIENT_ADDRS, SERVER_ADDRS);
+                let routes = ManyToManyRouting::simple_symmetric(CLIENT_ADDRS, SERVER_ADDRS);
                 pair.client.addr = routes.client_addr(0).unwrap();
                 pair.server.addr = routes.server_addr(0).unwrap();
-                pair.routes = Some(Box::new(routes));
+                pair.routes = routes.into();
             }
             RoutingSetup::Complex(routes) => {
                 pair.client.addr = routes.client_addr(0).unwrap();
                 pair.server.addr = routes.server_addr(0).unwrap();
-                pair.routes = Some(Box::new(routes));
+                pair.routes = routes.into();
             }
         }
 
@@ -215,7 +221,7 @@ fn random_interaction(
     )));
 }
 
-fn routing_table() -> impl Strategy<Value = RoutingTable> {
+fn routing_table() -> impl Strategy<Value = ManyToManyRouting> {
     (vec(0..=5usize, 0..=4), vec(0..=5usize, 0..=4)).prop_map(|(client_offsets, server_offsets)| {
         let mut client_addr = SocketAddr::new(
             IpAddr::V6(Ipv4Addr::new(1, 1, 1, 0).to_ipv6_mapped()),
@@ -244,7 +250,7 @@ fn routing_table() -> impl Strategy<Value = RoutingTable> {
             server_routes.push((server_addr, client_idx));
         }
 
-        RoutingTable::from_routes(client_routes, server_routes)
+        ManyToManyRouting::from_routes(client_routes, server_routes)
     })
 }
 
@@ -252,8 +258,8 @@ fn routing_table() -> impl Strategy<Value = RoutingTable> {
 ///
 /// Client and server have multiple interfaces, but all outgoing links go to the first
 /// interface of defined for the peer.
-fn old_routing_table() -> RoutingTable {
-    let mut routes = RoutingTable::simple_symmetric([CLIENT_ADDRS[0]], [SERVER_ADDRS[0]]);
+fn old_routing_table() -> ManyToManyRouting {
+    let mut routes = ManyToManyRouting::simple_symmetric([CLIENT_ADDRS[0]], [SERVER_ADDRS[0]]);
     for addr in CLIENT_ADDRS.into_iter().skip(1) {
         routes.add_client_route(addr, 0);
     }
@@ -700,7 +706,7 @@ fn regression_path_validation() {
     let setup = PairSetup {
         seed: Seed::Zeroes,
         extensions: Extensions::MultipathOnly,
-        routing_setup: RoutingSetup::Complex(RoutingTable::from_routes(
+        routing_setup: RoutingSetup::Complex(ManyToManyRouting::from_routes(
             vec![("[::ffff:1.1.1.0]:44433".parse().unwrap(), 0)],
             vec![
                 ("[::ffff:2.2.2.0]:4433".parse().unwrap(), 0),
@@ -1019,7 +1025,7 @@ fn regression_never_idle4() {
     let setup = PairSetup {
         seed: Seed::Zeroes,
         extensions: Extensions::MultipathOnly,
-        routing_setup: RoutingSetup::Complex(RoutingTable::from_routes(
+        routing_setup: RoutingSetup::Complex(ManyToManyRouting::from_routes(
             vec![
                 ("[::ffff:1.1.1.0]:44433".parse().unwrap(), 0),
                 ("[::ffff:1.1.1.1]:44433".parse().unwrap(), 0),
@@ -1187,6 +1193,62 @@ fn regression_qnt_revalidating_path_forever() {
             addr_idx: 0,
         },
         TestOp::InitiateHpRound { side: Side::Client },
+    ];
+
+    let _guard = subscribe();
+    let (mut pair, client_config) = setup.run(prefix);
+    let (client_ch, server_ch) = run_random_interaction(&mut pair, interactions, client_config);
+
+    assert!(!pair.drive_bounded(1000), "connection never became idle");
+    assert!(allowed_error(poll_to_close(
+        pair.client_conn_mut(client_ch)
+    )));
+    assert!(allowed_error(poll_to_close(
+        pair.server_conn_mut(server_ch)
+    )));
+}
+
+/// This reproduced a never-idle infinite loop where both the client and server would
+/// infinitely migration-probe each other.
+///
+/// This was fixed by disallowing migration probing on the client side (it was accidentally
+/// enabled).
+///
+/// This test would have both client and server swap back and forth the 4-tuple on one path
+/// between (1.1.1.2, 2.2.2.0) and (1.1.1.1, 2.2.2.2).
+///
+/// Each time the server detected the client's migration, it would switch its 4-tuple and
+/// probe the previous path.
+/// This would then trigger migration detection on the client side, making it probe both
+/// 4-tuples itself, causing the server to detect yet another migration and so on.
+#[test]
+fn regression_migration_probing_loop() {
+    let prefix = "regression_migration_probing_loop";
+    let setup = PairSetup {
+        seed: Seed::Zeroes,
+        extensions: Extensions::QntAndMultipath,
+        routing_setup: RoutingSetup::SimpleSymmetric,
+    };
+    let interactions = vec![
+        TestOp::OpenPath {
+            side: Side::Client,
+            status: PathStatus::Available,
+            addr_idx: 0,
+        },
+        TestOp::PassiveMigration {
+            side: Side::Client,
+            addr_idx: 0,
+        },
+        TestOp::Drive { side: Side::Client },
+        TestOp::ClosePath {
+            side: Side::Client,
+            path_idx: 0,
+            error_code: 0,
+        },
+        TestOp::PassiveMigration {
+            side: Side::Client,
+            addr_idx: 0,
+        },
     ];
 
     let _guard = subscribe();
