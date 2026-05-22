@@ -1425,7 +1425,7 @@ impl From<ManyToManyRouting> for Routing {
 impl ManyToManyRouting {
     fn public_server_addr(&self) -> SocketAddr {
         // Return the address that the first client address can send to.
-        self.server_routes[self.client_routes[0].1].0
+        self.server_routes[0].0
     }
 
     fn route_client_to_server(&mut self, transmit: &Transmit) -> RoutingDecision {
