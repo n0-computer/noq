@@ -93,13 +93,25 @@ impl PathTimer {
     ];
 }
 
+/// Newtype around [`PathId`] that implements [`IdentityHashable`].
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Default)]
+struct PathIdKey(PathId);
+
+impl IdentityHashable for PathIdKey {}
+
+impl std::hash::Hash for PathIdKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        state.write_u32(self.0.0);
+    }
+}
+
 /// Keeps track of the nearest timeout for each `Timer`
 ///
 /// The [`TimerTable`] is advanced with [`TimerTable::expire_before`].
 #[derive(Debug, Clone, Default)]
 pub(crate) struct TimerTable {
     generic: [Option<Instant>; ConnTimer::VALUES.len()],
-    path_timers: SmallMap<PathId, PathTimerTable, STACK_TIMERS>,
+    path_timers: SmallMap<PathIdKey, PathTimerTable, STACK_TIMERS>,
 }
 
 /// For how many paths we keep the timers on the stack, before spilling onto the heap.
@@ -278,11 +290,11 @@ impl TimerTable {
             Timer::Conn(timer) => {
                 self.generic[timer as usize] = Some(time);
             }
-            Timer::PerPath(path_id, timer) => match self.path_timers.get_mut(&path_id) {
+            Timer::PerPath(path_id, timer) => match self.path_timers.get_mut(&PathIdKey(path_id)) {
                 None => {
                     let mut table = PathTimerTable::default();
                     table.set(timer, time);
-                    self.path_timers.insert(path_id, table);
+                    self.path_timers.insert(PathIdKey(path_id), table);
                 }
                 Some(table) => {
                     table.set(timer, time);
@@ -295,7 +307,7 @@ impl TimerTable {
     pub(super) fn get(&self, timer: Timer) -> Option<Instant> {
         match timer {
             Timer::Conn(timer) => self.generic[timer as usize],
-            Timer::PerPath(path_id, timer) => self.path_timers.get(&path_id)?.get(timer),
+            Timer::PerPath(path_id, timer) => self.path_timers.get(&PathIdKey(path_id))?.get(timer),
         }
     }
 
@@ -317,7 +329,7 @@ impl TimerTable {
                 self.generic[timer as usize] = None;
             }
             Timer::PerPath(path_id, timer) => {
-                if let Some(e) = self.path_timers.get_mut(&path_id) {
+                if let Some(e) = self.path_timers.get_mut(&PathIdKey(path_id)) {
                     e.stop(timer);
                 }
             }
@@ -328,7 +340,7 @@ impl TimerTable {
     /// Stops all per-path timers
     pub(super) fn stop_per_path(&mut self, path_id: PathId, qlog: QlogSinkWithTime<'_>) {
         for timer in PathTimer::VALUES {
-            if let Some(e) = self.path_timers.get_mut(&path_id) {
+            if let Some(e) = self.path_timers.get_mut(&PathIdKey(path_id)) {
                 e.stop(timer);
                 qlog.emit_timer_stop(Timer::PerPath(path_id, timer));
             }
@@ -379,7 +391,7 @@ impl TimerTable {
         }
 
         let mut res = None;
-        for (path_id, timers) in self.path_timers.iter_mut() {
+        for (PathIdKey(path_id), timers) in self.path_timers.iter_mut() {
             if let Some((timer, time)) = timers.expire_before(now) {
                 res = Some((Timer::PerPath(*path_id, timer), time));
                 break;
@@ -410,7 +422,7 @@ impl TimerTable {
         }
 
         for timer in PathTimer::VALUES {
-            for (path_id, timers) in self.path_timers.iter() {
+            for (PathIdKey(path_id), timers) in self.path_timers.iter() {
                 if let Some(time) = timers.timers[timer as usize] {
                     values.push((Timer::PerPath(*path_id, timer), time));
                 }

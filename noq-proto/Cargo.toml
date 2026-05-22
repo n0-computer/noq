@@ -114,7 +114,6 @@ features = ["__all_without_fips"]
 allowed_external_types = [
     "arbitrary::Arbitrary", # gated behind `arbitrary` feature
     "criterion::Criterion", # gated behind `bench` feature
-    "identity_hash::IdentityHashable",
     "bytes::*",
     "rustls",
     "rustls::*",
