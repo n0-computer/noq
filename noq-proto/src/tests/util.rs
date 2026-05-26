@@ -1429,36 +1429,74 @@ impl ManyToManyRouting {
     }
 
     fn route_client_to_server(&mut self, transmit: &Transmit) -> RoutingDecision {
-        let Some((_, client_addr_idx)) = self
-            .server_routes
-            .iter()
-            .find(|(addr, _)| *addr == transmit.destination)
-        else {
-            return RoutingDecision::Drop;
-        };
-        let Some((client_addr, _)) = self.client_routes.get(*client_addr_idx) else {
-            return RoutingDecision::Drop;
-        };
-        RoutingDecision::Deliver {
-            src: *client_addr,
-            dst: Some(transmit.destination.ip()),
+        if let Some(client_interface_ip) = transmit.src_ip {
+            // If we have a client interface IP, then we use that to build the packet coming in on the other side.
+            // But we need to check if that is even connected to the server.
+            let Some(&(client_addr, _)) = self
+                .server_routes
+                .iter()
+                .filter(|(addr, _)| *addr == transmit.destination)
+                .filter_map(|&(_, idx)| self.client_routes.get(idx))
+                .find(|&(addr, _)| addr.ip() == client_interface_ip)
+            else {
+                // There's no route for given four-tuple.
+                return RoutingDecision::Drop;
+            };
+            RoutingDecision::Deliver {
+                src: client_addr,
+                dst: Some(transmit.destination.ip()),
+            }
+        } else {
+            let Some((_, client_addr_idx)) = self
+                .server_routes
+                .iter()
+                .find(|(addr, _)| *addr == transmit.destination)
+            else {
+                return RoutingDecision::Drop;
+            };
+            let Some((client_addr, _)) = self.client_routes.get(*client_addr_idx) else {
+                return RoutingDecision::Drop;
+            };
+            RoutingDecision::Deliver {
+                src: *client_addr,
+                dst: Some(transmit.destination.ip()),
+            }
         }
     }
 
     fn route_server_to_client(&mut self, transmit: &Transmit) -> RoutingDecision {
-        let Some((_, server_addr_idx)) = self
-            .client_routes
-            .iter()
-            .find(|(addr, _)| *addr == transmit.destination)
-        else {
-            return RoutingDecision::Drop;
-        };
-        let Some((server_addr, _)) = self.server_routes.get(*server_addr_idx) else {
-            return RoutingDecision::Drop;
-        };
-        RoutingDecision::Deliver {
-            src: *server_addr,
-            dst: Some(transmit.destination.ip()),
+        if let Some(server_interface_ip) = transmit.src_ip {
+            // If we have a server interface IP, then we use that to build the packet coming in on the other side.
+            // But we need to check if that is even connected to the client.
+            let Some(&(server_addr, _)) = self
+                .client_routes
+                .iter()
+                .filter(|(addr, _)| *addr == transmit.destination)
+                .filter_map(|&(_, idx)| self.server_routes.get(idx))
+                .find(|&(addr, _)| addr.ip() == server_interface_ip)
+            else {
+                // There's no route for given four-tuple.
+                return RoutingDecision::Drop;
+            };
+            RoutingDecision::Deliver {
+                src: server_addr,
+                dst: Some(transmit.destination.ip()),
+            }
+        } else {
+            let Some((_, server_addr_idx)) = self
+                .client_routes
+                .iter()
+                .find(|(addr, _)| *addr == transmit.destination)
+            else {
+                return RoutingDecision::Drop;
+            };
+            let Some((server_addr, _)) = self.server_routes.get(*server_addr_idx) else {
+                return RoutingDecision::Drop;
+            };
+            RoutingDecision::Deliver {
+                src: *server_addr,
+                dst: Some(transmit.destination.ip()),
+            }
         }
     }
 
