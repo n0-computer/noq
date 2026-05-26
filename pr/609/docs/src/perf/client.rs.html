@@ -201,7 +201,7 @@
 <a href=#201 id=201 data-nosnippet>201</a>        }
 <a href=#202 id=202 data-nosnippet>202</a>    }
 <a href=#203 id=203 data-nosnippet>203</a>
-<a href=#204 id=204 data-nosnippet>204</a>    endpoint.wait_idle().<span class="kw">await</span>;
+<a href=#204 id=204 data-nosnippet>204</a>    endpoint.wait_all_draining().<span class="kw">await</span>;
 <a href=#205 id=205 data-nosnippet>205</a>
 <a href=#206 id=206 data-nosnippet>206</a>    <span class="attr">#[cfg(feature = <span class="string">"json-output"</span>)]
 <a href=#207 id=207 data-nosnippet>207</a>    </span><span class="kw">if let </span><span class="prelude-val">Some</span>(path) = opt.json {
@@ -236,7 +236,7 @@
 <a href=#236 id=236 data-nosnippet>236</a>
 <a href=#237 id=237 data-nosnippet>237</a>    <span class="kw">let </span><span class="kw-2">mut </span>first_byte = <span class="bool-val">true</span>;
 <a href=#238 id=238 data-nosnippet>238</a>
-<a href=#239 id=239 data-nosnippet>239</a>    <span class="kw">while let </span><span class="prelude-val">Some</span>(size) = stream.read_chunks(<span class="kw-2">&amp;mut </span>bufs[..]).<span class="kw">await</span><span class="question-mark">? </span>{
+<a href=#239 id=239 data-nosnippet>239</a>    <span class="kw">while let </span><span class="prelude-val">Some</span>(size) = stream.read_many_chunks(<span class="kw-2">&amp;mut </span>bufs[..]).<span class="kw">await</span><span class="question-mark">? </span>{
 <a href=#240 id=240 data-nosnippet>240</a>        <span class="kw">if </span>first_byte {
 <a href=#241 id=241 data-nosnippet>241</a>            recv_stream_stats.on_first_byte(download_start.elapsed());
 <a href=#242 id=242 data-nosnippet>242</a>            first_byte = <span class="bool-val">false</span>;

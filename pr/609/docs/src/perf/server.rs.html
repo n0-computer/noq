@@ -188,7 +188,7 @@
 <a href=#188 id=188 data-nosnippet>188</a>        Bytes::new(), Bytes::new(), Bytes::new(), Bytes::new(),
 <a href=#189 id=189 data-nosnippet>189</a>        Bytes::new(), Bytes::new(), Bytes::new(), Bytes::new(),
 <a href=#190 id=190 data-nosnippet>190</a>    ];
-<a href=#191 id=191 data-nosnippet>191</a>    <span class="kw">while </span>stream.read_chunks(<span class="kw-2">&amp;mut </span>bufs[..]).<span class="kw">await</span><span class="question-mark">?</span>.is_some() {}
+<a href=#191 id=191 data-nosnippet>191</a>    <span class="kw">while </span>stream.read_many_chunks(<span class="kw-2">&amp;mut </span>bufs[..]).<span class="kw">await</span><span class="question-mark">?</span>.is_some() {}
 <a href=#192 id=192 data-nosnippet>192</a>    <span class="macro">debug!</span>(<span class="string">"finished reading {}"</span>, stream.id());
 <a href=#193 id=193 data-nosnippet>193</a>    <span class="prelude-val">Ok</span>(())
 <a href=#194 id=194 data-nosnippet>194</a>}
