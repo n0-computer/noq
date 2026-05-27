@@ -2532,10 +2532,11 @@ impl Connection {
                                 self.qlog.with_time(now),
                             );
                             debug!("path migration validation failed");
+                            path.data.reset_on_path_challenges();
                             if let Some((_, prev)) = path.prev.take() {
                                 path.data = prev;
+                                self.set_loss_detection_timer(now, path_id);
                             }
-                            path.data.reset_on_path_challenges();
                         }
                         PathTimer::PathChallengeLost => {
                             let Some(path) = self.paths.get_mut(&path_id) else {
