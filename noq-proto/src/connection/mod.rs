@@ -2522,8 +2522,9 @@ impl Connection {
                             let Some(path) = self.paths.get_mut(&path_id) else {
                                 continue;
                             };
-                            trace!("path challenge deemed lost");
+                            trace!(?path.data.on_path_challenges_lost, "path challenge deemed lost");
                             path.data.pending_on_path_challenge = true;
+                            path.data.on_path_challenges_lost += 1;
                         }
                         PathTimer::AbandonFromValidation => {
                             let Some(path) = self.paths.get_mut(&path_id) else {
@@ -6169,7 +6170,7 @@ impl Connection {
 
             self.timers.set(
                 Timer::PerPath(path_id, PathTimer::PathChallengeLost),
-                now + pto,
+                now + path.on_path_challenge_expiry(),
                 self.qlog.with_time(now),
             );
 

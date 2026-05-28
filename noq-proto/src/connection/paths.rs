@@ -15,6 +15,7 @@ use crate::{
     TransportErrorCode, VarInt,
     coding::{self, Decodable, Encodable},
     congestion,
+    connection::{MAX_BACKOFF_EXPONENT, MAX_PTO_INTERVAL},
     frame::ObservedAddr,
 };
 
@@ -191,6 +192,11 @@ pub(super) struct PathData {
     ///
     /// This is **not used** for n0 nat traversal challenge sending.
     pub(super) pending_on_path_challenge: bool,
+    /// How often we've deemed a path challenge to be lost.
+    ///
+    /// Similar to [`Self::pto_count`], but for on-path path challenges.
+    /// Used to calculate exponential backoff for retrying path challenges.
+    pub(super) on_path_challenges_lost: u32,
     /// Pending responses to PATH_CHALLENGE frames
     pub(super) path_responses: PathResponses,
     /// Whether we're certain the peer can both send and receive on this address
@@ -319,6 +325,7 @@ impl PathData {
             congestion,
             app_limited: false,
             on_path_challenges_unconfirmed: Default::default(),
+            on_path_challenges_lost: 0,
             pending_on_path_challenge: false,
             path_responses: PathResponses::default(),
             validated: false,
@@ -382,6 +389,7 @@ impl PathData {
             congestion,
             app_limited: false,
             on_path_challenges_unconfirmed: Default::default(),
+            on_path_challenges_lost: 0,
             pending_on_path_challenge: false,
             path_responses: PathResponses::default(),
             validated: false,
@@ -486,11 +494,17 @@ impl PathData {
         if self.on_path_challenges_unconfirmed.is_empty() {
             return None;
         }
-        let pto = self.rtt.pto_base();
+        let duration = self.on_path_challenge_expiry();
         self.on_path_challenges_unconfirmed
             .values()
-            .map(|info| info.sent_instant + pto)
+            .map(|info| info.sent_instant + duration)
             .min()
+    }
+
+    pub(super) fn on_path_challenge_expiry(&self) -> Duration {
+        let backoff = 2u32.pow(self.on_path_challenges_lost.min(MAX_BACKOFF_EXPONENT));
+        let duration = self.rtt.pto_base() * backoff;
+        duration.min(MAX_PTO_INTERVAL)
     }
 
     /// Handle receiving a PATH_RESPONSE.
@@ -523,8 +537,7 @@ impl PathData {
                     trace!("new path validated");
                 }
                 // Clear any other on-path sent challenges and stop sending new ones.
-                self.on_path_challenges_unconfirmed.clear();
-                self.pending_on_path_challenge = false;
+                self.reset_on_path_challenges();
 
                 // This RTT can only be used for the initial RTT, not as a normal
                 // sample: https://www.rfc-editor.org/rfc/rfc9002#section-6.2.2-2.
@@ -563,6 +576,7 @@ impl PathData {
     pub(super) fn reset_on_path_challenges(&mut self) {
         self.on_path_challenges_unconfirmed.clear();
         self.pending_on_path_challenge = false;
+        self.on_path_challenges_lost = 0;
     }
 
     #[cfg(feature = "qlog")]
