@@ -9,8 +9,10 @@ use assert_matches::assert_matches;
 use testresult::TestResult;
 use tracing::info;
 
-use crate::tests::ManyToManyRouting;
 use crate::tests::util::ConnPair;
+use crate::tests::{
+    ConnPairBuilder, EimAdfNat, ManyToManyRouting, PublicInterface, TwoHopNetwork, TwoHopRouting,
+};
 use crate::{
     ClientConfig, ConnectionId, ConnectionIdGenerator, Endpoint, EndpointConfig, FourTuple,
     LOCAL_CID_COUNT, NetworkChangeHint, PathId, PathStatus, RandomConnectionIdGenerator,
@@ -1776,12 +1778,31 @@ fn path_recovers_after_silent_gap_via_keepalive() -> TestResult {
 #[test]
 fn test_simple_nat_traveral_opens_path() -> TestResult {
     let _guard = subscribe();
-    let mut pair = multipath_pair_with_nat_traversal(true);
+    let transport_cfg = TransportConfig {
+        initial_rtt: Duration::from_millis(10),
+        mtu_discovery_config: None,
+        max_concurrent_multipath_paths: Some(MAX_PATHS.try_into().unwrap()),
+        max_remote_nat_traversal_addresses: Some(8.try_into().unwrap()),
+        ..Default::default()
+    };
+    let net_public = TwoHopNetwork::new(
+        "1::/64".parse()?,
+        PublicInterface::new_server(),
+        PublicInterface::new_client(),
+    );
+    let server_nat = EimAdfNat::new_v4_server();
+    let client_nat = EimAdfNat::new_v4_client();
+    let net_nat = TwoHopNetwork::new("2::/64".parse()?, server_nat.clone(), client_nat.clone());
+    let routes = TwoHopRouting::from_iter([net_public, net_nat]);
 
-    info!("setting routes, adding addrs");
-    pair.routes = SimpleFirewallRouting::new().into();
-    pair.add_nat_traversal_address(Server, SimpleFirewallRouting::SERVER_FW_ADDR)?;
-    pair.add_nat_traversal_address(Client, SimpleFirewallRouting::CLIENT_FW_ADDR)?;
+    let mut pair = ConnPairBuilder::default()
+        .with_transport_cfg(transport_cfg)
+        .with_routes(routes.into())
+        .connect();
+
+    info!("adding addrs");
+    pair.add_nat_traversal_address(Server, server_nat.qad_addr())?;
+    pair.add_nat_traversal_address(Client, client_nat.qad_addr())?;
     pair.drive();
 
     let event = pair.poll(Client).expect("should have event");

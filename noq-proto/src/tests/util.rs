@@ -3,7 +3,7 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     io::{self, Write},
     mem,
-    net::{Ipv6Addr, SocketAddr},
+    net::{Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6},
     num::{NonZeroU32, NonZeroUsize},
     str,
     sync::{Arc, LazyLock, Mutex},
@@ -11,19 +11,48 @@ use std::{
 
 use assert_matches::assert_matches;
 use bytes::BytesMut;
+use ipnet::IpNet;
 use rand::{SeedableRng, rngs::StdRng};
 use rustls::{
     KeyLogFile,
     client::WebPkiServerVerifier,
     pki_types::{CertificateDer, PrivateKeyDer},
 };
-use tracing::{debug, info_span, trace};
+use tracing::{debug, error, info_span, trace};
 
 use super::crypto::rustls::{QuicClientConfig, QuicServerConfig, configured_provider};
 use super::*;
 use crate::{Duration, Instant, congestion::Controller};
 
 pub(super) const DEFAULT_MTU: usize = 1452;
+
+/// The last octet for an IP address belonging to the server.
+///
+/// Consistently using this makes endpoint addresses easier to recognise. Generally an
+/// endpoint only needs a single IP per subnet so this is sufficient to identify it.
+const IP_LAST_OCTET_SERVER: u8 = 1;
+
+/// The port for a socket address belonging to the server.
+///
+/// Consistently using this makes server addresses easier to recognise.
+const PORT_SERVER: u16 = 11;
+
+/// The last octet for an IP address belonging to the client.
+///
+/// Consistently using this makes endpoint addresses easier to recognise. Generally an
+/// endpoint only needs a single IP per subnet so this is sufficient to identify it.
+const IP_LAST_OCTET_CLIENT: u8 = 2;
+
+/// The port for a socket address belonging to the client.
+///
+/// Consistently using this makes endpoint addresses easier to recognise.
+const PORT_CLIENT: u16 = 22;
+
+/// A port we use by for NAT mappings to make those recognisable.
+///
+/// Currently we only have a single port mapping, in the future this could be extended to be
+/// a range, e.g. 80-89.
+const NAT_MAPPING_PORT: u16 = 80;
 
 pub(super) struct Pair {
     pub(super) server: TestEndpoint,
@@ -369,6 +398,53 @@ impl Pair {
 
     pub(super) fn server_datagrams(&mut self, ch: ConnectionHandle) -> Datagrams<'_> {
         self.server_conn_mut(ch).datagrams()
+    }
+}
+
+/// A builder for ConnPair, because there are too many with_* methods.
+///
+/// Long-term we should probably aim to remove all the other constructors.
+#[derive(Debug, Default)]
+pub(super) struct ConnPairBuilder {
+    server_transport: Option<TransportConfig>,
+    client_transport: Option<TransportConfig>,
+    routes: Option<Routing>,
+}
+
+impl ConnPairBuilder {
+    /// Sets a [`TransportConfig`] for both the client and server.
+    pub(super) fn with_transport_cfg(mut self, cfg: TransportConfig) -> Self {
+        self.server_transport = Some(cfg.clone());
+        self.client_transport = Some(cfg);
+        self
+    }
+
+    /// Sets the [`Routing`] to use.
+    pub(super) fn with_routes(mut self, routes: Routing) -> Self {
+        self.routes = Some(routes);
+        self
+    }
+
+    /// Builds the [`ConnPair`] and connects the two endpoints.
+    pub(super) fn connect(self) -> ConnPair {
+        let Self {
+            server_transport,
+            client_transport,
+            routes,
+        } = self;
+        let server_cfg = ServerConfig {
+            transport: Arc::new(server_transport.unwrap_or_default()),
+            ..server_config()
+        };
+        let client_cfg = ClientConfig {
+            transport: Arc::new(client_transport.unwrap_or_default()),
+            ..client_config()
+        };
+        let mut pair = Pair::new(Default::default(), server_cfg);
+        if let Some(routes) = routes {
+            pair.routes = routes;
+        }
+        ConnPair::connect_with(pair, client_cfg)
     }
 }
 
@@ -1248,6 +1324,7 @@ pub(super) enum Routing {
     Basic(BasicRouting),
     SimpleFirewall(SimpleFirewallRouting),
     ManyToMany(ManyToManyRouting),
+    TwoHop(TwoHopRouting),
 }
 
 impl Routing {
@@ -1259,6 +1336,7 @@ impl Routing {
             Self::Basic(inner) => inner.public_server_addr(),
             Self::SimpleFirewall(inner) => inner.public_server_addr(),
             Self::ManyToMany(inner) => inner.public_server_addr(),
+            Self::TwoHop(inner) => inner.public_server_addr(),
         }
     }
 
@@ -1268,6 +1346,7 @@ impl Routing {
             Self::Basic(inner) => inner.route_client_to_server(transmit),
             Self::SimpleFirewall(inner) => inner.route_client_to_server(transmit),
             Self::ManyToMany(inner) => inner.route_client_to_server(transmit),
+            Self::TwoHop(inner) => inner.route_client_to_server(transmit),
         }
     }
     /// Routes a datagram from server to client.
@@ -1276,6 +1355,7 @@ impl Routing {
             Self::Basic(inner) => inner.route_server_to_client(transmit),
             Self::SimpleFirewall(inner) => inner.route_server_to_client(transmit),
             Self::ManyToMany(inner) => inner.route_server_to_client(transmit),
+            Self::TwoHop(inner) => inner.route_server_to_client(transmit),
         }
     }
 
@@ -1317,7 +1397,9 @@ pub(super) enum RoutingDecision {
         src: SocketAddr,
         /// The destination IP address of the delivered packet.
         ///
-        /// In other words this becomes the [`FourTuple::local_ip`] for the receiver.
+        /// In other words this becomes the [`FourTuple::local_ip`] for the receiver. For
+        /// all normal IP transports this is always known by the routing. This would only be
+        /// None to emulate old kernels or special transports like the iroh relay transport.
         dst: Option<IpAddr>,
     },
     Drop,
@@ -1768,6 +1850,481 @@ impl SimpleFirewallRouting {
         RoutingDecision::Deliver {
             src: link_src,
             dst: Some(transmit.destination.ip()),
+        }
+    }
+}
+
+/// Composable routing with each endpoint having a cusom hop.
+///
+/// The test setup always has exactly two endpoints. Both endpoints can have multiple
+/// interfaces however, each represented by a [`SubNetRouter`]. Logically each interface can
+/// be attached to a local network first, in which case the [`SubNetRouter`] emulates the
+/// local network the endpoint iterface sees and behaves like a router.
+///
+/// Each pair of [`SubNetRouter`]s is connected to a [`TwoHopNetwork`]. This toplevel
+/// [`TwoHopRouting`] can hold many networks, but does not perform any routing between
+/// them. The [`TwoHopNetworks`] are best kept distinct sibling networks for virtually all
+/// scenarios.
+///
+/// The server must always have at least one [`PublicInterface`] attached to one of the
+/// networks, to be able to establish a connection.
+///
+/// Use [`FromIterator::from_iter`] to construct this.
+#[derive(Debug)]
+pub(super) struct TwoHopRouting {
+    /// All the networks, always at least one.
+    networks: Vec<TwoHopNetwork>,
+}
+
+impl FromIterator<TwoHopNetwork> for TwoHopRouting {
+    fn from_iter<T: IntoIterator<Item = TwoHopNetwork>>(iter: T) -> Self {
+        let mut this = Self {
+            networks: iter.into_iter().collect(),
+        };
+        // Sort the networks, we always need to look through these from the most specific
+        // network (the longest prefix_len) to the most generic network.
+        this.networks.sort_by_key(|n| n.network.prefix_len());
+        this.networks.reverse();
+        this
+    }
+}
+
+impl From<TwoHopRouting> for Routing {
+    fn from(source: TwoHopRouting) -> Self {
+        Self::TwoHop(source)
+    }
+}
+
+impl TwoHopRouting {
+    /// [`Routing::public_server_addr`] impl.
+    ///
+    /// Returns the smallest server subnet that says it is publicly reachable.
+    fn public_server_addr(&self) -> SocketAddr {
+        for network in self.networks.iter() {
+            if network.server.endpoint_is_public() {
+                return network.server.endpoint_addr();
+            }
+        }
+        panic!("no public server address");
+    }
+
+    /// [`Routing::route_client_to_server`] impl.
+    fn route_client_to_server(&mut self, transmit: &Transmit) -> RoutingDecision {
+        self.route_transmit(Side::Client, transmit)
+    }
+
+    /// [`Routing::route_server_to_client`] impl.
+    fn route_server_to_client(&mut self, transmit: &Transmit) -> RoutingDecision {
+        self.route_transmit(Side::Server, transmit)
+    }
+
+    /// Implementation for [`Self::route_client_to_server`] and [`Self::route_server_to_client`].
+    ///
+    /// Finds the network this transmit should be sent in. If there is an `src_ip` it needs
+    /// to be sent on the network that contains said src_ip or not at all. If there is only
+    /// a destination IP it needs to be sent on the network that contains said destination
+    /// IP or not at all.
+    fn route_transmit(&mut self, source: Side, transmit: &Transmit) -> RoutingDecision {
+        let network = match transmit.src_ip {
+            Some(src_ip) => {
+                let Some(network) = self.networks.iter_mut().find(|n| {
+                    if source == Side::Client {
+                        n.client.endpoint_addr().ip() == src_ip
+                    } else {
+                        n.server.endpoint_addr().ip() == src_ip
+                    }
+                }) else {
+                    error!(%src_ip, "no matching source network for src_ip");
+                    return RoutingDecision::Drop;
+                };
+                network
+            }
+            None => {
+                let Some(network) = self
+                    .networks
+                    .iter_mut()
+                    .find(|n| n.network.contains(&transmit.destination.ip()))
+                else {
+                    error!(
+                        dst_ip = %transmit.destination.ip(),
+                        "no matching destination network for destination"
+                    );
+                    return RoutingDecision::Drop;
+                };
+                network
+            }
+        };
+        trace!(sender = ?source, net = ?network.network, "selected interface/network to send on");
+        // Select the source address and ask the network to route the transmit.
+        let src = if source == Side::Client {
+            network.client.endpoint_addr()
+        } else {
+            network.server.endpoint_addr()
+        };
+        network.send_transmit(src, transmit)
+    }
+}
+
+/// A single network with no firewalls.
+///
+/// Packets are routed from client to server and from server to client subnet. Packets with
+/// a destination outside of those subnets are dropped.
+#[derive(Debug)]
+pub(super) struct TwoHopNetwork {
+    network: IpNet,
+    server: Box<dyn SubNetRouter>,
+    server_router: IpAddr,
+    client: Box<dyn SubNetRouter>,
+    client_router: IpAddr,
+}
+
+impl TwoHopNetwork {
+    /// Creates a new network with the server and client connected.
+    ///
+    /// The IP addresses of the routers (or interfaces) of the server and client will
+    /// respect [`IP_LAST_OCTET_SERVER`] and [`IP_LAST_OCTET_CLIENT`] so they are
+    /// recognisable as usual. Though for this the network needs to start at a 0-octet,
+    /// which is customary but not strictly required (e.g. an IPv4 /30 network can start at
+    /// other values).
+    pub(super) fn new(
+        network: IpNet,
+        mut server: impl SubNetRouter + 'static,
+        mut client: impl SubNetRouter + 'static,
+    ) -> Self {
+        let mut hosts = network.hosts();
+        let server_router = match network {
+            IpNet::V4(_) => hosts.next().expect("subnet has hosts"),
+            IpNet::V6(_) => {
+                // Skip the first host so that our server uses 1 as last octet.
+                hosts.next().expect("subnet has hosts");
+                hosts.next().expect("subnet has hosts")
+            }
+        };
+        // TODO: would love the assert the IP_LAST_OCTET_* values, but IpAddr::as_octets is
+        //    nightly-only at the time of writing.
+        let client_router = hosts.next().expect("subnet has hosts");
+        server.assign_ip(server_router);
+        client.assign_ip(client_router);
+        Self {
+            network,
+            server: Box::new(server),
+            server_router,
+            client: Box::new(client),
+            client_router,
+        }
+    }
+
+    /// Requests to send a [`Transmit`] to it's destination on this network.
+    ///
+    /// If the destination is unreachable [`RoutingDecision::Drop`] will be
+    /// returned. Otherwise if the transmit can be delived to the peer
+    /// [`RoutingDecision::Deliver`] will be returned with the addresses the destination
+    /// endpoint should observe.
+    ///
+    /// This will pass the transmit though both the sender and receiver [`SubNetRouter`]s.
+    fn send_transmit(&mut self, src: SocketAddr, transmit: &Transmit) -> RoutingDecision {
+        let (sender, receiver) = if self.server.endpoint_addr() == src {
+            (&mut self.server, &mut self.client)
+        } else if self.client.endpoint_addr() == src {
+            (&mut self.client, &mut self.server)
+        } else {
+            // This should not be impossible, the caller should never have chosen this
+            // network for the transmit to be sent on.
+            panic!("src matches neither client or server");
+        };
+
+        // First hop: ask the sender's router if it will send this packet out and what the
+        // new src_ip will be.
+        let HopDecision::Forward { src } = sender.send_transmit(transmit) else {
+            return RoutingDecision::Drop;
+        };
+
+        // Second hop: ask the receiver's router if the packet can be delivered.
+        receiver.recv_transmit(src, transmit)
+    }
+}
+
+/// A router that connects an endpoint interface to a [`TwoHopNetwork`].
+///
+/// This trait is logically a router that can be added to a [`TwoHopNetwork`]. It can
+/// emulate an internal subnet and routing between the [`TwoHopNetwork`] and the internal
+/// subnet.
+///
+/// It can also emulate that the endpoint's interface is directly attached to the
+/// [`TwoHopNetwork`], the [`PublicInterface`] does this.
+pub(super) trait SubNetRouter: std::fmt::Debug {
+    /// Assigns an IP address to this router.
+    fn assign_ip(&mut self, ip: IpAddr);
+
+    /// Returns the socket address of the endpoint in the subnet.
+    ///
+    /// A router can decide not to create a subnet at all, in which case the IP of the
+    /// returned address will match the IP assined by [`Self::assing_ip`].
+    fn endpoint_addr(&self) -> SocketAddr;
+
+    /// Returns whether [`Self::endpoint_addr`] is publicly reachable.
+    ///
+    /// This means this subnet router does not emulate any kind of firewall or NAT and a
+    /// client can directly dial a server on [`Self::endpoint_addr`].
+    fn endpoint_is_public(&self) -> bool;
+
+    /// Asks a transmit to be sent from the endpoint interface.
+    fn send_transmit(&mut self, transmit: &Transmit) -> HopDecision;
+
+    /// Ask for a transmit to be received by this **router**.
+    ///
+    /// The final routing outcome is returned and determines how the transmit is received by
+    /// the destination endpoint.
+    fn recv_transmit(&mut self, src: SocketAddr, transmit: &Transmit) -> RoutingDecision;
+}
+
+#[derive(Debug)]
+pub(super) enum HopDecision {
+    /// Forward this transmit, the next hop will see `src` as the source address.
+    Forward {
+        src: SocketAddr,
+    },
+    Drop,
+}
+
+#[derive(Debug)]
+pub(super) struct PublicInterface {
+    ip: Option<IpAddr>,
+    port: u16,
+}
+
+impl PublicInterface {
+    fn new(port: u16) -> Self {
+        Self { ip: None, port }
+    }
+
+    pub(super) fn new_server() -> Self {
+        Self::new(PORT_SERVER)
+    }
+
+    pub(super) fn new_client() -> Self {
+        Self::new(PORT_CLIENT)
+    }
+}
+
+impl SubNetRouter for PublicInterface {
+    fn assign_ip(&mut self, ip: IpAddr) {
+        self.ip = Some(ip);
+    }
+
+    fn endpoint_addr(&self) -> SocketAddr {
+        SocketAddr::new(self.ip.expect("ip not assigned"), self.port)
+    }
+
+    fn endpoint_is_public(&self) -> bool {
+        true
+    }
+
+    fn send_transmit(&mut self, _transmit: &Transmit) -> HopDecision {
+        HopDecision::Forward {
+            src: self.endpoint_addr(),
+        }
+    }
+
+    fn recv_transmit(&mut self, src: SocketAddr, transmit: &Transmit) -> RoutingDecision {
+        if transmit.destination == self.endpoint_addr() {
+            RoutingDecision::Deliver {
+                src,
+                dst: Some(transmit.destination.ip()),
+            }
+        } else {
+            RoutingDecision::Drop
+        }
+    }
+}
+
+/// Destination-Endpoint Independent Mapping with Address-Dependent Filtering NAT emulation.
+///
+/// This is essentially EIM + ADF from [RFC4787]: destination Endpoint-Independent Mapping +
+/// destination Endpoint-Dependent Filtering. This means the mapping of an internal IP +
+/// port is made to the same public IP + port for all destinations, but incoming datagrams
+/// from a remote IP address are only allowed once there have been outgoing datagrams to
+/// that remote IP address, regardless of port.
+///
+/// This is an "easy NAT", just like EIM+EIF would be. Emulating EIF (Endpoint Independent
+/// Filtering) however is a bit academic since in reality it'd also be open right from start
+/// and essentially be a [`PublicInterface`]: either opened by an earlier QAD probe that we
+/// need to pretend has happened to get the QNT address candidates, or because the client
+/// opened the connection from behind the NAT to start with. ADF at least requires us to
+/// send probes before the mapping is made.
+///
+/// [RFC4787]: https://www.rfc-editor.org/info/rfc4787/#section-4.1
+#[derive(Debug, Clone)]
+pub(super) struct EimAdfNat {
+    inner: Arc<Mutex<EimAdfInner>>,
+}
+
+#[derive(Debug)]
+struct EimAdfInner {
+    /// The IP address of the router's uplink.
+    ///
+    /// This is the IP address the remote peer will see.
+    uplink: Option<IpAddr>,
+    /// The socket address of the endpoint in the internal network.
+    ///
+    /// This must be within the LAN network.
+    endpoint: SocketAddr,
+    /// The prefix length of the LAN network.
+    lan_prefix_len: u8,
+    /// The external port of the mapping.
+    ///
+    /// Because we only support a single internal endpoint this only needs to store a single
+    /// external port number. We hardcode the mapping so that [`Self::qad_addr`] can return
+    /// a value before an outgoing packet was sent.
+    mapping_port: u16,
+    /// Remote addresses for which the Address-Dependent Filtering is opened.
+    filter_allowed: Vec<IpAddr>,
+}
+
+impl EimAdfNat {
+    fn new(endpoint: SocketAddr, lan_prefix_len: u8) -> Self {
+        IpNet::new(endpoint.ip(), lan_prefix_len).expect("invalid lan_prefix_len");
+        let inner = EimAdfInner {
+            uplink: None,
+            endpoint,
+            lan_prefix_len,
+            mapping_port: NAT_MAPPING_PORT,
+            filter_allowed: vec![],
+        };
+        Self {
+            inner: Arc::new(Mutex::new(inner)),
+        }
+    }
+
+    /// Creates a new EIN router with an internal IPv4 network for the server.
+    ///
+    /// This uses numbers reserved for the server for the last octet of the IP address and
+    /// for the port. This makes things easier to recognise in logs.
+    pub(super) fn new_v4_server() -> Self {
+        let endpoint: SocketAddr = SocketAddrV4::new(
+            Ipv4Addr::new(192, 168, 0, IP_LAST_OCTET_SERVER),
+            PORT_SERVER,
+        )
+        .into();
+        Self::new(endpoint, 24)
+    }
+
+    /// Creates a new EIN router with an internal IPv4 network for the client.
+    ///
+    /// This uses numbers reserved for the client for the last octet of the IP address and
+    /// for the port. This makes things easier to recognise in logs.
+    pub(super) fn new_v4_client() -> Self {
+        // 192.168.0.0/16 is reserved for private networks. 198.168.0.0/24 is very commonly
+        // used for home LANs.
+        let endpoint: SocketAddr = SocketAddrV4::new(
+            Ipv4Addr::new(192, 168, 0, IP_LAST_OCTET_CLIENT),
+            PORT_CLIENT,
+        )
+        .into();
+        Self::new(endpoint, 24)
+    }
+
+    pub(super) fn new_v6_server() -> Self {
+        // fc00::/7 is the Unique Local Address range for private networks. We do not
+        // properly generate a Global ID, simply use 0 instead: ffc00::/64.
+        let endpoint: SocketAddr = SocketAddrV6::new(
+            Ipv6Addr::new(0xfc00, 0, 0, 0, 0, 0, 0, IP_LAST_OCTET_SERVER as u16),
+            PORT_SERVER,
+            0,
+            0,
+        )
+        .into();
+        Self::new(endpoint, 64)
+    }
+
+    pub(super) fn new_v6_client() -> Self {
+        // fc00::/7 is the Unique Local Address range for private networks. We do not
+        // properly generate a Global ID, simply use 0 instead: ffc00::/64.
+        let endpoint: SocketAddr = SocketAddrV6::new(
+            Ipv6Addr::new(0xfc00, 0, 0, 0, 0, 0, 0, IP_LAST_OCTET_CLIENT as u16),
+            PORT_CLIENT,
+            0,
+            0,
+        )
+        .into();
+        Self::new(endpoint, 64)
+    }
+
+    /// Returns the QNT candidate address to be used, pretend-QAD.
+    ///
+    /// Essentially this behaves as if the endpoint already had performed a QAD request to a
+    /// 3rd party server and this was the mapping returned. Due to the Address-Dependent
+    /// Filtering this does not yet mean the peer can send datagrams to this address.
+    pub(super) fn qad_addr(&self) -> SocketAddr {
+        let inner = self.inner.lock().expect("poisoned");
+        SocketAddr::new(inner.uplink.expect("not initialised"), inner.mapping_port)
+    }
+}
+
+impl SubNetRouter for EimAdfNat {
+    fn assign_ip(&mut self, ip: IpAddr) {
+        let mut inner = self.inner.lock().expect("poisoned");
+        debug!("assign_ip for {}", inner.endpoint);
+        let lan =
+            IpNet::new(inner.endpoint.ip(), inner.lan_prefix_len).expect("invalid lan_prefix_len");
+        assert!(
+            !lan.contains(&ip),
+            "invalid config: uplink IP contained in LAN network"
+        );
+        inner.uplink = Some(ip);
+    }
+
+    fn endpoint_addr(&self) -> SocketAddr {
+        let inner = self.inner.lock().expect("poisoned");
+        inner.endpoint
+    }
+
+    fn endpoint_is_public(&self) -> bool {
+        false
+    }
+
+    fn send_transmit(&mut self, transmit: &Transmit) -> HopDecision {
+        let mut inner = self.inner.lock().expect("poisoned");
+        let lan =
+            IpNet::new(inner.endpoint.ip(), inner.lan_prefix_len).expect("invalid lan_prefix_len");
+        if lan.contains(&transmit.destination.ip()) {
+            debug!(dst = %transmit.destination, "transmit destination to same local network");
+            return HopDecision::Drop;
+        }
+
+        // Create the NAT mapping.
+        let remote_ip = transmit.destination.ip();
+        if !inner.filter_allowed.contains(&remote_ip) {
+            debug!(%remote_ip, "EimAfdNat: filter opened for remote");
+            inner.filter_allowed.push(remote_ip);
+        }
+        HopDecision::Forward {
+            src: SocketAddr::new(inner.uplink.expect("not initialised"), inner.mapping_port),
+        }
+    }
+
+    fn recv_transmit(&mut self, src: SocketAddr, transmit: &Transmit) -> RoutingDecision {
+        let mapped_addr = self.qad_addr();
+        if transmit.destination != mapped_addr {
+            debug!(
+                dst = %transmit.destination,
+                %mapped_addr,
+                "EimAdfNat: recvd transmit dropped, incorrect destination"
+            );
+            return RoutingDecision::Drop;
+        }
+        let inner = self.inner.lock().expect("poisoned");
+        if !inner.filter_allowed.contains(&src.ip()) {
+            debug!(
+                %src,
+                dst = %transmit.destination,
+                "EimAdfNat recvd transmit filtered, source IP not yet allowed"
+            );
+            return RoutingDecision::Drop;
+        }
+        RoutingDecision::Deliver {
+            src,
+            dst: Some(inner.endpoint.ip()),
         }
     }
 }

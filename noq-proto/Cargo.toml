@@ -65,7 +65,7 @@ identity-hash = { workspace = true }
 lru-slab = { workspace = true }
 qlog = { workspace = true, optional = true }
 rand = { workspace = true }
-rand_pcg = "0.10"
+rand_pcg = { workspace = true }
 ring = { workspace = true, optional = true }
 rustc-hash = { workspace = true }
 rustls = { workspace = true, optional = true }
@@ -87,10 +87,11 @@ web-time = { workspace = true }
 [dev-dependencies]
 assert_matches = { workspace = true }
 hex-literal = { workspace = true  }
+ipnet = { workspace = true }
 proptest = { workspace = true }
 rcgen = { workspace = true }
 test-strategy = { workspace = true }
-testresult = "0.4.1"
+testresult = { workspace = true }
 tracing-subscriber = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 
