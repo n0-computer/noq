@@ -1470,13 +1470,6 @@ fn new_identifiers_after_abandon_does_not_panic() -> TestResult {
 fn abandon_cycle() -> TestResult {
     let _guard = subscribe();
 
-    // let mut cfg = TransportConfig::default();
-    // cfg.max_concurrent_multipath_paths(6);
-    // cfg.initial_rtt(Duration::from_millis(10));
-
-    // let mut pair = ConnPair::with_transport_cfg(cfg.clone(), cfg);
-    // pair.drive();
-
     let mut builder = ConnPair::builder().with_multipath();
     builder
         .server_transport_cfg

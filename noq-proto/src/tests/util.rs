@@ -433,12 +433,6 @@ impl ConnPairBuilder {
         self
     }
 
-    // /// Sets a [`TransportConfig`] for the server.
-    // pub(super) fn with_server_transport_cfg(mut self, cfg: TransportConfig) -> Self {
-    //     self.server_transport_cfg = cfg;
-    //     self
-    // }
-
     /// Enables multipath.
     pub(super) fn with_multipath(mut self) -> Self {
         self.server_transport_cfg
