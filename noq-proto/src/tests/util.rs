@@ -29,7 +29,7 @@ pub(super) struct Pair {
     pub(super) server: TestEndpoint,
     pub(super) client: TestEndpoint,
     /// Start time
-    epoch: Instant,
+    pub(super) epoch: Instant,
     /// Current time
     pub(super) time: Instant,
     /// Simulates the maximum size allowed for UDP payloads by the link (packets exceeding this size will be dropped)
