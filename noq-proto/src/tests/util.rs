@@ -6,7 +6,7 @@ use std::{
     net::{Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6},
     num::{NonZeroU32, NonZeroUsize},
     str,
-    sync::{Arc, LazyLock, Mutex},
+    sync::{Arc, LazyLock},
 };
 
 use assert_matches::assert_matches;
@@ -1386,6 +1386,20 @@ impl Routing {
             _ => panic!("cast to ManyToManyRouting failed, a different routing table is set"),
         }
     }
+
+    pub(super) fn as_two_hop(&self) -> &TwoHopRouting {
+        match self {
+            Self::TwoHop(inner) => inner,
+            _ => panic!("cast to TwoHopRouting failed, a different routing table is set"),
+        }
+    }
+
+    pub(super) fn as_two_hop_mut(&mut self) -> &mut TwoHopRouting {
+        match self {
+            Self::TwoHop(inner) => inner,
+            _ => panic!("cast to TwoHopRouting failed, a different routing table is set"),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -1963,6 +1977,26 @@ impl TwoHopRouting {
         };
         network.send_transmit(src, transmit)
     }
+
+    /// Returns the QAD address of the server-side NAT, if the first network uses one.
+    pub(super) fn server_nat_qad_addr(&self) -> Option<SocketAddr> {
+        self.networks
+            .first()
+            .and_then(|n| match &n.server {
+                SubNetRouter::EimAdfNat(nat) => Some(nat.qad_addr()),
+                _ => None,
+            })
+    }
+
+    /// Returns the QAD address of the client-side NAT, if the first network uses one.
+    pub(super) fn client_nat_qad_addr(&self) -> Option<SocketAddr> {
+        self.networks
+            .first()
+            .and_then(|n| match &n.client {
+                SubNetRouter::EimAdfNat(nat) => Some(nat.qad_addr()),
+                _ => None,
+            })
+    }
 }
 
 /// A single network with no firewalls.
@@ -1972,9 +2006,9 @@ impl TwoHopRouting {
 #[derive(Debug)]
 pub(super) struct TwoHopNetwork {
     network: IpNet,
-    server: Box<dyn SubNetRouter>,
+    server: SubNetRouter,
     server_router: IpAddr,
-    client: Box<dyn SubNetRouter>,
+    client: SubNetRouter,
     client_router: IpAddr,
 }
 
@@ -1988,8 +2022,8 @@ impl TwoHopNetwork {
     /// other values).
     pub(super) fn new(
         network: IpNet,
-        mut server: impl SubNetRouter + 'static,
-        mut client: impl SubNetRouter + 'static,
+        mut server: SubNetRouter,
+        mut client: SubNetRouter,
     ) -> Self {
         let mut hosts = network.hosts();
         let server_router = match network {
@@ -2007,9 +2041,9 @@ impl TwoHopNetwork {
         client.assign_ip(client_router);
         Self {
             network,
-            server: Box::new(server),
+            server: server,
             server_router,
-            client: Box::new(client),
+            client: client,
             client_router,
         }
     }
@@ -2046,36 +2080,49 @@ impl TwoHopNetwork {
 
 /// A router that connects an endpoint interface to a [`TwoHopNetwork`].
 ///
-/// This trait is logically a router that can be added to a [`TwoHopNetwork`]. It can
-/// emulate an internal subnet and routing between the [`TwoHopNetwork`] and the internal
-/// subnet.
-///
-/// It can also emulate that the endpoint's interface is directly attached to the
-/// [`TwoHopNetwork`], the [`PublicInterface`] does this.
-pub(super) trait SubNetRouter: std::fmt::Debug {
-    /// Assigns an IP address to this router.
-    fn assign_ip(&mut self, ip: IpAddr);
+/// This enum represents either a [`PublicInterface`] (no NAT/firewall) or an
+/// [`EimAdfNat`] (NAT with address-dependent filtering).
+#[derive(Debug)]
+pub(super) enum SubNetRouter {
+    PublicInterface(PublicInterface),
+    EimAdfNat(EimAdfNat),
+}
 
-    /// Returns the socket address of the endpoint in the subnet.
-    ///
-    /// A router can decide not to create a subnet at all, in which case the IP of the
-    /// returned address will match the IP assigned by [`Self::assing_ip`].
-    fn endpoint_addr(&self) -> SocketAddr;
+impl SubNetRouter {
+    fn assign_ip(&mut self, ip: IpAddr) {
+        match self {
+            Self::PublicInterface(inner) => inner.assign_ip(ip),
+            Self::EimAdfNat(inner) => inner.assign_ip(ip),
+        }
+    }
 
-    /// Returns whether [`Self::endpoint_addr`] is publicly reachable.
-    ///
-    /// This means this subnet router does not emulate any kind of firewall or NAT and a
-    /// client can directly dial a server on [`Self::endpoint_addr`].
-    fn endpoint_is_public(&self) -> bool;
+    fn endpoint_addr(&self) -> SocketAddr {
+        match self {
+            Self::PublicInterface(inner) => inner.endpoint_addr(),
+            Self::EimAdfNat(inner) => inner.endpoint_addr(),
+        }
+    }
 
-    /// Asks a transmit to be sent from the endpoint interface.
-    fn send_transmit(&mut self, transmit: &Transmit) -> HopDecision;
+    fn endpoint_is_public(&self) -> bool {
+        match self {
+            Self::PublicInterface(inner) => inner.endpoint_is_public(),
+            Self::EimAdfNat(inner) => inner.endpoint_is_public(),
+        }
+    }
 
-    /// Ask for a transmit to be received by this **router**.
-    ///
-    /// The final routing outcome is returned and determines how the transmit is received by
-    /// the destination endpoint.
-    fn recv_transmit(&mut self, src: SocketAddr, transmit: &Transmit) -> RoutingDecision;
+    fn send_transmit(&mut self, transmit: &Transmit) -> HopDecision {
+        match self {
+            Self::PublicInterface(inner) => inner.send_transmit(transmit),
+            Self::EimAdfNat(inner) => inner.send_transmit(transmit),
+        }
+    }
+
+    fn recv_transmit(&mut self, src: SocketAddr, transmit: &Transmit) -> RoutingDecision {
+        match self {
+            Self::PublicInterface(inner) => inner.recv_transmit(src, transmit),
+            Self::EimAdfNat(inner) => inner.recv_transmit(src, transmit),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -2105,9 +2152,7 @@ impl PublicInterface {
     pub(super) fn new_client() -> Self {
         Self::new(PORT_CLIENT)
     }
-}
 
-impl SubNetRouter for PublicInterface {
     fn assign_ip(&mut self, ip: IpAddr) {
         self.ip = Some(ip);
     }
@@ -2154,13 +2199,8 @@ impl SubNetRouter for PublicInterface {
 /// send probes before the mapping is made.
 ///
 /// [RFC4787]: https://www.rfc-editor.org/info/rfc4787/#section-4.1
-#[derive(Debug, Clone)]
-pub(super) struct EimAdfNat {
-    inner: Arc<Mutex<EimAdfInner>>,
-}
-
 #[derive(Debug)]
-struct EimAdfInner {
+pub(super) struct EimAdfNat {
     /// The IP address of the router's uplink.
     ///
     /// This is the IP address the remote peer will see.
@@ -2184,15 +2224,12 @@ struct EimAdfInner {
 impl EimAdfNat {
     fn new(endpoint: SocketAddr, lan_prefix_len: u8) -> Self {
         IpNet::new(endpoint.ip(), lan_prefix_len).expect("invalid lan_prefix_len");
-        let inner = EimAdfInner {
+        Self {
             uplink: None,
             endpoint,
             lan_prefix_len,
             mapping_port: NAT_MAPPING_PORT,
             filter_allowed: vec![],
-        };
-        Self {
-            inner: Arc::new(Mutex::new(inner)),
         }
     }
 
@@ -2256,27 +2293,22 @@ impl EimAdfNat {
     /// 3rd party server and this was the mapping returned. Due to the Address-Dependent
     /// Filtering this does not yet mean the peer can send datagrams to this address.
     pub(super) fn qad_addr(&self) -> SocketAddr {
-        let inner = self.inner.lock().expect("poisoned");
-        SocketAddr::new(inner.uplink.expect("not initialised"), inner.mapping_port)
+        SocketAddr::new(self.uplink.expect("not initialised"), self.mapping_port)
     }
-}
 
-impl SubNetRouter for EimAdfNat {
     fn assign_ip(&mut self, ip: IpAddr) {
-        let mut inner = self.inner.lock().expect("poisoned");
-        debug!("assign_ip for {}", inner.endpoint);
+        debug!("assign_ip for {}", self.endpoint);
         let lan =
-            IpNet::new(inner.endpoint.ip(), inner.lan_prefix_len).expect("invalid lan_prefix_len");
+            IpNet::new(self.endpoint.ip(), self.lan_prefix_len).expect("invalid lan_prefix_len");
         assert!(
             !lan.contains(&ip),
             "invalid config: uplink IP contained in LAN network"
         );
-        inner.uplink = Some(ip);
+        self.uplink = Some(ip);
     }
 
     fn endpoint_addr(&self) -> SocketAddr {
-        let inner = self.inner.lock().expect("poisoned");
-        inner.endpoint
+        self.endpoint
     }
 
     fn endpoint_is_public(&self) -> bool {
@@ -2284,9 +2316,8 @@ impl SubNetRouter for EimAdfNat {
     }
 
     fn send_transmit(&mut self, transmit: &Transmit) -> HopDecision {
-        let mut inner = self.inner.lock().expect("poisoned");
         let lan =
-            IpNet::new(inner.endpoint.ip(), inner.lan_prefix_len).expect("invalid lan_prefix_len");
+            IpNet::new(self.endpoint.ip(), self.lan_prefix_len).expect("invalid lan_prefix_len");
         if lan.contains(&transmit.destination.ip()) {
             debug!(dst = %transmit.destination, "transmit destination to same local network");
             return HopDecision::Drop;
@@ -2294,12 +2325,12 @@ impl SubNetRouter for EimAdfNat {
 
         // Create the NAT mapping.
         let remote_ip = transmit.destination.ip();
-        if !inner.filter_allowed.contains(&remote_ip) {
+        if !self.filter_allowed.contains(&remote_ip) {
             debug!(%remote_ip, "EimAfdNat: filter opened for remote");
-            inner.filter_allowed.push(remote_ip);
+            self.filter_allowed.push(remote_ip);
         }
         HopDecision::Forward {
-            src: SocketAddr::new(inner.uplink.expect("not initialised"), inner.mapping_port),
+            src: SocketAddr::new(self.uplink.expect("not initialised"), self.mapping_port),
         }
     }
 
@@ -2313,8 +2344,7 @@ impl SubNetRouter for EimAdfNat {
             );
             return RoutingDecision::Drop;
         }
-        let inner = self.inner.lock().expect("poisoned");
-        if !inner.filter_allowed.contains(&src.ip()) {
+        if !self.filter_allowed.contains(&src.ip()) {
             debug!(
                 %src,
                 dst = %transmit.destination,
@@ -2324,7 +2354,7 @@ impl SubNetRouter for EimAdfNat {
         }
         RoutingDecision::Deliver {
             src,
-            dst: Some(inner.endpoint.ip()),
+            dst: Some(self.endpoint.ip()),
         }
     }
 }

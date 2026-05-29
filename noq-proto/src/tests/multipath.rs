@@ -11,7 +11,7 @@ use tracing::info;
 
 use crate::tests::util::ConnPair;
 use crate::tests::{
-    ConnPairBuilder, EimAdfNat, ManyToManyRouting, PublicInterface, TwoHopNetwork, TwoHopRouting,
+    ConnPairBuilder, EimAdfNat, ManyToManyRouting, PublicInterface, SubNetRouter, TwoHopNetwork, TwoHopRouting,
 };
 use crate::{
     ClientConfig, ConnectionId, ConnectionIdGenerator, Endpoint, EndpointConfig, FourTuple,
@@ -1787,12 +1787,14 @@ fn test_simple_nat_traveral_opens_path() -> TestResult {
     };
     let net_public = TwoHopNetwork::new(
         "1::/64".parse()?,
-        PublicInterface::new_server(),
-        PublicInterface::new_client(),
+        SubNetRouter::PublicInterface(PublicInterface::new_server()),
+        SubNetRouter::PublicInterface(PublicInterface::new_client()),
     );
-    let server_nat = EimAdfNat::new_v4_server();
-    let client_nat = EimAdfNat::new_v4_client();
-    let net_nat = TwoHopNetwork::new("2::/64".parse()?, server_nat.clone(), client_nat.clone());
+    let net_nat = TwoHopNetwork::new(
+        "2::/64".parse()?,
+        SubNetRouter::EimAdfNat(EimAdfNat::new_v4_server()),
+        SubNetRouter::EimAdfNat(EimAdfNat::new_v4_client()),
+    );
     let routes = TwoHopRouting::from_iter([net_public, net_nat]);
 
     let mut pair = ConnPairBuilder::default()
@@ -1801,8 +1803,14 @@ fn test_simple_nat_traveral_opens_path() -> TestResult {
         .connect();
 
     info!("adding addrs");
-    pair.add_nat_traversal_address(Server, server_nat.qad_addr())?;
-    pair.add_nat_traversal_address(Client, client_nat.qad_addr())?;
+    pair.add_nat_traversal_address(
+        Server,
+        pair.routes.as_two_hop().server_nat_qad_addr().unwrap(),
+    )?;
+    pair.add_nat_traversal_address(
+        Client,
+        pair.routes.as_two_hop().client_nat_qad_addr().unwrap(),
+    )?;
     pair.drive();
 
     let event = pair.poll(Client).expect("should have event");
