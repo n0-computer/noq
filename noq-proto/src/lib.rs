@@ -13,7 +13,6 @@
 //! managing a single connection and all the related state (such as streams).
 
 #![cfg_attr(not(fuzzing), warn(missing_docs))]
-#![cfg_attr(test, allow(dead_code))]
 // Fixes welcome:
 #![allow(clippy::too_many_arguments)]
 #![warn(unreachable_pub)]
