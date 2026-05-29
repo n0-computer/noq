@@ -48,7 +48,7 @@ const IP_LAST_OCTET_CLIENT: u8 = 2;
 /// Consistently using this makes endpoint addresses easier to recognise.
 const PORT_CLIENT: u16 = 22;
 
-/// A port we use by for NAT mappings to make those recognisable.
+/// A port we use for NAT mappings to make those recognisable.
 ///
 /// Currently we only have a single port mapping, in the future this could be extended to be
 /// a range, e.g. 80-89.
@@ -401,7 +401,7 @@ impl Pair {
     }
 }
 
-/// A builder for ConnPair, because there are too many with_* methods.
+/// A builder for [`ConnPair`], because there are too many with_* methods.
 ///
 /// Long-term we should probably aim to remove all the other constructors.
 #[derive(Debug, Default)]
@@ -1854,7 +1854,7 @@ impl SimpleFirewallRouting {
     }
 }
 
-/// Composable routing with each endpoint having a cusom hop.
+/// Composable routing with each endpoint having a custom hop.
 ///
 /// The test setup always has exactly two endpoints. Both endpoints can have multiple
 /// interfaces however, each represented by a [`SubNetRouter`]. Logically each interface can
@@ -1920,7 +1920,7 @@ impl TwoHopRouting {
 
     /// Implementation for [`Self::route_client_to_server`] and [`Self::route_server_to_client`].
     ///
-    /// Finds the network this transmit should be sent in. If there is an `src_ip` it needs
+    /// Finds the network this transmit should be sent in. If there is a `src_ip` it needs
     /// to be sent on the network that contains said src_ip or not at all. If there is only
     /// a destination IP it needs to be sent on the network that contains said destination
     /// IP or not at all.
@@ -2014,10 +2014,10 @@ impl TwoHopNetwork {
         }
     }
 
-    /// Requests to send a [`Transmit`] to it's destination on this network.
+    /// Requests to send a [`Transmit`] to its destination on this network.
     ///
     /// If the destination is unreachable [`RoutingDecision::Drop`] will be
-    /// returned. Otherwise if the transmit can be delived to the peer
+    /// returned. If the transmit can be delivered to the peer
     /// [`RoutingDecision::Deliver`] will be returned with the addresses the destination
     /// endpoint should observe.
     ///
@@ -2028,7 +2028,7 @@ impl TwoHopNetwork {
         } else if self.client.endpoint_addr() == src {
             (&mut self.client, &mut self.server)
         } else {
-            // This should not be impossible, the caller should never have chosen this
+            // This should be impossible, the caller should never have chosen this
             // network for the transmit to be sent on.
             panic!("src matches neither client or server");
         };
@@ -2059,7 +2059,7 @@ pub(super) trait SubNetRouter: std::fmt::Debug {
     /// Returns the socket address of the endpoint in the subnet.
     ///
     /// A router can decide not to create a subnet at all, in which case the IP of the
-    /// returned address will match the IP assined by [`Self::assing_ip`].
+    /// returned address will match the IP assigned by [`Self::assing_ip`].
     fn endpoint_addr(&self) -> SocketAddr;
 
     /// Returns whether [`Self::endpoint_addr`] is publicly reachable.
