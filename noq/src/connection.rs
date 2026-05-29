@@ -40,7 +40,7 @@ use proto::{
 #[derive(Debug)]
 pub struct Connecting {
     conn: Option<ConnectionRef>,
-    connected: oneshot::Receiver<bool>,
+    connected: Option<oneshot::Receiver<bool>>,
     handshake_data_ready: Option<oneshot::Receiver<()>>,
 }
 
@@ -82,7 +82,7 @@ impl Connecting {
 
         Self {
             conn: Some(conn),
-            connected: on_connected_recv,
+            connected: Some(on_connected_recv),
             handshake_data_ready: Some(on_handshake_data_recv),
         }
     }
@@ -141,7 +141,8 @@ impl Connecting {
 
         if is_ok {
             let conn = self.conn.take().unwrap();
-            Ok((Connection(conn), ZeroRttAccepted(self.connected)))
+            let connected = self.connected.take().unwrap();
+            Ok((Connection(conn), ZeroRttAccepted(connected)))
         } else {
             Err(self)
         }
@@ -213,19 +214,37 @@ impl Connecting {
 impl Future for Connecting {
     type Output = Result<Connection, ConnectionError>;
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        Pin::new(&mut self.connected).poll(cx).map(|_| {
-            let conn = self.conn.take().unwrap();
-            let inner = conn.lock_without_waking("connecting");
-            if inner.connected {
-                drop(inner);
-                Ok(Connection(conn))
-            } else {
-                Err(inner
-                    .error
-                    .clone()
-                    .expect("connected signaled without connection success or error"))
+        let mut connected = self.connected.take().expect("polled after yielding Ready");
+        match Pin::new(&mut connected).poll(cx) {
+            Poll::Ready(_) => {
+                let conn = self.conn.take().unwrap();
+                let inner = conn.lock_without_waking("connecting");
+                if inner.connected {
+                    drop(inner);
+                    Poll::Ready(Ok(Connection(conn)))
+                } else {
+                    Poll::Ready(Err(inner
+                        .error
+                        .clone()
+                        .expect("connected signaled without connection success or error")))
+                }
             }
-        })
+            Poll::Pending => {
+                self.connected = Some(connected);
+                Poll::Pending
+            }
+        }
+    }
+}
+
+impl Drop for Connecting {
+    fn drop(&mut self) {
+        if let Some(conn) = self.conn.take() {
+            let mut state = conn.lock_without_waking("connecting_drop");
+            if !state.inner.is_closed() {
+                state.implicit_close(&conn.shared);
+            }
+        }
     }
 }
 
