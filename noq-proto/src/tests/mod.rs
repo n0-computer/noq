@@ -2923,7 +2923,7 @@ fn single_ack_eliciting_packet_triggers_ack_after_delay() {
 
     // The ACK delay is properly calculated
     assert_eq!(pair.client.captured_packets.len(), 1);
-    let mut frames = crate::frame::Iter::new(pair.client.captured_packets.remove(0).into())
+    let mut frames = frame::Iter::new(pair.client.captured_packets.remove(0).into())
         .unwrap()
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
