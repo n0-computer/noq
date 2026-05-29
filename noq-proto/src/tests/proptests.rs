@@ -1254,3 +1254,96 @@ fn regression_migration_probing_loop() {
         pair.server_conn_mut(server_ch)
     )));
 }
+
+/// Test for a case where we kept sending so many PATH_CHALLENGEs that we'd run out of `drive_bounded` budget.
+///
+/// The original proptest found a situation in which the newly opened path was working one-way.
+/// The client was able to send to the server, but the responses from the server back to the client
+/// were not coming through.
+///
+/// This meant that PATH_CHALLENGEs were received, PATH_RESPONSEs were sent back, but the client
+/// didn't receive them.
+/// This in turn means that the client will re-send PATH_CHALLENGEs.
+///
+/// At the same time, the PATH_CHALLENGEs were acknowledged by the server and the acknowledgements were
+/// sent over a different path.
+///
+/// This meant that the client had updated its RTT estimates for the path, even though the path was
+/// not yet working.
+/// Initially when the client opened the path, the RTT estimate was the initial RTT estimate of 333ms.
+/// This resulted in the `AbandonFromPathValidation` timer to be set at ~3s.
+/// After the first couple of ACKs, the path's RTT estimate quickly updated to 1ms though.
+///
+/// When this test was failing, PATH_CHALLENGEs were re-sent after 1 PTO without a response. This meant
+/// that it would re-send challenges every 2ms, generating many hundreds of PATH_CHALLENGEs before the
+/// path would be abandoned.
+///
+/// The fix was to implement PATH_CHALLENGE re-sending backoffs, similar to tail loss probe backoff.
+#[test]
+fn regression_challenge_resend_loop() {
+    let prefix = "regression_challenge_resend_loop";
+    let setup = PairSetup {
+        seed: Seed::Zeroes,
+        extensions: Extensions::MultipathOnly,
+        routing_setup: RoutingSetup::Complex(ManyToManyRouting::from_routes(
+            vec![("[::ffff:1.1.1.0]:44433".parse().unwrap(), 0)],
+            vec![
+                ("[::ffff:2.2.2.0]:4433".parse().unwrap(), 0),
+                ("[::ffff:2.2.2.1]:4433".parse().unwrap(), 0),
+                ("[::ffff:2.2.2.2]:4433".parse().unwrap(), 0),
+            ],
+        )),
+    };
+    let interactions = vec![
+        TestOp::OpenPath {
+            side: Side::Client,
+            status: PathStatus::Available,
+            addr_idx: 1,
+        },
+        TestOp::OpenPath {
+            side: Side::Client,
+            status: PathStatus::Available,
+            addr_idx: 0,
+        },
+        TestOp::Drive { side: Side::Client },
+        TestOp::OpenPath {
+            side: Side::Client,
+            status: PathStatus::Available,
+            addr_idx: 1,
+        },
+        TestOp::DropInbound { side: Side::Server },
+        TestOp::Drive { side: Side::Client },
+        TestOp::AdvanceTime,
+        TestOp::Drive { side: Side::Client },
+        TestOp::Drive { side: Side::Server },
+        TestOp::OpenPath {
+            side: Side::Client,
+            status: PathStatus::Available,
+            addr_idx: 1,
+        },
+        TestOp::ClosePath {
+            side: Side::Client,
+            path_idx: 0,
+            error_code: 0,
+        },
+        TestOp::Drive { side: Side::Client },
+        TestOp::OpenPath {
+            side: Side::Client,
+            status: PathStatus::Available,
+            addr_idx: 1,
+        },
+        TestOp::AdvanceTime,
+    ];
+
+    let _guard = subscribe();
+    let (mut pair, client_config) = setup.run(prefix);
+    let (client_ch, server_ch) = run_random_interaction(&mut pair, interactions, client_config);
+
+    assert!(!pair.drive_bounded(1000), "connection never became idle");
+    assert!(allowed_error(poll_to_close(
+        pair.client_conn_mut(client_ch)
+    )));
+    assert!(allowed_error(poll_to_close(
+        pair.server_conn_mut(server_ch)
+    )));
+}
