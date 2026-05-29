@@ -26,32 +26,6 @@ use super::{Pair, SimpleFirewallRouting, client_config, server_config};
 
 const MAX_PATHS: u32 = 3;
 
-/// Returns a connected client-server pair with multipath enabled
-fn multipath_pair() -> ConnPair {
-    multipath_pair_with_nat_traversal(false)
-}
-
-fn multipath_pair_with_nat_traversal(nat_traversal: bool) -> ConnPair {
-    let mut cfg = TransportConfig::default();
-    cfg.max_concurrent_multipath_paths(MAX_PATHS);
-
-    // Use this to not get distracting MTU discovery probes in the logs.
-    // cfg.mtu_discovery_config(None);
-
-    // Assume a low-latency connection so pacing doesn't interfere with the test
-    cfg.initial_rtt(Duration::from_millis(10));
-    if nat_traversal {
-        cfg.max_remote_nat_traversal_addresses(8);
-    }
-    #[cfg(feature = "qlog")]
-    cfg.qlog_from_env("multipath_test");
-
-    let mut pair = ConnPair::with_transport_cfg(cfg.clone(), cfg);
-    pair.drive();
-    info!("connected");
-    pair
-}
-
 #[test]
 fn non_zero_length_cids() {
     let _guard = subscribe();
@@ -111,7 +85,7 @@ fn non_zero_length_cids() {
 #[test]
 fn path_acks() {
     let _guard = subscribe();
-    let mut pair = multipath_pair();
+    let mut pair = ConnPair::builder().with_multipath().connect();
 
     let stats = pair.stats(Client);
     assert!(stats.frame_rx.path_acks > 0);
@@ -121,7 +95,7 @@ fn path_acks() {
 #[test]
 fn path_status() -> TestResult {
     let _guard = subscribe();
-    let mut pair = multipath_pair();
+    let mut pair = ConnPair::builder().with_multipath().connect();
 
     let prev_status = pair.set_path_status(Client, PathId::ZERO, PathStatus::Backup)?;
     assert_eq!(prev_status, PathStatus::Available);
@@ -151,7 +125,7 @@ fn path_status() -> TestResult {
 #[test]
 fn path_close_last_path() {
     let _guard = subscribe();
-    let mut pair = multipath_pair();
+    let mut pair = ConnPair::builder().with_multipath().connect();
 
     // Closing the last path via the local API is not allowed.
     // Use Connection::close() to end the connection instead.
@@ -169,7 +143,7 @@ fn path_close_last_path() {
 fn cid_issued_multipath() {
     let _guard = subscribe();
     const ACTIVE_CID_LIMIT: u64 = crate::cid_queue::CidQueue::LEN as _;
-    let mut pair = multipath_pair();
+    let mut pair = ConnPair::builder().with_multipath().connect();
 
     let client_stats = pair.stats(Client);
     dbg!(&client_stats);
@@ -204,37 +178,14 @@ fn multipath_cid_rotation() {
         || Box::new(*RandomConnectionIdGenerator::new(8).set_lifetime(CID_TIMEOUT));
 
     // Only test cid rotation on server side to have a clear output trace
-    let server_cfg = ServerConfig {
-        transport: Arc::new(TransportConfig {
-            max_concurrent_multipath_paths: NonZeroU32::new(MAX_PATHS),
-            // Assume a low-latency connection so pacing doesn't interfere with the test
-            initial_rtt: Duration::from_millis(10),
-            ..TransportConfig::default()
-        }),
-        ..server_config()
-    };
-
-    let server = Endpoint::new(
-        Arc::new(EndpointConfig {
+    let mut pair = ConnPair::builder()
+        .with_multipath()
+        .with_server_endpoint_config(EndpointConfig {
             connection_id_generator_factory: Arc::new(cid_generator_factory),
-            ..EndpointConfig::default()
-        }),
-        Some(Arc::new(server_cfg)),
-        true,
-    );
-    let client = Endpoint::new(Arc::new(EndpointConfig::default()), None, true);
+            ..Default::default()
+        })
+        .connect();
 
-    let client_cfg = ClientConfig {
-        transport: Arc::new(TransportConfig {
-            max_concurrent_multipath_paths: NonZeroU32::new(MAX_PATHS),
-            // Assume a low-latency connection so pacing doesn't interfere with the test
-            initial_rtt: Duration::from_millis(10),
-            ..TransportConfig::default()
-        }),
-        ..client_config()
-    };
-
-    let mut pair = ConnPair::connect_with(Pair::new_from_endpoint(client, server), client_cfg);
     let mut round: u64 = 1;
     let mut stop = pair.time;
     let end = pair.time + 5 * CID_TIMEOUT;
@@ -311,22 +262,12 @@ fn issue_max_path_id() -> TestResult {
     let _guard = subscribe();
 
     // We enable multipath but initially do not allow any paths to be opened.
-    let server_cfg = TransportConfig {
-        max_concurrent_multipath_paths: NonZeroU32::new(1),
-        // Assume a low-latency connection so pacing doesn't interfere with the test
-        initial_rtt: Duration::from_millis(10),
-        ..TransportConfig::default()
-    };
-
     // The client is allowed to create more paths immediately.
-    let client_cfg = TransportConfig {
-        max_concurrent_multipath_paths: NonZeroU32::new(MAX_PATHS),
-        // Assume a low-latency connection so pacing doesn't interfere with the test
-        initial_rtt: Duration::from_millis(10),
-        ..TransportConfig::default()
-    };
-
-    let mut pair = ConnPair::with_transport_cfg(server_cfg, client_cfg);
+    let mut builder = ConnPair::builder().with_multipath();
+    builder
+        .server_transport_cfg
+        .max_concurrent_multipath_paths(1);
+    let mut pair = builder.connect();
 
     pair.drive();
     info!("connected");
@@ -373,21 +314,12 @@ fn issue_max_path_id_reordered() -> TestResult {
     let _guard = subscribe();
 
     // We enable multipath but initially do not allow any paths to be opened.
-    let server_cfg = TransportConfig {
-        max_concurrent_multipath_paths: NonZeroU32::new(1),
-        // Assume a low-latency connection so pacing doesn't interfere with the test
-        initial_rtt: Duration::from_millis(10),
-        ..TransportConfig::default()
-    };
-
     // The client is allowed to create more paths immediately.
-    let client_cfg = TransportConfig {
-        max_concurrent_multipath_paths: NonZeroU32::new(MAX_PATHS),
-        // Assume a low-latency connection so pacing doesn't interfere with the test
-        initial_rtt: Duration::from_millis(10),
-        ..TransportConfig::default()
-    };
-    let mut pair = ConnPair::with_transport_cfg(server_cfg, client_cfg);
+    let mut builder = ConnPair::builder().with_multipath();
+    builder
+        .server_transport_cfg
+        .max_concurrent_multipath_paths(1);
+    let mut pair = builder.connect();
 
     pair.drive();
     info!("connected");
@@ -431,7 +363,7 @@ fn issue_max_path_id_reordered() -> TestResult {
 #[test]
 fn open_path() -> TestResult {
     let _guard = subscribe();
-    let mut pair = multipath_pair();
+    let mut pair = ConnPair::builder().with_multipath().connect();
 
     let server_addr = pair.routes.public_server_addr();
     let path_id = pair.open_path(
@@ -455,7 +387,7 @@ fn open_path() -> TestResult {
 #[test]
 fn open_path_key_update() -> TestResult {
     let _guard = subscribe();
-    let mut pair = multipath_pair();
+    let mut pair = ConnPair::builder().with_multipath().connect();
 
     let server_addr = pair.routes.public_server_addr();
     let path_id = pair.open_path(
@@ -486,7 +418,7 @@ fn open_path_key_update() -> TestResult {
 #[test]
 fn open_path_validation_fails_server_side() -> TestResult {
     let _guard = subscribe();
-    let mut pair = multipath_pair();
+    let mut pair = ConnPair::builder().with_multipath().connect();
 
     let different_addr = FourTuple {
         remote: SocketAddr::new([9, 8, 7, 6].into(), 5),
@@ -513,7 +445,7 @@ fn open_path_validation_fails_server_side() -> TestResult {
 #[test]
 fn open_path_validation_fails_client_side() -> TestResult {
     let _guard = subscribe();
-    let mut pair = multipath_pair();
+    let mut pair = ConnPair::builder().with_multipath().connect();
 
     // make sure the new path cannot be validated using the existing path
     let new_addr = SocketAddr::new([9, 8, 7, 6].into(), 5);
@@ -555,7 +487,7 @@ fn open_path_validation_fails_client_side() -> TestResult {
 #[test]
 fn open_path_ensure_after_abandon() -> TestResult {
     let _guard = subscribe();
-    let mut pair = multipath_pair();
+    let mut pair = ConnPair::builder().with_multipath().connect();
     let mut second_client_addr = pair.routes.as_basic().client_addr;
     let mut second_server_addr = pair.routes.as_basic().server_addr;
     second_client_addr.set_port(second_client_addr.port() + 1);
@@ -643,7 +575,7 @@ fn open_path_ensure_after_abandon() -> TestResult {
 #[test]
 fn close_path() -> TestResult {
     let _guard = subscribe();
-    let mut pair = multipath_pair();
+    let mut pair = ConnPair::builder().with_multipath().connect();
 
     let server_addr = pair.routes.public_server_addr();
     let path_id = pair.open_path(
@@ -677,7 +609,7 @@ fn close_path() -> TestResult {
 #[test]
 fn close_last_path() -> TestResult {
     let _guard = subscribe();
-    let mut pair = multipath_pair();
+    let mut pair = ConnPair::builder().with_multipath().connect();
 
     let server_addr = pair.routes.public_server_addr();
     let path_id = pair.open_path(
@@ -710,8 +642,10 @@ fn per_path_observed_address() -> TestResult {
         address_discovery_role: crate::address_discovery::Role::Both,
         ..TransportConfig::default()
     };
+    let mut pair = ConnPair::builder()
+        .with_transport_cfg(transport_cfg)
+        .connect();
 
-    let mut pair = ConnPair::with_transport_cfg(transport_cfg.clone(), transport_cfg);
     info!("connected");
     pair.drive();
 
@@ -762,29 +696,12 @@ fn per_path_observed_address() -> TestResult {
 fn mtud_on_two_paths() -> TestResult {
     let _guard = subscribe();
 
-    // Manual pair setup because we need to disable the max_idle_timeout.
-    let multipath_transport_cfg = Arc::new(TransportConfig {
-        max_concurrent_multipath_paths: NonZeroU32::new(MAX_PATHS),
-        initial_rtt: Duration::from_millis(10),
-        max_idle_timeout: None,
-        ..TransportConfig::default()
-    });
-    let server_cfg = Arc::new(ServerConfig {
-        transport: multipath_transport_cfg.clone(),
-        ..server_config()
-    });
-    let server = Endpoint::new(Default::default(), Some(server_cfg), true);
-    let client = Endpoint::new(Default::default(), None, true);
-
-    let mut pair = Pair::new_from_endpoint(client, server);
-    pair.mtu = 1200; // Start with a small MTU
-    let client_cfg = ClientConfig {
-        transport: multipath_transport_cfg,
-        ..client_config()
-    };
-    let mut pair = ConnPair::connect_with(pair, client_cfg);
-    pair.drive();
-    info!("connected");
+    let mut builder = ConnPair::builder()
+        .with_mtu(1200) // Start with a small MTU
+        .with_multipath();
+    builder.server_transport_cfg.max_idle_timeout = None;
+    builder.client_transport_cfg.max_idle_timeout = None;
+    let mut pair = builder.connect();
 
     assert_eq!(pair.conn(Client).path_mtu(PathId::ZERO), 1200);
 
@@ -839,7 +756,7 @@ fn mtud_on_two_paths() -> TestResult {
 #[test]
 fn remote_can_close_last_validated_path() -> TestResult {
     let _guard = subscribe();
-    let mut pair = multipath_pair();
+    let mut pair = ConnPair::builder().with_multipath().connect();
 
     pair.routes.as_basic_mut().passive_migration(Client);
     let route = FourTuple {
@@ -870,7 +787,7 @@ fn remote_can_close_last_validated_path() -> TestResult {
 #[test]
 fn network_change_multipath_no_hint_replaces_path() -> TestResult {
     let _guard = subscribe();
-    let mut pair = multipath_pair();
+    let mut pair = ConnPair::builder().with_multipath().connect();
 
     // Simulate a passive migration + network change with no hint
     pair.routes.as_basic_mut().passive_migration(Client);
@@ -949,7 +866,7 @@ fn network_change_multipath_no_hint_replaces_path() -> TestResult {
 #[test]
 fn network_change_selective_hint() -> TestResult {
     let _guard = subscribe();
-    let mut pair = multipath_pair();
+    let mut pair = ConnPair::builder().with_multipath().connect();
 
     // Open a second path
     let server_addr = pair.routes.public_server_addr();
@@ -1019,7 +936,7 @@ fn network_change_selective_hint() -> TestResult {
 #[test]
 fn network_change_server_two_paths_selective_hint() -> TestResult {
     let _guard = subscribe();
-    let mut pair = multipath_pair();
+    let mut pair = ConnPair::builder().with_multipath().connect();
 
     // Open a second path from the client side.
     let server_addr = pair.routes.public_server_addr();
@@ -1097,7 +1014,7 @@ fn network_change_server_two_paths_selective_hint() -> TestResult {
 #[test]
 fn network_change_server_single_path_non_recoverable_falls_back() -> TestResult {
     let _guard = subscribe();
-    let mut pair = multipath_pair();
+    let mut pair = ConnPair::builder().with_multipath().connect();
 
     // Hint that says all paths are non-recoverable
     #[derive(Debug)]
@@ -1126,7 +1043,7 @@ fn network_change_server_single_path_non_recoverable_falls_back() -> TestResult 
 #[test]
 fn network_change_server_no_hint_recovers() -> TestResult {
     let _guard = subscribe();
-    let mut pair = multipath_pair();
+    let mut pair = ConnPair::builder().with_multipath().connect();
 
     // Open a second path from the client side.
     let server_addr = pair.routes.public_server_addr();
@@ -1168,7 +1085,7 @@ fn network_change_server_no_hint_recovers() -> TestResult {
 #[test]
 fn path_open_deadline_is_set_on_send() -> TestResult {
     let _guard = subscribe();
-    let mut pair = multipath_pair();
+    let mut pair = ConnPair::builder().with_multipath().connect();
 
     let server_addr = pair.routes.public_server_addr();
     let path_id = pair.open_path(
@@ -1203,7 +1120,7 @@ fn path_open_deadline_is_set_on_send() -> TestResult {
 #[test]
 fn path_scheduling_path_status() -> TestResult {
     let _guard = subscribe();
-    let mut pair = multipath_pair();
+    let mut pair = ConnPair::builder().with_multipath().connect();
 
     info!("Setting Path 0 to PathStatus::Backup");
     let prev_status = pair.set_path_status(Client, PathId::ZERO, PathStatus::Backup)?;
@@ -1250,7 +1167,7 @@ fn server_abandon_last_verified_path() -> TestResult {
     // send PATH_ABANDON on the abandoned path itself in this case.
 
     let _guard = subscribe();
-    let mut pair = multipath_pair();
+    let mut pair = ConnPair::builder().with_multipath().connect();
 
     // Passively migrate the client and immediately open a second path. This way the client
     // will assume the 2nd path is validated but to the server it will be
@@ -1292,7 +1209,7 @@ fn server_abandon_last_verified_path() -> TestResult {
 #[test]
 fn remote_path_abandon_with_remaining_path() -> TestResult {
     let _guard = subscribe();
-    let mut pair = multipath_pair();
+    let mut pair = ConnPair::builder().with_multipath().connect();
 
     let server_addr = pair.routes.public_server_addr();
     let _path_id = pair.open_path(
@@ -1324,7 +1241,7 @@ fn remote_path_abandon_with_remaining_path() -> TestResult {
 #[test]
 fn remote_path_abandon_last_path_closes_connection() -> TestResult {
     let _guard = subscribe();
-    let mut pair = multipath_pair();
+    let mut pair = ConnPair::builder().with_multipath().connect();
 
     // Open a second path so we can close path 0 normally
     let server_addr = pair.routes.public_server_addr();
@@ -1383,7 +1300,7 @@ fn remote_path_abandon_last_path_closes_connection() -> TestResult {
 #[test]
 fn remote_path_abandon_last_path_client_opens_new() -> TestResult {
     let _guard = subscribe();
-    let mut pair = multipath_pair();
+    let mut pair = ConnPair::builder().with_multipath().connect();
 
     // Open path 1, close path 0 normally
     let server_addr = pair.routes.public_server_addr();
@@ -1437,7 +1354,7 @@ fn remote_path_abandon_last_path_client_opens_new() -> TestResult {
 #[test]
 fn abandon_path_data_continues() -> TestResult {
     let _guard = subscribe();
-    let mut pair = multipath_pair();
+    let mut pair = ConnPair::builder().with_multipath().connect();
 
     // Open a second path
     let server_addr = pair.routes.public_server_addr();
@@ -1508,7 +1425,7 @@ fn new_identifiers_after_abandon_does_not_panic() -> TestResult {
     use crate::token::ResetToken;
 
     let _guard = subscribe();
-    let mut pair = multipath_pair();
+    let mut pair = ConnPair::builder().with_multipath().connect();
 
     // A second path is needed so close_path(0) is not the last open path.
     let server_addr = pair.routes.public_server_addr();
@@ -1553,12 +1470,21 @@ fn new_identifiers_after_abandon_does_not_panic() -> TestResult {
 fn abandon_cycle() -> TestResult {
     let _guard = subscribe();
 
-    let mut cfg = TransportConfig::default();
-    cfg.max_concurrent_multipath_paths(6);
-    cfg.initial_rtt(Duration::from_millis(10));
+    // let mut cfg = TransportConfig::default();
+    // cfg.max_concurrent_multipath_paths(6);
+    // cfg.initial_rtt(Duration::from_millis(10));
 
-    let mut pair = ConnPair::with_transport_cfg(cfg.clone(), cfg);
-    pair.drive();
+    // let mut pair = ConnPair::with_transport_cfg(cfg.clone(), cfg);
+    // pair.drive();
+
+    let mut builder = ConnPair::builder().with_multipath();
+    builder
+        .server_transport_cfg
+        .max_concurrent_multipath_paths(6);
+    builder
+        .client_transport_cfg
+        .max_concurrent_multipath_paths(6);
+    let mut pair = builder.connect();
 
     // Set up addresses for multiple paths
     let routing = pair.routes.as_basic();
@@ -1652,7 +1578,10 @@ fn abandon_cycle() -> TestResult {
 #[test]
 fn nat_traversal_revalidates_existing_path() -> TestResult {
     let _guard = subscribe();
-    let mut pair = multipath_pair_with_nat_traversal(true);
+    let mut pair = ConnPair::builder()
+        .with_multipath()
+        .with_nat_traversal()
+        .connect();
 
     let server_addr = pair.routes.as_basic().server_addr;
     let client_addr = pair.routes.as_basic().client_addr;
@@ -1694,13 +1623,14 @@ fn nat_traversal_revalidates_existing_path() -> TestResult {
 fn path_recovers_after_silent_gap_via_keepalive() -> TestResult {
     let _guard = subscribe();
 
-    let mut cfg = TransportConfig::default();
-    cfg.max_concurrent_multipath_paths(MAX_PATHS);
-    cfg.initial_rtt(Duration::from_millis(10));
-    cfg.default_path_max_idle_timeout(Some(Duration::from_secs(60)));
-
-    let mut pair = ConnPair::with_transport_cfg(cfg.clone(), cfg);
-    pair.drive();
+    let mut builder = ConnPair::builder().with_multipath();
+    builder
+        .server_transport_cfg
+        .default_path_max_idle_timeout(Some(Duration::from_secs(60)));
+    builder
+        .client_transport_cfg
+        .default_path_max_idle_timeout(Some(Duration::from_secs(60)));
+    let mut pair = builder.connect();
 
     while pair.poll(Client).is_some() {}
     while pair.poll(Server).is_some() {}
@@ -1776,7 +1706,10 @@ fn path_recovers_after_silent_gap_via_keepalive() -> TestResult {
 #[test]
 fn test_simple_nat_traveral_opens_path() -> TestResult {
     let _guard = subscribe();
-    let mut pair = multipath_pair_with_nat_traversal(true);
+    let mut pair = ConnPair::builder()
+        .with_multipath()
+        .with_nat_traversal()
+        .connect();
 
     info!("setting routes, adding addrs");
     pair.routes = SimpleFirewallRouting::new().into();
@@ -1812,7 +1745,10 @@ fn test_simple_nat_traveral_opens_path() -> TestResult {
 #[test]
 fn test_simple_nat_traversal_challenge_with_response() -> TestResult {
     let _guard = subscribe();
-    let mut pair = multipath_pair_with_nat_traversal(true);
+    let mut pair = ConnPair::builder()
+        .with_multipath()
+        .with_nat_traversal()
+        .connect();
 
     info!("setting routes, adding addrs");
     pair.routes = SimpleFirewallRouting::new().into();
@@ -1869,29 +1805,18 @@ fn test_simple_nat_traversal_challenge_with_response() -> TestResult {
 fn test_peer_may_probe() -> TestResult {
     let _guard = subscribe();
 
-    let mut cfg = TransportConfig::default();
-    cfg.max_concurrent_multipath_paths(MAX_PATHS);
-    cfg.mtu_discovery_config(None);
-    cfg.initial_rtt(Duration::from_millis(10));
-    #[cfg(feature = "qlog")]
-    cfg.qlog_from_env("multipath_test");
-    cfg.max_remote_nat_traversal_addresses(8);
-    let transport_cfg = Arc::new(cfg);
-
+    let builder = ConnPair::builder()
+        .with_multipath()
+        .with_nat_traversal()
+        .without_mtud_discovery()
+        .with_routes(SimpleFirewallRouting::new().into());
     let server_cfg = ServerConfig {
-        transport: transport_cfg.clone(),
+        transport: Arc::new(builder.server_transport_cfg.clone()),
         migration: false,
         ..server_config()
     };
-    let client_cfg = ClientConfig {
-        transport: transport_cfg,
-        ..client_config()
-    };
+    let mut pair = builder.with_server_cfg(server_cfg).connect();
 
-    let mut pair = Pair::new(Default::default(), server_cfg);
-    pair.routes = SimpleFirewallRouting::new().into();
-
-    let mut pair = ConnPair::connect_with(pair, client_cfg);
     pair.add_nat_traversal_address(Server, SimpleFirewallRouting::SERVER_FW_ADDR)?;
     pair.add_nat_traversal_address(Client, SimpleFirewallRouting::CLIENT_FW_ADDR)?;
     pair.drive();

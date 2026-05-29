@@ -24,7 +24,10 @@ use super::*;
 use crate::{Duration, Instant, congestion::Controller};
 
 pub(super) const DEFAULT_MTU: usize = 1452;
+const MAX_MULTIPATH_PATHS: u32 = 3;
+const MAX_QNT_ADDRS: u8 = 8;
 
+#[derive(Debug)]
 pub(super) struct Pair {
     pub(super) server: TestEndpoint,
     pub(super) client: TestEndpoint,
@@ -372,6 +375,165 @@ impl Pair {
     }
 }
 
+/// A builder for [`ConnPair`], because there are too many with_* methods.
+///
+/// Long-term we should probably aim to remove all the other constructors.
+#[derive(Debug)]
+pub(super) struct ConnPairBuilder {
+    latency: Option<Duration>,
+    mtu: Option<usize>,
+    pub(super) server_transport_cfg: TransportConfig,
+    pub(super) client_transport_cfg: TransportConfig,
+    pub(super) server_endpoint_cfg: EndpointConfig,
+    pub(super) client_endpoint_cfg: EndpointConfig,
+    server_cfg: Option<ServerConfig>,
+    routes: Option<Routing>,
+}
+
+impl Default for ConnPairBuilder {
+    fn default() -> Self {
+        #[allow(unused_mut)]
+        let mut transport_cfg = TransportConfig {
+            // Assume a low-latency connection so pacing doesn't interfere with the test
+            initial_rtt: Duration::from_millis(10),
+            ..Default::default()
+        };
+        #[cfg(feature = "qlog")]
+        transport_cfg.qlog_from_env("test");
+        Self {
+            latency: None,
+            mtu: None,
+            server_transport_cfg: transport_cfg.clone(),
+            client_transport_cfg: transport_cfg,
+            server_endpoint_cfg: Default::default(),
+            client_endpoint_cfg: Default::default(),
+            server_cfg: None,
+            routes: None,
+        }
+    }
+}
+
+impl ConnPairBuilder {
+    /// Sets the one-way latency between the test endpoints.
+    pub(super) fn with_latency(mut self, latency: Duration) -> Self {
+        self.latency = Some(latency);
+        self
+    }
+
+    /// Sets the MTU between the test endpoints.
+    pub(super) fn with_mtu(mut self, mtu: usize) -> Self {
+        self.mtu = Some(mtu);
+        self
+    }
+
+    /// Sets a [`TransportConfig`] for both the client and server.
+    pub(super) fn with_transport_cfg(mut self, cfg: TransportConfig) -> Self {
+        self.server_transport_cfg = cfg.clone();
+        self.client_transport_cfg = cfg;
+        self
+    }
+
+    // /// Sets a [`TransportConfig`] for the server.
+    // pub(super) fn with_server_transport_cfg(mut self, cfg: TransportConfig) -> Self {
+    //     self.server_transport_cfg = cfg;
+    //     self
+    // }
+
+    /// Enables multipath.
+    pub(super) fn with_multipath(mut self) -> Self {
+        self.server_transport_cfg
+            .max_concurrent_multipath_paths(MAX_MULTIPATH_PATHS);
+        self.client_transport_cfg
+            .max_concurrent_multipath_paths(MAX_MULTIPATH_PATHS);
+        self
+    }
+
+    /// Disables MTUD discovery.
+    pub(super) fn without_mtud_discovery(mut self) -> Self {
+        self.server_transport_cfg.mtu_discovery_config(None);
+        self.client_transport_cfg.mtu_discovery_config(None);
+        self
+    }
+
+    /// Sets an [`EndpointConfig`] for both the client and server.
+    pub(super) fn with_endpoint_cfg(mut self, cfg: EndpointConfig) -> Self {
+        self.server_endpoint_cfg = cfg.clone();
+        self.client_endpoint_cfg = cfg;
+        self
+    }
+
+    /// Sets an [`EndpointConfig`] for only the server.
+    pub(super) fn with_server_endpoint_config(mut self, cfg: EndpointConfig) -> Self {
+        self.server_endpoint_cfg = cfg;
+        self
+    }
+
+    /// Sets the [`Routing`] to use.
+    pub(super) fn with_routes(mut self, routes: Routing) -> Self {
+        self.routes = Some(routes);
+        self
+    }
+
+    /// Enables QNT.
+    pub(super) fn with_nat_traversal(mut self) -> Self {
+        self.server_transport_cfg
+            .max_remote_nat_traversal_addresses(MAX_QNT_ADDRS);
+        self.client_transport_cfg
+            .max_remote_nat_traversal_addresses(MAX_QNT_ADDRS);
+        self
+    }
+
+    /// Sets an explicit [`ServerConfig`].
+    ///
+    /// Not this means the [`Self::server_transport_cfg`] will be unused.
+    pub(super) fn with_server_cfg(mut self, cfg: ServerConfig) -> Self {
+        self.server_cfg = Some(cfg);
+        self
+    }
+
+    /// Builds the [`ConnPair`] and connects the two endpoints.
+    pub(super) fn connect(self) -> ConnPair {
+        let Self {
+            latency,
+            mtu,
+            server_transport_cfg,
+            client_transport_cfg,
+            server_endpoint_cfg,
+            client_endpoint_cfg,
+            server_cfg,
+            routes,
+        } = self;
+
+        let server_cfg = server_cfg.unwrap_or(ServerConfig {
+            transport: Arc::new(server_transport_cfg),
+            ..server_config()
+        });
+        let client_cfg = ClientConfig {
+            transport: Arc::new(client_transport_cfg),
+            ..client_config()
+        };
+
+        let server = Endpoint::new(
+            Arc::new(server_endpoint_cfg),
+            Some(Arc::new(server_cfg)),
+            true,
+        );
+        let client = Endpoint::new(Arc::new(client_endpoint_cfg), None, true);
+        let mut pair = Pair::new_from_endpoint(client, server);
+
+        if let Some(latency) = latency {
+            pair.latency = latency;
+        }
+        if let Some(mtu) = mtu {
+            pair.mtu = mtu;
+        }
+        if let Some(routes) = routes {
+            pair.routes = routes;
+        }
+        ConnPair::connect_with(pair, client_cfg)
+    }
+}
+
 /// Wrapper to a [`Pair`] which keeps handles to the client and server connections.
 #[derive(derive_more::Deref, derive_more::DerefMut)]
 pub(super) struct ConnPair {
@@ -392,7 +554,11 @@ impl Default for ConnPair {
 }
 
 impl ConnPair {
-    pub(super) fn connect_with(mut pair: Pair, client_cfg: ClientConfig) -> Self {
+    pub(super) fn builder() -> ConnPairBuilder {
+        Default::default()
+    }
+
+    fn connect_with(mut pair: Pair, client_cfg: ClientConfig) -> Self {
         let (client_ch, server_ch) = pair.connect_with(client_cfg);
         Self {
             pair,
@@ -403,30 +569,9 @@ impl ConnPair {
 
     /// Creates a [`ConnPair`] with the default [`EndpointConfig`] and given `server_cfg` and
     /// `client_cfg`.
-    pub(super) fn with_default_endpoint(
-        server_cfg: ServerConfig,
-        client_cfg: ClientConfig,
-    ) -> Self {
+    fn with_default_endpoint(server_cfg: ServerConfig, client_cfg: ClientConfig) -> Self {
         let pair = Pair::new(Default::default(), server_cfg);
         Self::connect_with(pair, client_cfg)
-    }
-
-    /// Creates a [`ConnPair`] using the default [`EndpointConfig`] and configurations for the
-    /// server and client as defined by [`server_config`] and [`client_config`], setting the
-    /// [`TransportConfig`] given for each.
-    pub(super) fn with_transport_cfg(
-        server_transport: TransportConfig,
-        client_transport: TransportConfig,
-    ) -> Self {
-        let server_cfg = ServerConfig {
-            transport: Arc::new(server_transport),
-            ..server_config()
-        };
-        let client_cfg = ClientConfig {
-            transport: Arc::new(client_transport),
-            ..client_config()
-        };
-        Self::with_default_endpoint(server_cfg, client_cfg)
     }
 
     pub(super) fn conn(&self, side: Side) -> &Connection {
@@ -780,6 +925,7 @@ impl Default for Pair {
     }
 }
 
+#[derive(derive_more::Debug)]
 pub(super) struct TestEndpoint {
     pub(super) endpoint: Endpoint,
     timeout: Option<Instant>,
@@ -792,10 +938,12 @@ pub(super) struct TestEndpoint {
     conn_events: HashMap<ConnectionHandle, VecDeque<ConnectionEvent>>,
     pub(super) captured_packets: Vec<Vec<u8>>,
     pub(super) capture_inbound_packets: bool,
+    #[debug("handle_incoming")]
     pub(super) handle_incoming: Box<dyn FnMut(&Incoming) -> IncomingConnectionBehavior>,
     pub(super) waiting_incoming: Vec<Incoming>,
 }
 
+#[derive(Debug)]
 pub(super) struct Inbound {
     pub(super) recv_time: Instant,
     pub(super) ecn: Option<EcnCodepoint>,

@@ -3997,8 +3997,7 @@ fn address_discovery_rebind_retransmission() {
 #[test]
 fn network_change_single_path_recovery() {
     let _guard = subscribe();
-    let mut pair =
-        ConnPair::with_transport_cfg(TransportConfig::default(), TransportConfig::default());
+    let mut pair = ConnPair::default();
     pair.drive();
 
     // Record the CID sequence before the network change
@@ -4346,9 +4345,7 @@ fn timely_graceful_close() {
     const ONE_WAY_LATENCY: Duration = Duration::from_millis(100);
 
     let _guard = subscribe();
-    let mut pair = Pair::default();
-    pair.latency = ONE_WAY_LATENCY;
-    let mut pair = ConnPair::connect_with(pair, client_config());
+    let mut pair = ConnPair::builder().with_latency(ONE_WAY_LATENCY).connect();
 
     let start = pair.time;
     pair.close(Client, 0, b"done!");
