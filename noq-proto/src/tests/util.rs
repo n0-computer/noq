@@ -1979,23 +1979,29 @@ impl TwoHopRouting {
     }
 
     /// Returns the QAD address of the server-side NAT, if the first network uses one.
-    pub(super) fn server_nat_qad_addr(&self) -> Option<SocketAddr> {
-        self.networks
-            .first()
-            .and_then(|n| match &n.server {
-                SubNetRouter::EimAdfNat(nat) => Some(nat.qad_addr()),
-                _ => None,
-            })
+    pub(super) fn server_nat_qad_addr(&self, network: IpNet) -> Option<SocketAddr> {
+        match &self
+            .networks
+            .iter()
+            .find(|net| net.network == network)?
+            .server
+        {
+            SubNetRouter::EimAdfNat(nat) => Some(nat.qad_addr()),
+            _ => None,
+        }
     }
 
     /// Returns the QAD address of the client-side NAT, if the first network uses one.
-    pub(super) fn client_nat_qad_addr(&self) -> Option<SocketAddr> {
-        self.networks
-            .first()
-            .and_then(|n| match &n.client {
-                SubNetRouter::EimAdfNat(nat) => Some(nat.qad_addr()),
-                _ => None,
-            })
+    pub(super) fn client_nat_qad_addr(&self, network: IpNet) -> Option<SocketAddr> {
+        match &self
+            .networks
+            .iter()
+            .find(|net| net.network == network)?
+            .client
+        {
+            SubNetRouter::EimAdfNat(nat) => Some(nat.qad_addr()),
+            _ => None,
+        }
     }
 }
 
@@ -2020,11 +2026,7 @@ impl TwoHopNetwork {
     /// recognisable as usual. Though for this the network needs to start at a 0-octet,
     /// which is customary but not strictly required (e.g. an IPv4 /30 network can start at
     /// other values).
-    pub(super) fn new(
-        network: IpNet,
-        mut server: SubNetRouter,
-        mut client: SubNetRouter,
-    ) -> Self {
+    pub(super) fn new(network: IpNet, mut server: SubNetRouter, mut client: SubNetRouter) -> Self {
         let mut hosts = network.hosts();
         let server_router = match network {
             IpNet::V4(_) => hosts.next().expect("subnet has hosts"),
@@ -2041,9 +2043,9 @@ impl TwoHopNetwork {
         client.assign_ip(client_router);
         Self {
             network,
-            server: server,
+            server,
             server_router,
-            client: client,
+            client,
             client_router,
         }
     }

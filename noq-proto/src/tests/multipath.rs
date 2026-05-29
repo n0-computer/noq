@@ -11,7 +11,8 @@ use tracing::info;
 
 use crate::tests::util::ConnPair;
 use crate::tests::{
-    ConnPairBuilder, EimAdfNat, ManyToManyRouting, PublicInterface, SubNetRouter, TwoHopNetwork, TwoHopRouting,
+    ConnPairBuilder, EimAdfNat, ManyToManyRouting, PublicInterface, SubNetRouter, TwoHopNetwork,
+    TwoHopRouting,
 };
 use crate::{
     ClientConfig, ConnectionId, ConnectionIdGenerator, Endpoint, EndpointConfig, FourTuple,
@@ -1805,11 +1806,17 @@ fn test_simple_nat_traveral_opens_path() -> TestResult {
     info!("adding addrs");
     pair.add_nat_traversal_address(
         Server,
-        pair.routes.as_two_hop().server_nat_qad_addr().unwrap(),
+        pair.routes
+            .as_two_hop()
+            .server_nat_qad_addr("2::/64".parse()?)
+            .unwrap(),
     )?;
     pair.add_nat_traversal_address(
         Client,
-        pair.routes.as_two_hop().client_nat_qad_addr().unwrap(),
+        pair.routes
+            .as_two_hop()
+            .client_nat_qad_addr("2::/64".parse()?)
+            .unwrap(),
     )?;
     pair.drive();
 
