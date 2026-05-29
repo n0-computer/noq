@@ -1943,9 +1943,10 @@ fn on_path_challenge_lost_backoff() {
                 .expect("couldn't drive client forward");
             info!("advancing to {:?} for client", pair.time - pair.epoch);
         }
-        assert_eq!(
-            pair.stats(Client).frame_tx.path_challenge,
-            expected_path_challenges_sent
+        panic!(
+            "client never sent PATH_CHALLENGE #{}, actual: {}",
+            expected_path_challenges_sent,
+            pair.stats(Client).frame_tx.path_challenge
         );
     }
 
@@ -1970,13 +1971,10 @@ fn on_path_challenge_lost_backoff() {
                 return;
             }
         }
-        assert_eq!(
-            pair.stats(Server).frame_rx.path_challenge,
-            expected_path_challenges_received
-        );
-        assert_eq!(
-            pair.stats(Server).frame_tx.path_response,
-            expected_path_challenges_received
+        panic!(
+            "server never received PATH_CHALLENGE #{}, actual: {}",
+            expected_path_challenges_received,
+            pair.stats(Server).frame_rx.path_challenge
         );
     }
 
