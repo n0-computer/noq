@@ -9,8 +9,6 @@ use assert_matches::assert_matches;
 use testresult::TestResult;
 use tracing::info;
 
-use crate::tests::ManyToManyRouting;
-use crate::tests::util::ConnPair;
 use crate::{
     ClientConfig, ConnectionId, ConnectionIdGenerator, Endpoint, EndpointConfig, FourTuple,
     LOCAL_CID_COUNT, NetworkChangeHint, PathId, PathStatus, RandomConnectionIdGenerator,
@@ -21,8 +19,10 @@ use crate::{
     n0_nat_traversal,
 };
 
-use super::util::{min_opt, subscribe};
-use super::{Pair, SimpleFirewallRouting, client_config, server_config};
+use super::util::{
+    ConnPair, ManyToManyRouting, Pair, SimpleFirewallRouting, client_config, min_opt,
+    server_config, subscribe,
+};
 
 const MAX_PATHS: u32 = 3;
 

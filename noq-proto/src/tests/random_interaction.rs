@@ -6,10 +6,9 @@ use tracing::{debug, error, info, trace};
 
 use crate::{
     ClientConfig, Connection, ConnectionHandle, Dir, FourTuple, PathId, PathStatus, Side, StreamId,
-    tests::{Pair, TestEndpoint},
 };
 
-use super::Routing;
+use super::util::{Pair, Routing, TestEndpoint};
 
 #[derive(Debug, Clone, Copy, Arbitrary)]
 pub(super) enum TestOp {
