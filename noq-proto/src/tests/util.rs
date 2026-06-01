@@ -434,7 +434,7 @@ impl ConnPairBuilder {
     }
 
     /// Enables multipath.
-    pub(super) fn with_multipath(mut self) -> Self {
+    pub(super) fn enable_multipath(mut self) -> Self {
         self.server_transport_cfg
             .max_concurrent_multipath_paths(MAX_MULTIPATH_PATHS);
         self.client_transport_cfg
@@ -443,7 +443,7 @@ impl ConnPairBuilder {
     }
 
     /// Disables MTUD discovery.
-    pub(super) fn without_mtud_discovery(mut self) -> Self {
+    pub(super) fn disable_mtud_discovery(mut self) -> Self {
         self.server_transport_cfg.mtu_discovery_config(None);
         self.client_transport_cfg.mtu_discovery_config(None);
         self
@@ -469,7 +469,7 @@ impl ConnPairBuilder {
     }
 
     /// Enables QNT.
-    pub(super) fn with_nat_traversal(mut self) -> Self {
+    pub(super) fn enable_nat_traversal(mut self) -> Self {
         self.server_transport_cfg
             .max_remote_nat_traversal_addresses(MAX_QNT_ADDRS);
         self.client_transport_cfg
