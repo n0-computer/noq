@@ -479,7 +479,7 @@ impl ConnPairBuilder {
 
     /// Sets an explicit [`ServerConfig`].
     ///
-    /// Not this means the [`Self::server_transport_cfg`] will be unused.
+    /// Note this means the [`Self::server_transport_cfg`] will be unused.
     pub(super) fn with_server_cfg(mut self, cfg: ServerConfig) -> Self {
         self.server_cfg = Some(cfg);
         self
