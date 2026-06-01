@@ -39,9 +39,28 @@ use proto::{
 /// In-progress connection attempt future
 #[derive(Debug)]
 pub struct Connecting {
-    conn: Option<ConnectionRef>,
-    connected: Option<oneshot::Receiver<bool>>,
-    handshake_data_ready: Option<oneshot::Receiver<()>>,
+    state: ConnectingState,
+}
+
+#[derive(Debug)]
+enum ConnectingState {
+    Active {
+        conn: ConnectionRef,
+        connected: oneshot::Receiver<bool>,
+        handshake_data_ready: Option<oneshot::Receiver<()>>,
+    },
+    Consumed,
+}
+
+impl Drop for Connecting {
+    fn drop(&mut self) {
+        if let ConnectingState::Active { conn, .. } = &mut self.state {
+            let mut state = conn.lock_without_waking("connecting_drop");
+            if !state.inner.is_closed() {
+                state.implicit_close(&conn.shared);
+            }
+        }
+    }
 }
 
 impl Connecting {
@@ -81,9 +100,11 @@ impl Connecting {
         ));
 
         Self {
-            conn: Some(conn),
-            connected: Some(on_connected_recv),
-            handshake_data_ready: Some(on_handshake_data_recv),
+            state: ConnectingState::Active {
+                conn,
+                connected: on_connected_recv,
+                handshake_data_ready: Some(on_handshake_data_recv),
+            },
         }
     }
 
@@ -132,17 +153,20 @@ impl Connecting {
     /// before TLS client authentication has occurred, and should therefore not be used to send
     /// data for which client authentication is being used.
     pub fn into_0rtt(mut self) -> Result<(Connection, ZeroRttAccepted), Self> {
-        // This lock borrows `self` and would normally be dropped at the end of this scope, so we'll
-        // have to release it explicitly before returning `self` by value.
-        let conn = (self.conn.as_mut().unwrap()).lock_without_waking("into_0rtt");
-
-        let is_ok = conn.inner.has_0rtt() || conn.inner.side().is_server();
-        drop(conn);
+        let is_ok = match &self.state {
+            ConnectingState::Active { conn, .. } => {
+                let inner = conn.lock_without_waking("into_0rtt");
+                inner.inner.has_0rtt() || inner.inner.side().is_server()
+            }
+            ConnectingState::Consumed => false,
+        };
 
         if is_ok {
-            let conn = self.conn.take().unwrap();
-            let connected = self.connected.take().unwrap();
-            Ok((Connection(conn), ZeroRttAccepted(connected)))
+            if let ConnectingState::Active { conn, connected, .. } = std::mem::replace(&mut self.state, ConnectingState::Consumed) {
+                Ok((Connection(conn), ZeroRttAccepted(connected)))
+            } else {
+                unreachable!()
+            }
         } else {
             Err(self)
         }
@@ -158,10 +182,13 @@ impl Connecting {
         // Taking &mut self allows us to use a single oneshot channel rather than dealing with
         // potentially many tasks waiting on the same event. It's a bit of a hack, but keeps things
         // simple.
-        if let Some(x) = self.handshake_data_ready.take() {
+        let ConnectingState::Active { conn, handshake_data_ready, .. } = &mut self.state else {
+            panic!("used after yielding Ready");
+        };
+
+        if let Some(x) = handshake_data_ready.take() {
             let _ = x.await;
         }
-        let conn = self.conn.as_ref().unwrap();
         let inner = conn.lock_without_waking("handshake");
         inner
             .inner
@@ -187,7 +214,9 @@ impl Connecting {
     ///
     /// Will panic if called after `poll` has returned `Ready`.
     pub fn local_ip(&self) -> Option<IpAddr> {
-        let conn = self.conn.as_ref().expect("used after yielding Ready");
+        let ConnectingState::Active { conn, .. } = &self.state else {
+            panic!("used after yielding Ready");
+        };
         let inner = conn.lock_without_waking("local_ip");
 
         inner
@@ -201,8 +230,10 @@ impl Connecting {
     ///
     /// Will panic if called after `poll` has returned `Ready`.
     pub fn remote_address(&self) -> SocketAddr {
-        let conn_ref: &ConnectionRef = self.conn.as_ref().expect("used after yielding Ready");
-        conn_ref
+        let ConnectingState::Active { conn, .. } = &self.state else {
+            panic!("used after yielding Ready");
+        };
+        conn
             .lock_without_waking("remote_address")
             .inner
             .network_path(PathId::ZERO)
@@ -214,36 +245,29 @@ impl Connecting {
 impl Future for Connecting {
     type Output = Result<Connection, ConnectionError>;
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut connected = self.connected.take().expect("polled after yielding Ready");
-        match Pin::new(&mut connected).poll(cx) {
-            Poll::Ready(_) => {
-                let conn = self.conn.take().unwrap();
-                let inner = conn.lock_without_waking("connecting");
-                if inner.connected {
-                    drop(inner);
-                    Poll::Ready(Ok(Connection(conn)))
-                } else {
-                    Poll::Ready(Err(inner
-                        .error
-                        .clone()
-                        .expect("connected signaled without connection success or error")))
+        match &mut self.state {
+            ConnectingState::Active { connected, .. } => {
+                match Pin::new(connected).poll(cx) {
+                    Poll::Pending => return Poll::Pending,
+                    Poll::Ready(_) => {}
                 }
             }
-            Poll::Pending => {
-                self.connected = Some(connected);
-                Poll::Pending
-            }
+            ConnectingState::Consumed => panic!("polled after yielding Ready"),
         }
-    }
-}
 
-impl Drop for Connecting {
-    fn drop(&mut self) {
-        if let Some(conn) = self.conn.take() {
-            let mut state = conn.lock_without_waking("connecting_drop");
-            if !state.inner.is_closed() {
-                state.implicit_close(&conn.shared);
+        if let ConnectingState::Active { conn, .. } = std::mem::replace(&mut self.state, ConnectingState::Consumed) {
+            let inner = conn.lock_without_waking("connecting");
+            if inner.connected {
+                drop(inner);
+                Poll::Ready(Ok(Connection(conn)))
+            } else {
+                Poll::Ready(Err(inner
+                    .error
+                    .clone()
+                    .expect("connected signaled without connection success or error")))
             }
+        } else {
+            unreachable!()
         }
     }
 }

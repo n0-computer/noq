@@ -1762,3 +1762,12 @@ unsafe fn wake_by_ref_waker(data: *const ()) {
 unsafe fn drop_waker(data: *const ()) {
     drop(unsafe { Arc::<WakeCounter>::from_raw(data as *const WakeCounter) });
 }
+
+#[tokio::test]
+async fn drop_connecting_cleans_up() {
+    let ep = endpoint();
+    let addr = "127.0.0.1:1234".parse().unwrap();
+    let connecting = ep.connect(addr, "localhost").unwrap();
+    drop(connecting);
+    ep.wait_idle().await;
+}

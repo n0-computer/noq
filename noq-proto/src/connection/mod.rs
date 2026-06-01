@@ -12,7 +12,7 @@ use bytes::{Bytes, BytesMut};
 use frame::StreamMetaVec;
 
 use rand::{RngExt, SeedableRng, rngs::StdRng};
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use thiserror::Error;
 use tracing::{debug, error, trace, trace_span, warn};
 
@@ -307,7 +307,7 @@ pub struct Connection {
     /// time after a path is abandoned.
     // TODO(flub): Make this a more efficient data structure.  Like ranges of abandoned
     //    paths.  Or a set together with a minimum.  Or something.
-    abandoned_paths: FxHashSet<PathId>,
+    abandoned_paths: AbandonedPaths,
 
     /// State for n0's (<https://n0.computer>) nat traversal protocol.
     n0_nat_traversal: n0_nat_traversal::State,
@@ -416,7 +416,7 @@ impl Connection {
                 config.stream_receive_window,
             ),
             datagrams: DatagramState::default(),
-            config,
+            config: config.clone(),
             remote_cids: FxHashMap::from_iter([(PathId::ZERO, CidQueue::new(remote_cid))]),
             rng,
             path_stats: Default::default(),
@@ -428,7 +428,7 @@ impl Connection {
             local_max_path_id: PathId::ZERO,
             remote_max_path_id: PathId::ZERO,
             max_path_id_with_cids: PathId::ZERO,
-            abandoned_paths: Default::default(),
+            abandoned_paths: AbandonedPaths::new(config.max_concurrent_multipath_paths.map_or(1, |v| v.get()) as usize),
 
             n0_nat_traversal: Default::default(),
             qlog,
@@ -568,7 +568,7 @@ impl Connection {
             return Err(PathError::ServerSideNotAllowed);
         }
 
-        let max_abandoned = self.abandoned_paths.iter().max().copied();
+        let max_abandoned = self.abandoned_paths.max_path_id();
         let max_used = self.paths.keys().last().copied();
         let path_id = max_abandoned
             .max(max_used)
@@ -7724,5 +7724,49 @@ mod tests {
             assert_eq!(negotiate_max_idle_timeout(left, right), result);
             assert_eq!(negotiate_max_idle_timeout(right, left), result);
         }
+    }
+}
+
+
+/// Bounded storage of the most recently abandoned paths
+#[derive(Debug, Clone)]
+pub(crate) struct AbandonedPaths {
+    paths: VecDeque<PathId>,
+    capacity: usize,
+    total_abandoned: u32,
+    max_abandoned: Option<PathId>,
+}
+
+impl AbandonedPaths {
+    pub(crate) fn new(capacity: usize) -> Self {
+        Self {
+            paths: VecDeque::with_capacity(capacity),
+            capacity,
+            total_abandoned: 0,
+            max_abandoned: None,
+        }
+    }
+
+    pub(crate) fn insert(&mut self, id: PathId) {
+        if !self.paths.contains(&id) {
+            self.paths.push_back(id);
+            self.total_abandoned += 1;
+            self.max_abandoned = Some(self.max_abandoned.unwrap_or(PathId::ZERO).max(id));
+            if self.paths.len() > self.capacity {
+                self.paths.pop_front();
+            }
+        }
+    }
+
+    pub(crate) fn contains(&self, id: &PathId) -> bool {
+        self.paths.contains(id)
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.total_abandoned as usize
+    }
+
+    pub(crate) fn max_path_id(&self) -> Option<PathId> {
+        self.max_abandoned
     }
 }
