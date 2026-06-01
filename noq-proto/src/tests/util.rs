@@ -543,7 +543,8 @@ impl Default for ConnPair {
     fn default() -> Self {
         let server_cfg = server_config();
         let client_cfg = client_config();
-        Self::with_default_endpoint(server_cfg, client_cfg)
+        let pair = Pair::new(Default::default(), server_cfg);
+        Self::connect_with(pair, client_cfg)
     }
 }
 
@@ -559,13 +560,6 @@ impl ConnPair {
             client_ch,
             server_ch,
         }
-    }
-
-    /// Creates a [`ConnPair`] with the default [`EndpointConfig`] and given `server_cfg` and
-    /// `client_cfg`.
-    fn with_default_endpoint(server_cfg: ServerConfig, client_cfg: ClientConfig) -> Self {
-        let pair = Pair::new(Default::default(), server_cfg);
-        Self::connect_with(pair, client_cfg)
     }
 
     pub(super) fn conn(&self, side: Side) -> &Connection {
