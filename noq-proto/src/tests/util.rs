@@ -456,13 +456,6 @@ impl ConnPairBuilder {
         self
     }
 
-    /// Sets an [`EndpointConfig`] for both the client and server.
-    pub(super) fn with_endpoint_cfg(mut self, cfg: EndpointConfig) -> Self {
-        self.server_endpoint_cfg = cfg.clone();
-        self.client_endpoint_cfg = cfg;
-        self
-    }
-
     /// Sets an [`EndpointConfig`] for only the server.
     pub(super) fn with_server_endpoint_cfg(mut self, cfg: EndpointConfig) -> Self {
         self.server_endpoint_cfg = cfg;
