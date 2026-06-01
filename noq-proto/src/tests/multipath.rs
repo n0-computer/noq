@@ -1470,14 +1470,7 @@ fn new_identifiers_after_abandon_does_not_panic() -> TestResult {
 fn abandon_cycle() -> TestResult {
     let _guard = subscribe();
 
-    let mut builder = ConnPair::builder().with_multipath();
-    builder
-        .server_transport_cfg
-        .max_concurrent_multipath_paths(6);
-    builder
-        .client_transport_cfg
-        .max_concurrent_multipath_paths(6);
-    let mut pair = builder.connect();
+    let mut pair = ConnPair::builder().with_multipath().connect();
 
     // Set up addresses for multiple paths
     let routing = pair.routes.as_basic();
