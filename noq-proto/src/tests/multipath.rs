@@ -180,7 +180,7 @@ fn multipath_cid_rotation() {
     // Only test cid rotation on server side to have a clear output trace
     let mut pair = ConnPair::builder()
         .with_multipath()
-        .with_server_endpoint_config(EndpointConfig {
+        .with_server_endpoint_cfg(EndpointConfig {
             connection_id_generator_factory: Arc::new(cid_generator_factory),
             ..Default::default()
         })

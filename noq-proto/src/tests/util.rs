@@ -457,7 +457,7 @@ impl ConnPairBuilder {
     }
 
     /// Sets an [`EndpointConfig`] for only the server.
-    pub(super) fn with_server_endpoint_config(mut self, cfg: EndpointConfig) -> Self {
+    pub(super) fn with_server_endpoint_cfg(mut self, cfg: EndpointConfig) -> Self {
         self.server_endpoint_cfg = cfg;
         self
     }
