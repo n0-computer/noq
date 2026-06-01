@@ -1,8 +1,8 @@
 use std::{
     convert::TryInto,
     mem,
-    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
-    sync::{Arc, Mutex},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    sync::Arc,
 };
 
 use assert_matches::assert_matches;
@@ -20,17 +20,28 @@ use rustls::{
 };
 use tracing::info;
 
-use super::*;
 use crate::{
-    Duration, FourTuple, Instant,
+    AckFrequencyConfig, ApplicationClose, ClientConfig, Connection, ConnectionClose,
+    ConnectionError, ConnectionHandle, DEFAULT_SUPPORTED_VERSIONS, Datagram, DatagramEvent, Dir,
+    Duration, Endpoint, EndpointConfig, Event, FinishError, FourTuple, HashedConnectionIdGenerator,
+    Instant, MIN_INITIAL_SIZE, PathEvent, PathId, ReadError, ReadableError, RecvStream,
+    SendDatagramError, ServerConfig,
     Side::*,
+    StreamEvent, Transmit, TransportConfig, TransportErrorCode, VarInt, WriteError,
     cid_generator::{ConnectionIdGenerator, RandomConnectionIdGenerator},
+    coding::{Decodable, Encodable},
     crypto::rustls::{QuicServerConfig, configured_provider},
-    frame::FrameStruct,
+    frame::{self, Frame, FrameStruct},
     transport_parameters::TransportParameters,
 };
+
 mod util;
-pub(crate) use util::*;
+pub(crate) use util::subscribe;
+use util::{
+    CERTIFIED_KEY, ConnPair, DEFAULT_MTU, IncomingConnectionBehavior, Pair, client_config,
+    client_config_with_certs, client_config_with_deterministic_pns, client_crypto_with_alpn,
+    server_config, server_config_with_cert, server_crypto_with_alpn, validate_incoming,
+};
 
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 mod encode_decode;
@@ -1357,7 +1368,7 @@ fn idle_timeout() {
         || !pair.server_conn_mut(server_ch).is_closed()
     {
         if !pair.step()
-            && let Some(t) = min_opt(pair.client.next_wakeup(), pair.server.next_wakeup())
+            && let Some(t) = util::min_opt(pair.client.next_wakeup(), pair.server.next_wakeup())
         {
             pair.time = t;
         }
@@ -1831,7 +1842,7 @@ fn keep_alive() {
     let end = pair.time + Duration::from_millis(20 * IDLE_TIMEOUT);
     while pair.time < end {
         if !pair.step()
-            && let Some(time) = min_opt(pair.client.next_wakeup(), pair.server.next_wakeup())
+            && let Some(time) = util::min_opt(pair.client.next_wakeup(), pair.server.next_wakeup())
         {
             pair.time = time;
         }
@@ -1877,7 +1888,8 @@ fn cid_rotation() {
         // Run a while until PushNewCID timer fires
         while pair.time < stop {
             if !pair.step()
-                && let Some(time) = min_opt(pair.client.next_wakeup(), pair.server.next_wakeup())
+                && let Some(time) =
+                    util::min_opt(pair.client.next_wakeup(), pair.server.next_wakeup())
             {
                 pair.time = time;
             }

@@ -3,25 +3,32 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     io::{self, Write},
     mem,
-    net::{Ipv6Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     num::{NonZeroU32, NonZeroUsize},
     str,
     sync::{Arc, LazyLock, Mutex},
 };
 
 use assert_matches::assert_matches;
-use bytes::BytesMut;
-use rand::{SeedableRng, rngs::StdRng};
+use bytes::{Bytes, BytesMut};
+use rand::{Rng, SeedableRng, rngs::StdRng};
 use rustls::{
     KeyLogFile,
     client::WebPkiServerVerifier,
     pki_types::{CertificateDer, PrivateKeyDer},
 };
-use tracing::{debug, info_span, trace};
+use tracing::{debug, info, info_span, trace};
 
-use super::crypto::rustls::{QuicClientConfig, QuicServerConfig, configured_provider};
-use super::*;
-use crate::{Duration, Instant, congestion::Controller};
+use crate::crypto::rustls::{QuicClientConfig, QuicServerConfig, configured_provider};
+use crate::{
+    ClientConfig, ClosePathError, ClosedPath, Connection, ConnectionError, ConnectionEvent,
+    ConnectionHandle, ConnectionStats, DatagramEvent, Datagrams, Dir, Duration, EcnCodepoint,
+    Endpoint, EndpointConfig, EndpointEvent, Event, FourTuple, Incoming, Instant,
+    MultipathNotNegotiated, NetworkChangeHint, PathAbandonReason, PathError, PathId, PathStats,
+    PathStatus, RecvStream, SendStream, ServerConfig, SetPathStatusError, Side, StreamId, Streams,
+    SystemTime, TokenLog, TokenReuseError, Transmit, TransportConfig, VarInt,
+    congestion::Controller, n0_nat_traversal,
+};
 
 pub(super) const DEFAULT_MTU: usize = 1452;
 const MAX_MULTIPATH_PATHS: u32 = 3;
@@ -32,7 +39,7 @@ pub(super) struct Pair {
     pub(super) server: TestEndpoint,
     pub(super) client: TestEndpoint,
     /// Start time
-    epoch: Instant,
+    pub(super) epoch: Instant,
     /// Current time
     pub(super) time: Instant,
     /// Simulates the maximum size allowed for UDP payloads by the link (packets exceeding this size will be dropped)
@@ -199,8 +206,8 @@ impl Pair {
                 info!(packet_size, "dropping packet (max size exceeded)");
                 continue;
             }
-            if buffer[0] & packet::LONG_HEADER_FORM == 0 {
-                let spin = buffer[0] & packet::SPIN_BIT != 0;
+            if buffer[0] & crate::packet::LONG_HEADER_FORM == 0 {
+                let spin = buffer[0] & crate::packet::SPIN_BIT != 0;
                 self.spins += (spin == self.last_spin) as u64;
                 self.last_spin = spin;
             }
@@ -548,6 +555,7 @@ impl Default for ConnPair {
     }
 }
 
+#[allow(dead_code)]
 impl ConnPair {
     pub(super) fn builder() -> ConnPairBuilder {
         Default::default()
@@ -763,7 +771,7 @@ impl ConnPair {
         self.conn_mut(side).force_key_update()
     }
 
-    pub(super) fn crypto_session(&self, side: Side) -> &dyn crypto::Session {
+    pub(super) fn crypto_session(&self, side: Side) -> &dyn crate::crypto::Session {
         self.conn(side).crypto_session()
     }
 
@@ -901,8 +909,8 @@ impl ConnPair {
 
     pub(super) fn is_draining(&self, side: Side) -> bool {
         match side {
-            Client => self.client.draining_connections.contains(&self.client_ch),
-            Server => self.server.draining_connections.contains(&self.server_ch),
+            Side::Client => self.client.draining_connections.contains(&self.client_ch),
+            Side::Server => self.server.draining_connections.contains(&self.server_ch),
         }
     }
 }
@@ -1142,14 +1150,6 @@ impl TestEndpoint {
             .take()
             .expect("server didn't try connecting")
             .expect("server experienced error connecting")
-    }
-
-    #[track_caller]
-    pub(super) fn assert_accept_error(&mut self) -> ConnectionError {
-        self.accepted
-            .take()
-            .expect("server didn't try connecting")
-            .expect_err("server did unexpectedly connect without error")
     }
 
     #[track_caller]
@@ -1426,20 +1426,6 @@ impl Routing {
         match self {
             Self::Basic(inner) => inner,
             _ => panic!("cast to BasicRouting failed, a different routing table is set"),
-        }
-    }
-
-    pub(super) fn as_many_to_many(&self) -> &ManyToManyRouting {
-        match self {
-            Self::ManyToMany(inner) => inner,
-            _ => panic!("cast to ManyToManyRouting failed, a different routing table is set"),
-        }
-    }
-
-    pub(super) fn as_many_to_many_mut(&mut self) -> &mut ManyToManyRouting {
-        match self {
-            Self::ManyToMany(inner) => inner,
-            _ => panic!("cast to ManyToManyRouting failed, a different routing table is set"),
         }
     }
 }
