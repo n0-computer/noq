@@ -1702,8 +1702,14 @@ impl ManyToManyRouting {
 
 /// A routing table with one open and one firewalled interface.
 ///
-/// This essentially behaves like a Destination Endpoint Independent NAT with address and
-/// port filtering. But without having to simulate the public side of the network.
+/// This essentially behaves like a Destination Endpoint Independent Mapping NAT with
+/// address and port filtering: EIM + ADF in [RFC4748] terminology. But without having to
+/// simulate the public side of the network.
+///
+/// This same routing can be used for EIM + EIF: Endpoint-Independent filtering. In this
+/// case the filtering is effectively opened by the QAD probe, so all that is needed is
+/// configure it with [`Self::client_firewall_open`] and/or [`Self::server_firewall_open`]
+/// from the start.
 ///
 /// This is pretty simplistic, but tests the basics.
 ///
@@ -1718,15 +1724,17 @@ impl ManyToManyRouting {
 /// destination. This is the same as the kernel selecting the correct outbound interface. If
 /// an outgoing transmit has an `src_ip` of an interface that is not linked to the interface
 /// of the destination IP then a transmit is dropped.
+///
+/// [RFC4748]: https://www.rfc-editor.org/info/rfc4787/#section-4.1
 #[derive(Debug)]
 pub(super) struct SimpleFirewallRouting {
     /// Whether the client has sent a packet from `client_nat` to `server_nat`.
     ///
     /// If so packets from `server_nat` to `client_nat` will be allowed. If not they will be
     /// dropped.
-    client_firewall_open: bool,
+    pub(super) client_firewall_open: bool,
     /// Whether the server has sent a packet from `server_nat` to `client_nat`.
-    server_firewall_open: bool,
+    pub(super) server_firewall_open: bool,
 }
 
 impl From<SimpleFirewallRouting> for Routing {

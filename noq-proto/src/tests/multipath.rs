@@ -1695,10 +1695,10 @@ fn test_simple_nat_traveral_opens_path() -> TestResult {
     let mut pair = ConnPair::builder()
         .enable_multipath()
         .enable_nat_traversal()
+        .with_routes(SimpleFirewallRouting::new().into())
         .connect();
 
-    info!("setting routes, adding addrs");
-    pair.routes = SimpleFirewallRouting::new().into();
+    info!("adding addrs");
     pair.add_nat_traversal_address(Server, SimpleFirewallRouting::SERVER_FW_ADDR)?;
     pair.add_nat_traversal_address(Client, SimpleFirewallRouting::CLIENT_FW_ADDR)?;
     pair.drive();
@@ -1774,6 +1774,99 @@ fn test_simple_nat_traversal_challenge_with_response() -> TestResult {
     );
 
     // Continue till the end.
+    pair.drive();
+
+    let event = pair.poll(Client).expect("should have event");
+    assert_matches!(event, Event::Path(PathEvent::Established { .. }));
+
+    let event = pair.poll(Server).expect("should have event");
+    assert_matches!(event, Event::Path(PathEvent::Established { .. }));
+
+    Ok(())
+}
+
+/// Tests a "very easy NAT" for the server with a "hard NAT" for the client.
+#[test]
+fn test_hard_nat_client_opens_path() -> TestResult {
+    let _guard = subscribe();
+    let mut routing = SimpleFirewallRouting::new();
+    // By configuring the server side to be open it emulates an EIM+EIF NAT: the QAD probe
+    // already opened the firewall.
+    routing.server_firewall_open = true;
+    let mut pair = ConnPair::builder()
+        .enable_multipath()
+        .enable_nat_traversal()
+        .with_routes(routing.into())
+        .connect();
+
+    info!("adding addrs");
+    pair.add_nat_traversal_address(Server, SimpleFirewallRouting::SERVER_FW_ADDR)?;
+    // By adding a dummy address the client can start NAT traversal but does not advertise
+    // its real public interface, thus emulating a hard NAT. Choose the last addr in the
+    // client subnet.
+    let dummy_addr: SocketAddr = "[::1:ffff]:1".parse()?;
+    pair.add_nat_traversal_address(Client, dummy_addr)?;
+    pair.drive();
+
+    let event = pair.poll(Client).expect("should have event");
+    assert_matches!(
+        event,
+        Event::NatTraversal(n0_nat_traversal::Event::AddressAdded(_))
+    );
+
+    info!("init NAT traversal");
+    pair.initiate_nat_traversal_round(Client)?;
+
+    // Ensure we have no more events queued
+    assert_matches!(pair.poll(Client), None);
+    assert_matches!(pair.poll(Server), None);
+
+    pair.drive();
+
+    let event = pair.poll(Client).expect("should have event");
+    assert_matches!(event, Event::Path(PathEvent::Established { .. }));
+
+    let event = pair.poll(Server).expect("should have event");
+    assert_matches!(event, Event::Path(PathEvent::Established { .. }));
+
+    Ok(())
+}
+/// Tests a "very easy NAT" for the client with a "hard NAT" for the client.
+#[test]
+fn test_hard_nat_server_opens_path() -> TestResult {
+    let _guard = subscribe();
+    let mut routing = SimpleFirewallRouting::new();
+    // By configuring the client side to be open it emulates an EIM+EIF NAT: the QAD probe
+    // already opened the firewall.
+    routing.client_firewall_open = true;
+    let mut pair = ConnPair::builder()
+        .enable_multipath()
+        .enable_nat_traversal()
+        .with_routes(routing.into())
+        .connect();
+
+    info!("adding addrs");
+    // By adding a dummy address the client can start NAT traversal but does not advertise
+    // its real public interface, thus emulating a hard NAT. Choose the last addr in the
+    // server subnet.
+    let dummy_addr: SocketAddr = "[::2:ffff]:1".parse()?;
+    pair.add_nat_traversal_address(Server, dummy_addr)?;
+    pair.add_nat_traversal_address(Client, SimpleFirewallRouting::CLIENT_FW_ADDR)?;
+    pair.drive();
+
+    let event = pair.poll(Client).expect("should have event");
+    assert_matches!(
+        event,
+        Event::NatTraversal(n0_nat_traversal::Event::AddressAdded(_))
+    );
+
+    info!("init NAT traversal");
+    pair.initiate_nat_traversal_round(Client)?;
+
+    // Ensure we have no more events queued
+    assert_matches!(pair.poll(Client), None);
+    assert_matches!(pair.poll(Server), None);
+
     pair.drive();
 
     let event = pair.poll(Client).expect("should have event");
