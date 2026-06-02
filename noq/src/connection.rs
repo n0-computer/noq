@@ -165,7 +165,7 @@ impl Connecting {
             if let ConnectingState::Active { conn, connected, .. } = std::mem::replace(&mut self.state, ConnectingState::Consumed) {
                 Ok((Connection(conn), ZeroRttAccepted(connected)))
             } else {
-                unreachable!()
+                unreachable!("state must be Active since is_ok is true")
             }
         } else {
             Err(self)
@@ -178,6 +178,8 @@ impl Connecting {
     /// [`Session`](proto::crypto::Session). For the default `rustls` session, the return value can
     /// be [`downcast`](Box::downcast) to a
     /// [`crypto::rustls::HandshakeData`](crate::crypto::rustls::HandshakeData).
+    ///
+    /// Will panic if called after `poll` has returned `Ready`.
     pub async fn handshake_data(&mut self) -> Result<Box<dyn Any>, ConnectionError> {
         // Taking &mut self allows us to use a single oneshot channel rather than dealing with
         // potentially many tasks waiting on the same event. It's a bit of a hack, but keeps things
