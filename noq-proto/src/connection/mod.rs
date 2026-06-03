@@ -540,7 +540,7 @@ impl Connection {
     ) -> Result<(PathId, bool), PathError> {
         let existing_open_path = self.paths.iter().find(|(id, path)| {
             network_path.is_probably_same_path(&path.data.network_path)
-                && !self.abandoned_paths.contains(*id)
+                && !self.abandoned_paths.contains(id)
         });
         match existing_open_path {
             Some((path_id, _state)) => Ok((*path_id, true)),
