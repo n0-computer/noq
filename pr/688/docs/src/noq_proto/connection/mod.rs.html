@@ -2804,7 +2804,7 @@
 <a href=#2804 id=2804 data-nosnippet>2804</a>        <span class="kw">let </span>in_use_count = <span class="self">self
 <a href=#2805 id=2805 data-nosnippet>2805</a>            </span>.local_max_path_id
 <a href=#2806 id=2806 data-nosnippet>2806</a>            .next()
-<a href=#2807 id=2807 data-nosnippet>2807</a>            .saturating_sub(<span class="self">self</span>.abandoned_paths.len() <span class="kw">as </span>u32)
+<a href=#2807 id=2807 data-nosnippet>2807</a>            .saturating_sub(<span class="self">self</span>.abandoned_paths.len())
 <a href=#2808 id=2808 data-nosnippet>2808</a>            .as_u32();
 <a href=#2809 id=2809 data-nosnippet>2809</a>        <span class="kw">let </span>extra_needed = count.get().saturating_sub(in_use_count);
 <a href=#2810 id=2810 data-nosnippet>2810</a>        <span class="kw">let </span>new_max_path_id = <span class="self">self</span>.local_max_path_id.saturating_add(extra_needed);
