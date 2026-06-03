@@ -7221,8 +7221,11 @@ struct AbandonedPaths {
 
 impl AbandonedPaths {
     /// The number of abandoned paths.
-    fn len(&self) -> usize {
-        self.min.map(|p| p.as_u32().saturating_add(1)).unwrap_or(0) as usize + self.set.len()
+    fn len(&self) -> u32 {
+        self.min
+            .map(|p| p.as_u32().saturating_add(1))
+            .unwrap_or(0)
+            .saturating_add(self.set.len() as u32)
     }
 
     /// The largest abandoned path.
