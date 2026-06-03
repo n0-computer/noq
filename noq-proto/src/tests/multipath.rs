@@ -1786,6 +1786,9 @@ fn test_simple_nat_traversal_challenge_with_response() -> TestResult {
 }
 
 /// Tests a "very easy NAT" for the server with a "hard NAT" for the client.
+///
+/// Here "very easy NAT" is an EIM+EIF NAT. The port is opened by the QAD probe. "hard NAT"
+/// is an EDM NAT.
 #[test]
 fn test_hard_nat_client_opens_path() -> TestResult {
     let _guard = subscribe();
@@ -1833,6 +1836,9 @@ fn test_hard_nat_client_opens_path() -> TestResult {
 }
 
 /// Tests a "very easy NAT" for the client with a "hard NAT" for the server.
+///
+/// Here "very easy NAT" is an EIM+EIF NAT. The port is opened by the QAD probe. "hard NAT"
+/// is an EDM NAT.
 #[test]
 fn test_hard_nat_server_opens_path() -> TestResult {
     let _guard = subscribe();
