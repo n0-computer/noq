@@ -540,7 +540,7 @@
 <a href=#540 id=540 data-nosnippet>540</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;(PathId, bool), PathError&gt; {
 <a href=#541 id=541 data-nosnippet>541</a>        <span class="kw">let </span>existing_open_path = <span class="self">self</span>.paths.iter().find(|(id, path)| {
 <a href=#542 id=542 data-nosnippet>542</a>            network_path.is_probably_same_path(<span class="kw-2">&amp;</span>path.data.network_path)
-<a href=#543 id=543 data-nosnippet>543</a>                &amp;&amp; !<span class="self">self</span>.abandoned_paths.contains(<span class="kw-2">*</span>id)
+<a href=#543 id=543 data-nosnippet>543</a>                &amp;&amp; !<span class="self">self</span>.abandoned_paths.contains(id)
 <a href=#544 id=544 data-nosnippet>544</a>        });
 <a href=#545 id=545 data-nosnippet>545</a>        <span class="kw">match </span>existing_open_path {
 <a href=#546 id=546 data-nosnippet>546</a>            <span class="prelude-val">Some</span>((path_id, _state)) =&gt; <span class="prelude-val">Ok</span>((<span class="kw-2">*</span>path_id, <span class="bool-val">true</span>)),
