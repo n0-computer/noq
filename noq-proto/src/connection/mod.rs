@@ -2804,7 +2804,7 @@ impl Connection {
         let in_use_count = self
             .local_max_path_id
             .next()
-            .saturating_sub(self.abandoned_paths.len() as u32)
+            .saturating_sub(self.abandoned_paths.len())
             .as_u32();
         let extra_needed = count.get().saturating_sub(in_use_count);
         let new_max_path_id = self.local_max_path_id.saturating_add(extra_needed);
