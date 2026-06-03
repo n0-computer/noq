@@ -1,6 +1,6 @@
 use std::{
     cmp,
-    collections::{BTreeMap, VecDeque, btree_map},
+    collections::{BTreeMap, BTreeSet, VecDeque, btree_map},
     convert::TryFrom,
     fmt, io, mem,
     net::SocketAddr,
@@ -12,7 +12,7 @@ use bytes::{Bytes, BytesMut};
 use frame::StreamMetaVec;
 
 use rand::{RngExt, SeedableRng, rngs::StdRng};
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use thiserror::Error;
 use tracing::{debug, error, trace, trace_span, warn};
 
@@ -305,9 +305,7 @@ pub struct Connection {
     /// They may still have some state left in [`Connection::paths`] or
     /// [`Connection::local_cid_state`] since some of this has to be kept around for some
     /// time after a path is abandoned.
-    // TODO(flub): Make this a more efficient data structure.  Like ranges of abandoned
-    //    paths.  Or a set together with a minimum.  Or something.
-    abandoned_paths: FxHashSet<PathId>,
+    abandoned_paths: AbandonedPaths,
 
     /// State for n0's (<https://n0.computer>) nat traversal protocol.
     n0_nat_traversal: n0_nat_traversal::State,
@@ -568,7 +566,7 @@ impl Connection {
             return Err(PathError::ServerSideNotAllowed);
         }
 
-        let max_abandoned = self.abandoned_paths.iter().max().copied();
+        let max_abandoned = self.abandoned_paths.max();
         let max_used = self.paths.keys().last().copied();
         let path_id = max_abandoned
             .max(max_used)
@@ -7205,6 +7203,54 @@ impl fmt::Debug for Connection {
         f.debug_struct("Connection")
             .field("handshake_cid", &self.handshake_cid)
             .finish()
+    }
+}
+
+/// The set of abandoned paths.
+///
+/// This is a simplistic implementation to keep track of the set of abandoned paths in a
+/// space that is constant but proportional to the number of allowed concurrently open
+/// paths.
+#[derive(Debug, Default)]
+struct AbandonedPaths {
+    /// This and any lower numbered paths have been abandoned.
+    min: Option<PathId>,
+    /// Any abandoned paths which are non-continuous with [`Self::min`].
+    set: BTreeSet<PathId>,
+}
+
+impl AbandonedPaths {
+    /// The number of abandoned paths.
+    fn len(&self) -> usize {
+        self.min.map(|p| p.as_u32().saturating_add(1)).unwrap_or(0) as usize + self.set.len()
+    }
+
+    /// The largest abandoned path.
+    fn max(&self) -> Option<PathId> {
+        self.set.last().copied().or(self.min)
+    }
+
+    /// Whether the the path is already abandoned.
+    fn contains(&self, val: &PathId) -> bool {
+        Some(*val) <= self.min || self.set.contains(val)
+    }
+
+    /// Adds another abandoned path.
+    fn insert(&mut self, val: PathId) {
+        self.set.insert(val);
+        self.compact()
+    }
+
+    /// Compacts the representation of the abandoned paths.
+    fn compact(&mut self) {
+        self.set.retain(|v| match self.min {
+            Some(ref min) if *v <= *min => false,
+            Some(ref mut min) if *v == min.next() => {
+                *min = *v;
+                false
+            }
+            Some(_) | None => true,
+        })
     }
 }
 
