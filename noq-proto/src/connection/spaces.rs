@@ -897,15 +897,6 @@ pub(super) struct Dedup {
     next: u64,
 }
 
-/// Inner bitfield type.
-///
-/// Because QUIC never reuses packet numbers, this only needs to be large enough to deal with
-/// packets that are reordered but still delivered in a timely manner.
-type Window = u128;
-
-/// Number of packets tracked by `Dedup`.
-const WINDOW_SIZE: u64 = 1 + mem::size_of::<Window>() as u64 * 8;
-
 impl Dedup {
     /// Construct an empty window positioned at the start.
     #[cfg(test)]
@@ -1009,7 +1000,15 @@ impl Dedup {
     }
 }
 
-/// Indicates which data is available for sending.
+/// Inner bitfield type.
+///
+/// Because QUIC never reuses packet numbers, this only needs to be large enough to deal with
+/// packets that are reordered but still delivered in a timely manner.
+type Window = u128;
+
+/// Number of packets tracked by `Dedup`.
+const WINDOW_SIZE: u64 = 1 + mem::size_of::<Window>() as u64 * 8;
+/// Indicates which data is available for sending
 ///
 /// This applies to a particular space ID that was queried and all refers to on-path data.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
