@@ -19,26 +19,6 @@ use super::{
     EcnCodepoint, IO_ERROR_LOG_INTERVAL, RecvMeta, Transmit, UdpSockRef, cmsg, log_sendmsg_error,
 };
 
-// Adapted from https://github.com/apple-oss-distributions/xnu/blob/8d741a5de7ff4191bf97d57b9f54c2f6d4a15585/bsd/sys/socket_private.h
-#[cfg(apple_fast)]
-#[repr(C)]
-#[allow(non_camel_case_types)]
-pub(crate) struct msghdr_x {
-    pub msg_name: *mut libc::c_void,
-    pub msg_namelen: libc::socklen_t,
-    pub msg_iov: *mut libc::iovec,
-    pub msg_iovlen: libc::c_int,
-    pub msg_control: *mut libc::c_void,
-    pub msg_controllen: libc::socklen_t,
-    pub msg_flags: libc::c_int,
-    pub msg_datalen: usize,
-}
-
-#[cfg(target_os = "freebsd")]
-type IpTosTy = libc::c_uchar;
-#[cfg(not(any(target_os = "freebsd", target_os = "netbsd")))]
-type IpTosTy = libc::c_int;
-
 /// Tokio-compatible UDP socket with some useful specializations.
 ///
 /// Unlike a standard tokio UDP socket, this allows ECN bits to be read and written on some
@@ -281,11 +261,11 @@ impl UdpSocketState {
         recv_single(socket.0, bufs, meta)
     }
 
-    /// The maximum amount of segments which can be transmitted if a platform
-    /// supports Generic Send Offload (GSO).
+    /// Maximum number of segments to transmit if Generic Send Offload (GSO) is enabled.
     ///
-    /// This is 1 if the platform doesn't support GSO. Subject to change if errors are detected
-    /// while using GSO.
+    /// This is 1 if the platform doesn't support GSO.
+    ///
+    /// Subject to change if errors are detected while using GSO.
     #[inline]
     pub fn max_gso_segments(&self) -> NonZeroUsize {
         self.max_gso_segments
@@ -294,8 +274,9 @@ impl UdpSocketState {
             .expect("must have non zero GSO segments")
     }
 
-    /// The number of segments to read when GRO is enabled. Used as a factor to
-    /// compute the receive buffer size.
+    /// The number of segments to read when GRO is enabled.
+    ///
+    /// Used as a factor to compute the receive buffer size.
     ///
     /// Returns 1 if the platform doesn't support GRO.
     #[inline]
@@ -347,6 +328,7 @@ impl UdpSocketState {
     }
 
     /// Enables Apple's fast UDP datapath using private `sendmsg_x`/`recvmsg_x` APIs.
+    ///
     /// Once enabled, this also updates [`max_gso_segments`] to allow batched sends.
     ///
     /// # Safety
@@ -374,8 +356,10 @@ impl UdpSocketState {
         self.max_gso_segments.store(1, Ordering::Relaxed);
     }
 
-    /// Resolves an Apple fast-path function pointer via `resolver`, disabling the fast path if
-    /// the symbol is absent so that future calls use the slow path directly.
+    /// Resolves an Apple fast-path function pointer via `resolver`.
+    ///
+    /// Disables the fast path if the symbol is absent so that future calls use the slow path
+    /// directly.
     #[cfg(apple_fast)]
     fn resolve_apple_fast_fn<T>(&self, resolver: fn() -> Option<T>) -> Option<T> {
         let f = resolver();
@@ -1041,8 +1025,9 @@ mod gso {
         major_revision: 18,
     };
 
-    /// Checks whether GSO support is available by checking the kernel version followed by setting
-    /// the UDP_SEGMENT option on a socket
+    /// Checks whether GSO support is available.
+    ///
+    /// Checks the kernel version followed by setting the UDP_SEGMENT option on a socket.
     pub(crate) fn max_gso_segments(socket: &impl AsRawFd) -> usize {
         const GSO_SIZE: libc::c_int = 1500;
 
@@ -1212,6 +1197,26 @@ mod gso {
     }
 }
 
+// Adapted from https://github.com/apple-oss-distributions/xnu/blob/8d741a5de7ff4191bf97d57b9f54c2f6d4a15585/bsd/sys/socket_private.h
+#[cfg(apple_fast)]
+#[repr(C)]
+#[allow(non_camel_case_types)]
+pub(crate) struct msghdr_x {
+    pub msg_name: *mut libc::c_void,
+    pub msg_namelen: libc::socklen_t,
+    pub msg_iov: *mut libc::iovec,
+    pub msg_iovlen: libc::c_int,
+    pub msg_control: *mut libc::c_void,
+    pub msg_controllen: libc::socklen_t,
+    pub msg_flags: libc::c_int,
+    pub msg_datalen: usize,
+}
+
+#[cfg(target_os = "freebsd")]
+type IpTosTy = libc::c_uchar;
+#[cfg(not(any(target_os = "freebsd", target_os = "netbsd")))]
+type IpTosTy = libc::c_int;
+
 /// Returns whether the given socket option is supported on the current platform
 ///
 /// Yields `Ok(true)` if the option was set successfully, `Ok(false)` if setting
@@ -1254,8 +1259,9 @@ fn set_socket_option(
 
 const OPTION_ON: libc::c_int = 1;
 
-/// Calls `f` in a loop, retrying on `EINTR`, and returns the non-negative result or the first
-/// non-`EINTR` error.
+/// Calls `f` in a loop, retrying on `EINTR`.
+///
+/// Returns the non-negative result or the first non-`EINTR` error.
 fn retry_if_interrupted(mut f: impl FnMut() -> isize) -> io::Result<isize> {
     loop {
         let n = f();
