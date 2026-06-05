@@ -7215,7 +7215,7 @@ impl fmt::Debug for Connection {
 struct AbandonedPaths {
     /// This and any lower numbered paths have been abandoned.
     continuous_max: Option<PathId>,
-    /// Any abandoned paths which are non-continuous with [`Self::min`].
+    /// Any abandoned paths which are non-continuous with [`Self::continuous_max`].
     set: BTreeSet<PathId>,
 }
 
@@ -7233,7 +7233,7 @@ impl AbandonedPaths {
         self.set.last().copied().or(self.continuous_max)
     }
 
-    /// Whether the the path is already abandoned.
+    /// Whether the path is already abandoned.
     fn contains(&self, val: &PathId) -> bool {
         Some(*val) <= self.continuous_max || self.set.contains(val)
     }
