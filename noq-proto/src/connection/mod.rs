@@ -2932,7 +2932,7 @@ impl Connection {
         }
 
         // Avoid DoS from unreasonably huge ack ranges by filtering out just the new acks.
-        let mut newly_acked = ArrayRangeSet::new();
+        let mut newly_acked: ArrayRangeSet = ArrayRangeSet::new();
         for range in ack.iter() {
             self.spaces[space].for_path(path).check_ack(range.clone())?;
             for (pn, _) in self.spaces[space]
@@ -7212,7 +7212,9 @@ impl fmt::Debug for Connection {
 /// space that is constant but proportional to the number of allowed concurrently open
 /// paths.
 #[derive(Debug, Default)]
-struct AbandonedPaths(ArrayRangeSet);
+struct AbandonedPaths(ArrayRangeSet<ABANDONED_PATH_INLINE_RANGES>);
+
+const ABANDONED_PATH_INLINE_RANGES: usize = 16;
 
 impl AbandonedPaths {
     /// The number of abandoned paths.

@@ -18,9 +18,11 @@ use tinyvec::TinyVec;
 /// of ranges is usually very low (since ACK numbers are in consecutive fashion
 /// unless reordering or packet loss occur).
 #[derive(Default, PartialEq, Eq)]
-pub(crate) struct ArrayRangeSet(TinyVec<[Range<u64>; ARRAY_RANGE_SET_INLINE_CAPACITY]>);
+pub(crate) struct ArrayRangeSet<const N: usize = ARRAY_RANGE_SET_INLINE_CAPACITY>(
+    TinyVec<[Range<u64>; N]>,
+);
 
-impl fmt::Debug for ArrayRangeSet {
+impl<const N: usize> fmt::Debug for ArrayRangeSet<N> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_char('[')?;
         let mut first = true;
@@ -39,9 +41,9 @@ impl fmt::Debug for ArrayRangeSet {
 /// The capacity of elements directly stored in [`ArrayRangeSet`]
 ///
 /// An inline capacity of 2 is chosen to keep `SentFrame` below 128 bytes.
-const ARRAY_RANGE_SET_INLINE_CAPACITY: usize = 2;
+pub(crate) const ARRAY_RANGE_SET_INLINE_CAPACITY: usize = 2;
 
-impl Clone for ArrayRangeSet {
+impl<const N: usize> Clone for ArrayRangeSet<N> {
     fn clone(&self) -> Self {
         // tinyvec keeps the heap representation after clones.
         // We rather prefer the inline representation for clones if possible,
@@ -56,7 +58,7 @@ impl Clone for ArrayRangeSet {
     }
 }
 
-impl ArrayRangeSet {
+impl<const N: usize> ArrayRangeSet<N> {
     pub(crate) fn new() -> Self {
         Default::default()
     }
