@@ -7217,7 +7217,7 @@
 <a href=#7217 id=7217 data-nosnippet>7217</a><span class="kw">impl </span>AbandonedPaths {
 <a href=#7218 id=7218 data-nosnippet>7218</a>    <span class="doccomment">/// The number of abandoned paths.
 <a href=#7219 id=7219 data-nosnippet>7219</a>    </span><span class="kw">fn </span>len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u32 {
-<a href=#7220 id=7220 data-nosnippet>7220</a>        <span class="self">self</span>.<span class="number">0</span>.iter().count() <span class="kw">as </span>u32
+<a href=#7220 id=7220 data-nosnippet>7220</a>        <span class="self">self</span>.<span class="number">0</span>.elts().count() <span class="kw">as </span>u32
 <a href=#7221 id=7221 data-nosnippet>7221</a>    }
 <a href=#7222 id=7222 data-nosnippet>7222</a>
 <a href=#7223 id=7223 data-nosnippet>7223</a>    <span class="doccomment">/// The largest abandoned path.
