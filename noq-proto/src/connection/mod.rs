@@ -7217,7 +7217,7 @@ struct AbandonedPaths(ArrayRangeSet);
 impl AbandonedPaths {
     /// The number of abandoned paths.
     fn len(&self) -> u32 {
-        self.0.elts().count() as u32
+        self.0.iter().map(|r| r.end - r.start).sum::<u64>() as u32
     }
 
     /// The largest abandoned path.
