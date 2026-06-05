@@ -7208,9 +7208,9 @@ impl fmt::Debug for Connection {
 
 /// The set of abandoned paths.
 ///
-/// This is a simplistic implementation to keep track of the set of abandoned paths in a
-/// space that is constant but proportional to the number of allowed concurrently open
-/// paths.
+/// Implementation based on ArrayRangeSet to share more code. The memory space is
+/// proportional to the number of concurrently open paths allowed. So does not grow
+/// unbounded.
 #[derive(Debug, Default)]
 struct AbandonedPaths(ArrayRangeSet<ABANDONED_PATH_INLINE_RANGES, u32>);
 
