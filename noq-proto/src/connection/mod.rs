@@ -7212,29 +7212,29 @@ impl fmt::Debug for Connection {
 /// space that is constant but proportional to the number of allowed concurrently open
 /// paths.
 #[derive(Debug, Default)]
-struct AbandonedPaths(ArrayRangeSet<ABANDONED_PATH_INLINE_RANGES>);
+struct AbandonedPaths(ArrayRangeSet<ABANDONED_PATH_INLINE_RANGES, u32>);
 
 const ABANDONED_PATH_INLINE_RANGES: usize = 16;
 
 impl AbandonedPaths {
     /// The number of abandoned paths.
     fn len(&self) -> u32 {
-        self.0.iter().map(|r| r.end - r.start).sum::<u64>() as u32
+        self.0.iter().map(|r| r.end - r.start).sum::<u32>()
     }
 
     /// The largest abandoned path.
     fn max(&self) -> Option<PathId> {
-        self.0.max().map(|n| PathId::from(n as u32))
+        self.0.max().map(PathId::from)
     }
 
     /// Whether the the path is already abandoned.
     fn contains(&self, val: &PathId) -> bool {
-        self.0.contains(val.as_u32() as u64)
+        self.0.contains(val.as_u32())
     }
 
     /// Adds another abandoned path.
     fn insert(&mut self, val: PathId) {
-        self.0.insert_one(val.as_u32() as u64);
+        self.0.insert_one(val.as_u32());
     }
 }
 

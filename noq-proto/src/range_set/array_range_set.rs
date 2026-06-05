@@ -22,7 +22,7 @@ pub(crate) struct ArrayRangeSet<const N: usize = ARRAY_RANGE_SET_INLINE_CAPACITY
     TinyVec<[Range<T>; N]>,
 );
 
-impl<const N: usize> fmt::Debug for ArrayRangeSet<N> {
+impl<const N: usize, T: fmt::Debug + Default> fmt::Debug for ArrayRangeSet<N, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_char('[')?;
         let mut first = true;
