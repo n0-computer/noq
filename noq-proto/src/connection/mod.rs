@@ -7214,7 +7214,7 @@ impl fmt::Debug for Connection {
 #[derive(Debug, Default)]
 struct AbandonedPaths {
     /// This and any lower numbered paths have been abandoned.
-    min: Option<PathId>,
+    continuous_max: Option<PathId>,
     /// Any abandoned paths which are non-continuous with [`Self::min`].
     set: BTreeSet<PathId>,
 }
@@ -7222,7 +7222,7 @@ struct AbandonedPaths {
 impl AbandonedPaths {
     /// The number of abandoned paths.
     fn len(&self) -> u32 {
-        self.min
+        self.continuous_max
             .map(|p| p.as_u32().saturating_add(1))
             .unwrap_or(0)
             .saturating_add(self.set.len() as u32)
@@ -7230,12 +7230,12 @@ impl AbandonedPaths {
 
     /// The largest abandoned path.
     fn max(&self) -> Option<PathId> {
-        self.set.last().copied().or(self.min)
+        self.set.last().copied().or(self.continuous_max)
     }
 
     /// Whether the the path is already abandoned.
     fn contains(&self, val: &PathId) -> bool {
-        Some(*val) <= self.min || self.set.contains(val)
+        Some(*val) <= self.continuous_max || self.set.contains(val)
     }
 
     /// Adds another abandoned path.
@@ -7246,10 +7246,14 @@ impl AbandonedPaths {
 
     /// Compacts the representation of the abandoned paths.
     fn compact(&mut self) {
-        self.set.retain(|v| match self.min {
+        self.set.retain(|v| match self.continuous_max {
             Some(ref min) if *v <= *min => false,
             Some(ref mut min) if *v == min.next() => {
                 *min = *v;
+                false
+            }
+            None if *v == PathId::ZERO => {
+                self.continuous_max = Some(*v);
                 false
             }
             Some(_) | None => true,
@@ -7773,5 +7777,38 @@ mod tests {
             assert_eq!(negotiate_max_idle_timeout(left, right), result);
             assert_eq!(negotiate_max_idle_timeout(right, left), result);
         }
+    }
+
+    #[test]
+    fn abandoned_paths() {
+        let mut t = AbandonedPaths::default();
+
+        t.insert(PathId(0));
+        t.insert(PathId(1));
+        assert_eq!(t.len(), 2);
+        assert!(t.set.is_empty()); // elements compacted into continuous_max
+        assert!(t.contains(&PathId(0)));
+        assert!(t.contains(&PathId(1)));
+        assert!(!t.contains(&PathId(2)));
+        assert!(!t.contains(&PathId(3)));
+        assert_eq!(t.max(), Some(PathId(1)));
+
+        t.insert(PathId(3));
+        assert_eq!(t.len(), 3);
+        assert_eq!(t.set.len(), 1); // 1 discontinuous element in the set
+        assert!(t.contains(&PathId(0)));
+        assert!(t.contains(&PathId(1)));
+        assert!(!t.contains(&PathId(2)));
+        assert!(t.contains(&PathId(3)));
+        assert_eq!(t.max(), Some(PathId(3)));
+
+        t.insert(PathId(2));
+        assert_eq!(t.len(), 4);
+        assert!(t.set.is_empty()); // elements compacted into continuous_max
+        assert!(t.contains(&PathId(0)));
+        assert!(t.contains(&PathId(1)));
+        assert!(t.contains(&PathId(2)));
+        assert!(t.contains(&PathId(3)));
+        assert_eq!(t.max(), Some(PathId(3)));
     }
 }
