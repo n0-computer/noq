@@ -7208,9 +7208,9 @@
 <a href=#7208 id=7208 data-nosnippet>7208</a>
 <a href=#7209 id=7209 data-nosnippet>7209</a><span class="doccomment">/// The set of abandoned paths.
 <a href=#7210 id=7210 data-nosnippet>7210</a>///
-<a href=#7211 id=7211 data-nosnippet>7211</a>/// This is a simplistic implementation to keep track of the set of abandoned paths in a
-<a href=#7212 id=7212 data-nosnippet>7212</a>/// space that is constant but proportional to the number of allowed concurrently open
-<a href=#7213 id=7213 data-nosnippet>7213</a>/// paths.
+<a href=#7211 id=7211 data-nosnippet>7211</a>/// Implementation based on ArrayRangeSet to share more code. The memory space is
+<a href=#7212 id=7212 data-nosnippet>7212</a>/// proportional to the number of concurrently open paths allowed. So does not grow
+<a href=#7213 id=7213 data-nosnippet>7213</a>/// unbounded.
 <a href=#7214 id=7214 data-nosnippet>7214</a></span><span class="attr">#[derive(Debug, Default)]
 <a href=#7215 id=7215 data-nosnippet>7215</a></span><span class="kw">struct </span>AbandonedPaths(ArrayRangeSet&lt;ABANDONED_PATH_INLINE_RANGES, u32&gt;);
 <a href=#7216 id=7216 data-nosnippet>7216</a>
