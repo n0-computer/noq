@@ -73,7 +73,6 @@ impl ArrayRangeSet {
         self.0.len()
     }
 
-    #[cfg(test)]
     pub(crate) fn contains(&self, x: u64) -> bool {
         for range in self.0.iter() {
             if range.start > x {

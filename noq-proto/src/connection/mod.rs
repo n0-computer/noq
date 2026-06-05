@@ -1,6 +1,6 @@
 use std::{
     cmp,
-    collections::{BTreeMap, BTreeSet, VecDeque, btree_map},
+    collections::{BTreeMap, VecDeque, btree_map},
     convert::TryFrom,
     fmt, io, mem,
     net::SocketAddr,
@@ -7212,48 +7212,27 @@ impl fmt::Debug for Connection {
 /// space that is constant but proportional to the number of allowed concurrently open
 /// paths.
 #[derive(Debug, Default)]
-struct AbandonedPaths {
-    /// This and any lower numbered paths have been abandoned.
-    min: Option<PathId>,
-    /// Any abandoned paths which are non-continuous with [`Self::min`].
-    set: BTreeSet<PathId>,
-}
+struct AbandonedPaths(ArrayRangeSet);
 
 impl AbandonedPaths {
     /// The number of abandoned paths.
     fn len(&self) -> u32 {
-        self.min
-            .map(|p| p.as_u32().saturating_add(1))
-            .unwrap_or(0)
-            .saturating_add(self.set.len() as u32)
+        self.0.elts().count() as u32
     }
 
     /// The largest abandoned path.
     fn max(&self) -> Option<PathId> {
-        self.set.last().copied().or(self.min)
+        self.0.max().map(|n| PathId::from(n as u32))
     }
 
     /// Whether the the path is already abandoned.
     fn contains(&self, val: &PathId) -> bool {
-        Some(*val) <= self.min || self.set.contains(val)
+        self.0.contains(val.as_u32() as u64)
     }
 
     /// Adds another abandoned path.
     fn insert(&mut self, val: PathId) {
-        self.set.insert(val);
-        self.compact()
-    }
-
-    /// Compacts the representation of the abandoned paths.
-    fn compact(&mut self) {
-        self.set.retain(|v| match self.min {
-            Some(ref min) if *v <= *min => false,
-            Some(ref mut min) if *v == min.next() => {
-                *min = *v;
-                false
-            }
-            Some(_) | None => true,
-        })
+        self.0.insert_one(val.as_u32() as u64);
     }
 }
 
