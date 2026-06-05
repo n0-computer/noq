@@ -77,10 +77,6 @@ where
         self.0.iter().cloned()
     }
 
-    // pub(crate) fn elts(&self) -> impl Iterator<Item = T> + '_ {
-    //     self.iter().flatten()
-    // }
-
     pub(crate) fn len(&self) -> usize {
         self.0.len()
     }
