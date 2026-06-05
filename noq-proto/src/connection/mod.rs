@@ -7753,4 +7753,37 @@ mod tests {
             assert_eq!(negotiate_max_idle_timeout(right, left), result);
         }
     }
+
+    #[test]
+    fn abandoned_paths() {
+        let mut t = AbandonedPaths::default();
+
+        t.insert(PathId(0));
+        t.insert(PathId(1));
+        assert_eq!(t.len(), 2);
+        assert_eq!(t.0.len(), 1); // 2 elements compacted into one range
+        assert!(t.contains(&PathId(0)));
+        assert!(t.contains(&PathId(1)));
+        assert!(!t.contains(&PathId(2)));
+        assert!(!t.contains(&PathId(3)));
+        assert_eq!(t.max(), Some(PathId(1)));
+
+        t.insert(PathId(3));
+        assert_eq!(t.len(), 3);
+        assert_eq!(t.0.len(), 2); // 3 elements compacted into 2 ranges
+        assert!(t.contains(&PathId(0)));
+        assert!(t.contains(&PathId(1)));
+        assert!(!t.contains(&PathId(2)));
+        assert!(t.contains(&PathId(3)));
+        assert_eq!(t.max(), Some(PathId(3)));
+
+        t.insert(PathId(2));
+        assert_eq!(t.len(), 4);
+        assert_eq!(t.0.len(), 1); // 4 elements compacted into 1 range
+        assert!(t.contains(&PathId(0)));
+        assert!(t.contains(&PathId(1)));
+        assert!(t.contains(&PathId(2)));
+        assert!(t.contains(&PathId(3)));
+        assert_eq!(t.max(), Some(PathId(3)));
+    }
 }
