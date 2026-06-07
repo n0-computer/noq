@@ -6187,7 +6187,7 @@ impl Connection {
                     .address_discovery_role
                     .should_report(&self.peer_params.address_discovery_role)
             {
-                space.pending.observed_addr.insert(path_id);
+                path.observed_addr_sent = false;
             }
         }
 
@@ -6210,7 +6210,7 @@ impl Connection {
                     .address_discovery_role
                     .should_report(&self.peer_params.address_discovery_role)
             {
-                space.pending.observed_addr.insert(path_id);
+                path.observed_addr_sent = false;
             }
         }
 
