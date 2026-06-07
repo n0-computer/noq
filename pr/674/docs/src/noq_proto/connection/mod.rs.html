@@ -6187,7 +6187,7 @@
 <a href=#6187 id=6187 data-nosnippet>6187</a>                    .address_discovery_role
 <a href=#6188 id=6188 data-nosnippet>6188</a>                    .should_report(<span class="kw-2">&amp;</span><span class="self">self</span>.peer_params.address_discovery_role)
 <a href=#6189 id=6189 data-nosnippet>6189</a>            {
-<a href=#6190 id=6190 data-nosnippet>6190</a>                space.pending.observed_addr.insert(path_id);
+<a href=#6190 id=6190 data-nosnippet>6190</a>                path.pending_observed_addr = <span class="bool-val">true</span>;
 <a href=#6191 id=6191 data-nosnippet>6191</a>            }
 <a href=#6192 id=6192 data-nosnippet>6192</a>        }
 <a href=#6193 id=6193 data-nosnippet>6193</a>
@@ -6210,7 +6210,7 @@
 <a href=#6210 id=6210 data-nosnippet>6210</a>                    .address_discovery_role
 <a href=#6211 id=6211 data-nosnippet>6211</a>                    .should_report(<span class="kw-2">&amp;</span><span class="self">self</span>.peer_params.address_discovery_role)
 <a href=#6212 id=6212 data-nosnippet>6212</a>            {
-<a href=#6213 id=6213 data-nosnippet>6213</a>                space.pending.observed_addr.insert(path_id);
+<a href=#6213 id=6213 data-nosnippet>6213</a>                path.pending_observed_addr = <span class="bool-val">true</span>;
 <a href=#6214 id=6214 data-nosnippet>6214</a>            }
 <a href=#6215 id=6215 data-nosnippet>6215</a>        }
 <a href=#6216 id=6216 data-nosnippet>6216</a>
@@ -6266,7 +6266,7 @@
 <a href=#6266 id=6266 data-nosnippet>6266</a>                </span>.config
 <a href=#6267 id=6267 data-nosnippet>6267</a>                .address_discovery_role
 <a href=#6268 id=6268 data-nosnippet>6268</a>                .should_report(<span class="kw-2">&amp;</span><span class="self">self</span>.peer_params.address_discovery_role)
-<a href=#6269 id=6269 data-nosnippet>6269</a>            &amp;&amp; (space.pending.observed_addr.remove(<span class="kw-2">&amp;</span>path_id) || !path.observed_addr_sent)
+<a href=#6269 id=6269 data-nosnippet>6269</a>            &amp;&amp; (space.pending.observed_addr.remove(<span class="kw-2">&amp;</span>path_id) || path.pending_observed_addr)
 <a href=#6270 id=6270 data-nosnippet>6270</a>        {
 <a href=#6271 id=6271 data-nosnippet>6271</a>            <span class="kw">let </span>frame =
 <a href=#6272 id=6272 data-nosnippet>6272</a>                frame::ObservedAddr::new(path.network_path.remote, <span class="self">self</span>.next_observed_addr_seq_no);
@@ -6274,7 +6274,7 @@
 <a href=#6274 id=6274 data-nosnippet>6274</a>                builder.write_frame(frame, stats);
 <a href=#6275 id=6275 data-nosnippet>6275</a>
 <a href=#6276 id=6276 data-nosnippet>6276</a>                <span class="self">self</span>.next_observed_addr_seq_no = <span class="self">self</span>.next_observed_addr_seq_no.saturating_add(<span class="number">1u8</span>);
-<a href=#6277 id=6277 data-nosnippet>6277</a>                path.observed_addr_sent = <span class="bool-val">true</span>;
+<a href=#6277 id=6277 data-nosnippet>6277</a>                path.pending_observed_addr = <span class="bool-val">false</span>;
 <a href=#6278 id=6278 data-nosnippet>6278</a>                builder.retransmits_mut().observed_addr.insert(path_id);
 <a href=#6279 id=6279 data-nosnippet>6279</a>            }
 <a href=#6280 id=6280 data-nosnippet>6280</a>        }
