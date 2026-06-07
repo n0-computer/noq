@@ -6181,14 +6181,7 @@ impl Connection {
 
             // Always include an OBSERVED_ADDR frame with a PATH_CHALLENGE, regardless
             // of whether one has already been sent on this path.
-            if space_id == SpaceId::Data
-                && self
-                    .config
-                    .address_discovery_role
-                    .should_report(&self.peer_params.address_discovery_role)
-            {
-                path.pending_observed_addr = true;
-            }
+            path.pending_observed_addr = true;
         }
 
         // PATH_RESPONSE
@@ -6204,14 +6197,7 @@ impl Connection {
             // NOTE: this is technically not required but might be useful to ride the
             // request/response nature of path challenges to refresh an observation
             // Since PATH_RESPONSE is a probing frame, this is allowed by the spec.
-            if space_id == SpaceId::Data
-                && self
-                    .config
-                    .address_discovery_role
-                    .should_report(&self.peer_params.address_discovery_role)
-            {
-                path.pending_observed_addr = true;
-            }
+            path.pending_observed_addr = true;
         }
 
         // REACH_OUT
@@ -6276,6 +6262,8 @@ impl Connection {
                 self.next_observed_addr_seq_no = self.next_observed_addr_seq_no.saturating_add(1u8);
                 path.pending_observed_addr = false;
                 builder.retransmits_mut().observed_addr.insert(path_id);
+            } else {
+                path.pending_observed_addr = true;
             }
         }
 
