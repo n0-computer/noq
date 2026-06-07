@@ -520,7 +520,7 @@ pub struct Retransmits {
     pub(super) retire_cids: Vec<(PathId, u64)>,
     pub(super) ack_frequency: bool,
     pub(super) handshake_done: bool,
-    pub(super) observed_addr: bool,
+    pub(super) observed_addr: FxHashSet<PathId>,
     /// Whether we should inform the peer we will allow higher [`PathId`]s.
     pub(super) max_path_id: bool,
     /// Whether we should inform the peer that their max [`PathId`] is blocking our attempt to open
@@ -598,7 +598,7 @@ impl Retransmits {
             && retire_cids.is_empty()
             && !ack_frequency
             && !handshake_done
-            && !observed_addr
+            && observed_addr.is_empty()
             && !max_path_id
             && !paths_blocked
             && new_tokens.is_empty()
@@ -654,7 +654,7 @@ impl ::std::ops::BitOrAssign for Retransmits {
         self.retire_cids.extend(retire_cids);
         self.ack_frequency |= ack_frequency;
         self.handshake_done |= handshake_done;
-        self.observed_addr |= observed_addr;
+        self.observed_addr.extend(observed_addr);
         self.max_path_id |= max_path_id;
         self.paths_blocked |= paths_blocked;
         self.new_tokens.extend_from_slice(&new_tokens);

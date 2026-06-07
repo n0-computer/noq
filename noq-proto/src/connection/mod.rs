@@ -6187,19 +6187,7 @@ impl Connection {
                     .address_discovery_role
                     .should_report(&self.peer_params.address_discovery_role)
             {
-                let frame = frame::ObservedAddr::new(
-                    path.network_path.remote,
-                    self.next_observed_addr_seq_no,
-                );
-                if builder.frame_space_remaining() > frame.size() {
-                    builder.write_frame(frame, stats);
-
-                    self.next_observed_addr_seq_no =
-                        self.next_observed_addr_seq_no.saturating_add(1u8);
-                    path.observed_addr_sent = true;
-
-                    space.pending.observed_addr = false;
-                }
+                space.pending.observed_addr.insert(path_id);
             }
         }
 
@@ -6222,19 +6210,7 @@ impl Connection {
                     .address_discovery_role
                     .should_report(&self.peer_params.address_discovery_role)
             {
-                let frame = frame::ObservedAddr::new(
-                    path.network_path.remote,
-                    self.next_observed_addr_seq_no,
-                );
-                if builder.frame_space_remaining() > frame.size() {
-                    builder.write_frame(frame, stats);
-
-                    self.next_observed_addr_seq_no =
-                        self.next_observed_addr_seq_no.saturating_add(1u8);
-                    path.observed_addr_sent = true;
-
-                    space.pending.observed_addr = false;
-                }
+                space.pending.observed_addr.insert(path_id);
             }
         }
 
@@ -6290,7 +6266,7 @@ impl Connection {
                 .config
                 .address_discovery_role
                 .should_report(&self.peer_params.address_discovery_role)
-            && (!path.observed_addr_sent || space.pending.observed_addr)
+            && (space.pending.observed_addr.remove(&path_id) || !path.observed_addr_sent)
         {
             let frame =
                 frame::ObservedAddr::new(path.network_path.remote, self.next_observed_addr_seq_no);
@@ -6299,8 +6275,7 @@ impl Connection {
 
                 self.next_observed_addr_seq_no = self.next_observed_addr_seq_no.saturating_add(1u8);
                 path.observed_addr_sent = true;
-
-                space.pending.observed_addr = false;
+                builder.retransmits_mut().observed_addr.insert(path_id);
             }
         }
 
@@ -7625,7 +7600,7 @@ impl SentFrames {
             PathResponse(_) => self.non_retransmits = true,
             HandshakeDone(_) => self.retransmits_mut().handshake_done = true,
             ReachOut(frame) => self.retransmits_mut().reach_out.push(frame),
-            ObservedAddr(_) => self.retransmits_mut().observed_addr = true,
+            ObservedAddr(_) => { /* We don't have the PathId, it's added externally */ }
             Ping(_) => self.non_retransmits = true,
             ImmediateAck(_) => self.non_retransmits = true,
             AckFrequency(_) => self.retransmits_mut().ack_frequency = true,
