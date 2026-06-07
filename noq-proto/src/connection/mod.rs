@@ -6187,7 +6187,7 @@ impl Connection {
                     .address_discovery_role
                     .should_report(&self.peer_params.address_discovery_role)
             {
-                path.observed_addr_sent = false;
+                path.pending_observed_addr = true;
             }
         }
 
@@ -6210,7 +6210,7 @@ impl Connection {
                     .address_discovery_role
                     .should_report(&self.peer_params.address_discovery_role)
             {
-                path.observed_addr_sent = false;
+                path.pending_observed_addr = true;
             }
         }
 
@@ -6266,7 +6266,7 @@ impl Connection {
                 .config
                 .address_discovery_role
                 .should_report(&self.peer_params.address_discovery_role)
-            && (space.pending.observed_addr.remove(&path_id) || !path.observed_addr_sent)
+            && (space.pending.observed_addr.remove(&path_id) || path.pending_observed_addr)
         {
             let frame =
                 frame::ObservedAddr::new(path.network_path.remote, self.next_observed_addr_seq_no);
@@ -6274,7 +6274,7 @@ impl Connection {
                 builder.write_frame(frame, stats);
 
                 self.next_observed_addr_seq_no = self.next_observed_addr_seq_no.saturating_add(1u8);
-                path.observed_addr_sent = true;
+                path.pending_observed_addr = false;
                 builder.retransmits_mut().observed_addr.insert(path_id);
             }
         }
