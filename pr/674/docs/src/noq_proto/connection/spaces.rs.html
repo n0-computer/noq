@@ -520,7 +520,7 @@
 <a href=#520 id=520 data-nosnippet>520</a>    <span class="kw">pub</span>(<span class="kw">super</span>) retire_cids: Vec&lt;(PathId, u64)&gt;,
 <a href=#521 id=521 data-nosnippet>521</a>    <span class="kw">pub</span>(<span class="kw">super</span>) ack_frequency: bool,
 <a href=#522 id=522 data-nosnippet>522</a>    <span class="kw">pub</span>(<span class="kw">super</span>) handshake_done: bool,
-<a href=#523 id=523 data-nosnippet>523</a>    <span class="kw">pub</span>(<span class="kw">super</span>) observed_addr: bool,
+<a href=#523 id=523 data-nosnippet>523</a>    <span class="kw">pub</span>(<span class="kw">super</span>) observed_addr: FxHashSet&lt;PathId&gt;,
 <a href=#524 id=524 data-nosnippet>524</a>    <span class="doccomment">/// Whether we should inform the peer we will allow higher [`PathId`]s.
 <a href=#525 id=525 data-nosnippet>525</a>    </span><span class="kw">pub</span>(<span class="kw">super</span>) max_path_id: bool,
 <a href=#526 id=526 data-nosnippet>526</a>    <span class="doccomment">/// Whether we should inform the peer that their max [`PathId`] is blocking our attempt to open
@@ -598,7 +598,7 @@
 <a href=#598 id=598 data-nosnippet>598</a>            &amp;&amp; retire_cids.is_empty()
 <a href=#599 id=599 data-nosnippet>599</a>            &amp;&amp; !ack_frequency
 <a href=#600 id=600 data-nosnippet>600</a>            &amp;&amp; !handshake_done
-<a href=#601 id=601 data-nosnippet>601</a>            &amp;&amp; !observed_addr
+<a href=#601 id=601 data-nosnippet>601</a>            &amp;&amp; observed_addr.is_empty()
 <a href=#602 id=602 data-nosnippet>602</a>            &amp;&amp; !max_path_id
 <a href=#603 id=603 data-nosnippet>603</a>            &amp;&amp; !paths_blocked
 <a href=#604 id=604 data-nosnippet>604</a>            &amp;&amp; new_tokens.is_empty()
@@ -654,7 +654,7 @@
 <a href=#654 id=654 data-nosnippet>654</a>        <span class="self">self</span>.retire_cids.extend(retire_cids);
 <a href=#655 id=655 data-nosnippet>655</a>        <span class="self">self</span>.ack_frequency |= ack_frequency;
 <a href=#656 id=656 data-nosnippet>656</a>        <span class="self">self</span>.handshake_done |= handshake_done;
-<a href=#657 id=657 data-nosnippet>657</a>        <span class="self">self</span>.observed_addr |= observed_addr;
+<a href=#657 id=657 data-nosnippet>657</a>        <span class="self">self</span>.observed_addr.extend(observed_addr);
 <a href=#658 id=658 data-nosnippet>658</a>        <span class="self">self</span>.max_path_id |= max_path_id;
 <a href=#659 id=659 data-nosnippet>659</a>        <span class="self">self</span>.paths_blocked |= paths_blocked;
 <a href=#660 id=660 data-nosnippet>660</a>        <span class="self">self</span>.new_tokens.extend_from_slice(<span class="kw-2">&amp;</span>new_tokens);
