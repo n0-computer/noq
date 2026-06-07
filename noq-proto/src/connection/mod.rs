@@ -6200,6 +6200,29 @@ impl Connection {
             path.pending_observed_addr = true;
         }
 
+        // OBSERVED_ADDR
+        if !scheduling_info.is_abandoned
+            && scheduling_info.may_send_data
+            && space_id == SpaceId::Data
+            && self
+                .config
+                .address_discovery_role
+                .should_report(&self.peer_params.address_discovery_role)
+            && (space.pending.observed_addr.remove(&path_id) || path.pending_observed_addr)
+        {
+            let frame =
+                frame::ObservedAddr::new(path.network_path.remote, self.next_observed_addr_seq_no);
+            if builder.frame_space_remaining() > frame.size() {
+                builder.write_frame(frame, stats);
+
+                self.next_observed_addr_seq_no = self.next_observed_addr_seq_no.saturating_add(1u8);
+                path.pending_observed_addr = false;
+                builder.retransmits_mut().observed_addr.insert(path_id);
+            } else {
+                path.pending_observed_addr = true;
+            }
+        }
+
         // REACH_OUT
         while !scheduling_info.is_abandoned
             && scheduling_info.may_send_data
@@ -6242,29 +6265,6 @@ impl Connection {
             // Consider remotely issued CIDs as retired now that we have sent this frame at
             // least once.
             self.remote_cids.remove(&abandoned_path_id);
-        }
-
-        // OBSERVED_ADDR
-        if !scheduling_info.is_abandoned
-            && scheduling_info.may_send_data
-            && space_id == SpaceId::Data
-            && self
-                .config
-                .address_discovery_role
-                .should_report(&self.peer_params.address_discovery_role)
-            && (space.pending.observed_addr.remove(&path_id) || path.pending_observed_addr)
-        {
-            let frame =
-                frame::ObservedAddr::new(path.network_path.remote, self.next_observed_addr_seq_no);
-            if builder.frame_space_remaining() > frame.size() {
-                builder.write_frame(frame, stats);
-
-                self.next_observed_addr_seq_no = self.next_observed_addr_seq_no.saturating_add(1u8);
-                path.pending_observed_addr = false;
-                builder.retransmits_mut().observed_addr.insert(path_id);
-            } else {
-                path.pending_observed_addr = true;
-            }
         }
 
         // CRYPTO
