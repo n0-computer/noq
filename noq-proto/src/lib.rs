@@ -44,8 +44,8 @@ pub(crate) mod connection;
 pub use crate::connection::{
     Chunk, Chunks, ClosePathError, ClosedPath, ClosedStream, Connection, ConnectionError,
     ConnectionStats, Datagrams, Event, FinishError, FrameStats, MultipathNotNegotiated,
-    NetworkChangeHint, PathAbandonReason, PathError, PathEvent, PathId, PathStats, PathStatus,
-    ReadError, ReadableError, RecvStream, RttEstimator, SendDatagramError, SendStream,
+    NetworkChangeHint, OpenPathOpts, PathAbandonReason, PathError, PathEvent, PathId, PathStats,
+    PathStatus, ReadError, ReadableError, RecvStream, RttEstimator, SendDatagramError, SendStream,
     SetPathStatusError, ShouldTransmit, StreamEvent, Streams, UdpStats, WriteError,
 };
 #[cfg(test)]

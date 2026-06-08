@@ -74,7 +74,8 @@ pub(crate) use packet_crypto::EncryptionLevel;
 
 mod paths;
 pub use paths::{
-    ClosedPath, PathAbandonReason, PathEvent, PathId, PathStatus, RttEstimator, SetPathStatusError,
+    ClosedPath, OpenPathOpts, PathAbandonReason, PathEvent, PathId, PathStatus, RttEstimator,
+    SetPathStatusError,
 };
 use paths::{PathData, PathState};
 
@@ -537,7 +538,7 @@ impl Connection {
     pub fn open_path_ensure(
         &mut self,
         network_path: FourTuple,
-        initial_status: PathStatus,
+        opts: OpenPathOpts,
         now: Instant,
     ) -> Result<(PathId, bool), PathError> {
         let existing_open_path = self.paths.iter().find(|(id, path)| {
@@ -546,7 +547,7 @@ impl Connection {
         });
         match existing_open_path {
             Some((path_id, _state)) => Ok((*path_id, true)),
-            None => Ok((self.open_path(network_path, initial_status, now)?, false)),
+            None => Ok((self.open_path(network_path, opts, now)?, false)),
         }
     }
 
@@ -558,7 +559,7 @@ impl Connection {
     pub fn open_path(
         &mut self,
         network_path: FourTuple,
-        initial_status: PathStatus,
+        opts: OpenPathOpts,
         now: Instant,
     ) -> Result<PathId, PathError> {
         if !self.is_multipath_negotiated() {
@@ -595,8 +596,8 @@ impl Connection {
             return Err(PathError::RemoteCidsExhausted);
         }
 
-        let path = self.ensure_path(path_id, network_path, now, None);
-        path.status.local_update(initial_status);
+        let path = self.ensure_path(path_id, network_path, now, None, opts.rtt_estimate);
+        path.status.local_update(opts.initial_status);
 
         Ok(path_id)
     }
@@ -942,10 +943,13 @@ impl Connection {
         network_path: FourTuple,
         now: Instant,
         pn: Option<u64>,
+        rtt_estimate: Option<Duration>,
     ) -> &mut PathData {
         let valid_path = self.find_validated_path_on_network_path(network_path);
         let validated = valid_path.is_some();
-        let initial_rtt = valid_path.map(|(_, path)| path.data.rtt.conservative());
+        let initial_rtt = valid_path
+            .map(|(_, path)| path.data.rtt.conservative())
+            .or(rtt_estimate);
         let vacant_entry = match self.paths.entry(path_id) {
             btree_map::Entry::Vacant(vacant_entry) => vacant_entry,
             btree_map::Entry::Occupied(occupied_entry) => {
@@ -4346,7 +4350,7 @@ impl Connection {
 
                         if self.side().is_server() && !self.abandoned_paths.contains(&path_id) {
                             // Only the client is allowed to open paths
-                            self.ensure_path(path_id, network_path, now, pn);
+                            self.ensure_path(path_id, network_path, now, pn, None);
                         }
                         if self.paths.contains_key(&path_id) {
                             self.on_packet_authenticated(
@@ -5666,7 +5670,9 @@ impl Connection {
             .ok()
             .and_then(|s| s.pop_pending_path_open())
         {
-            match self.open_path_ensure(network_path, PathStatus::Backup, now) {
+            // TODO: Use RTT estimate from PathChallenge exchange.
+            let opts = OpenPathOpts::new(PathStatus::Backup);
+            match self.open_path_ensure(network_path, opts, now) {
                 Ok((path_id, already_existed)) => {
                     debug!(
                         %path_id,
@@ -5882,8 +5888,9 @@ impl Connection {
                 remote,
                 local_ip: None, /* allow the local ip to be discovered */
             };
+            let opts = OpenPathOpts::new(status);
 
-            if open_first && let Err(e) = self.open_path(network_path, status, now) {
+            if open_first && let Err(e) = self.open_path(network_path, opts.clone(), now) {
                 if self.side().is_client() {
                     debug!(%e, "Failed to open new path for network change");
                 }
@@ -5900,7 +5907,7 @@ impl Connection {
                 continue;
             }
 
-            if !open_first && let Err(e) = self.open_path(network_path, status, now) {
+            if !open_first && let Err(e) = self.open_path(network_path, opts, now) {
                 // Path has already been closed if we got here. Since the path was not recoverable,
                 // this might be desirable in any case, because other paths exist (!open_first) and
                 // this was is considered non recoverable

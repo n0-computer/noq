@@ -31,9 +31,9 @@ use crate::{
     udp_transmit,
 };
 use proto::{
-    ConnectionError, ConnectionHandle, ConnectionStats, Dir, EndpointEvent, FourTuple, PathError,
-    PathEvent, PathId, PathStats, PathStatus, Side, StreamEvent, StreamId, TransportError,
-    TransportErrorCode, congestion::Controller, n0_nat_traversal,
+    ConnectionError, ConnectionHandle, ConnectionStats, Dir, EndpointEvent, FourTuple,
+    OpenPathOpts, PathError, PathEvent, PathId, PathStats, Side, StreamEvent, StreamId,
+    TransportError, TransportErrorCode, congestion::Controller, n0_nat_traversal,
 };
 
 /// In-progress connection attempt future
@@ -394,7 +394,7 @@ impl Connection {
     pub fn open_path_ensure(
         &self,
         network_path: impl Into<FourTuple>,
-        initial_status: PathStatus,
+        opts: OpenPathOpts,
     ) -> Result<OpenPath, PathError> {
         let network_path = network_path.into();
         let mut state = self.0.lock_and_wake("open_path");
@@ -402,9 +402,7 @@ impl Connection {
         let network_path = normalize_network_path(network_path, &state.inner)?;
 
         let now = state.runtime.now();
-        let open_res = state
-            .inner
-            .open_path_ensure(network_path, initial_status, now);
+        let open_res = state.inner.open_path_ensure(network_path, opts, now);
         match open_res {
             Ok((path_id, existed)) if existed => {
                 let recv = state.open_path.get(&path_id).map(|tx| tx.subscribe());
@@ -445,7 +443,7 @@ impl Connection {
     pub fn open_path(
         &self,
         network_path: impl Into<FourTuple>,
-        initial_status: PathStatus,
+        opts: OpenPathOpts,
     ) -> Result<OpenPath, PathError> {
         let network_path = network_path.into();
         let mut state = self.0.lock_and_wake("open_path");
@@ -454,7 +452,7 @@ impl Connection {
 
         let (on_open_path_send, on_open_path_recv) = watch::channel(Ok(()));
         let now = state.runtime.now();
-        let open_res = state.inner.open_path(network_path, initial_status, now);
+        let open_res = state.inner.open_path(network_path, opts, now);
         match open_res {
             Ok(path_id) => {
                 state.open_path.insert(path_id, on_open_path_send);

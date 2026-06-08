@@ -5,7 +5,8 @@ use test_strategy::Arbitrary;
 use tracing::{debug, error, info, trace};
 
 use crate::{
-    ClientConfig, Connection, ConnectionHandle, Dir, FourTuple, PathId, PathStatus, Side, StreamId,
+    ClientConfig, Connection, ConnectionHandle, Dir, FourTuple, OpenPathOpts, PathId, PathStatus,
+    Side, StreamId,
 };
 
 use super::util::{Pair, Routing, TestEndpoint};
@@ -181,7 +182,7 @@ impl TestOp {
                     remote,
                     local_ip: None,
                 };
-                conn.open_path(network_path, status, now)
+                conn.open_path(network_path, OpenPathOpts::new(status), now)
                     .inspect_err(|err| error!(?err, "OpenPath failed"))
                     .ok();
             }

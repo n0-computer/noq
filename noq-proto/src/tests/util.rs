@@ -19,7 +19,6 @@ use rustls::{
 };
 use tracing::{debug, info, info_span, trace};
 
-use crate::crypto::rustls::{QuicClientConfig, QuicServerConfig, configured_provider};
 use crate::{
     ClientConfig, ClosePathError, ClosedPath, Connection, ConnectionError, ConnectionEvent,
     ConnectionHandle, ConnectionStats, DatagramEvent, Datagrams, Dir, Duration, EcnCodepoint,
@@ -28,6 +27,10 @@ use crate::{
     PathStatus, RecvStream, SendStream, ServerConfig, SetPathStatusError, Side, StreamId, Streams,
     SystemTime, TokenLog, TokenReuseError, Transmit, TransportConfig, VarInt,
     congestion::Controller, n0_nat_traversal,
+};
+use crate::{
+    OpenPathOpts,
+    crypto::rustls::{QuicClientConfig, QuicServerConfig, configured_provider},
 };
 
 pub(super) const DEFAULT_MTU: usize = 1452;
@@ -619,7 +622,7 @@ impl ConnPair {
     ) -> Result<(PathId, bool), PathError> {
         let now = self.pair.time;
         self.conn_mut(side)
-            .open_path_ensure(network_path, initial_status, now)
+            .open_path_ensure(network_path, OpenPathOpts::new(initial_status), now)
     }
 
     pub(super) fn open_path(
@@ -630,7 +633,7 @@ impl ConnPair {
     ) -> Result<PathId, PathError> {
         let now = self.pair.time;
         self.conn_mut(side)
-            .open_path(network_path, initial_status, now)
+            .open_path(network_path, OpenPathOpts::new(initial_status), now)
     }
 
     pub(super) fn close_path(

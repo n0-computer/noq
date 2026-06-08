@@ -98,6 +98,33 @@ impl<T: Into<u32>> From<T> for PathId {
     }
 }
 
+/// Options for opening a new path.
+#[derive(Debug, Clone, Default)]
+pub struct OpenPathOpts {
+    pub(super) initial_status: PathStatus,
+    pub(super) rtt_estimate: Option<Duration>,
+}
+
+impl OpenPathOpts {
+    /// Creates a new [`OpenPathOpts`] with the initial path status.
+    pub fn new(initial_status: PathStatus) -> Self {
+        Self {
+            initial_status,
+            rtt_estimate: None,
+        }
+    }
+
+    /// Sets the estimated round-trip time for this path, if known.
+    ///
+    /// This estimate will be used if the connection does not have an internal
+    /// estimate already for the path's network path. If unset, the default of
+    /// 333ms will be used.
+    pub fn rtt_estimate(mut self, rtt_estimate: Duration) -> Self {
+        self.rtt_estimate = Some(rtt_estimate);
+        self
+    }
+}
+
 /// State needed for a single path ID.
 ///
 /// A single path ID can migrate according to the rules in RFC9000 §9, either voluntary or
