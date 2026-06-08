@@ -7,86 +7,86 @@ mod array_range_set {
 
     #[test]
     fn merge_and_split() {
-        let mut set = ArrayRangeSet::new();
+        let mut set: ArrayRangeSet = ArrayRangeSet::new();
         assert!(set.insert(0..2));
         assert!(set.insert(2..4));
         assert!(!set.insert(1..3));
-        assert_eq!(set.len(), 1);
+        assert_eq!(set.range_count(), 1);
         assert_eq!(&set.elts().collect::<Vec<_>>()[..], [0, 1, 2, 3]);
         assert!(!set.contains(4));
         assert!(set.remove(2..3));
-        assert_eq!(set.len(), 2);
+        assert_eq!(set.range_count(), 2);
         assert!(!set.contains(2));
         assert_eq!(&set.elts().collect::<Vec<_>>()[..], [0, 1, 3]);
     }
 
     #[test]
     fn double_merge_exact() {
-        let mut set = ArrayRangeSet::new();
+        let mut set: ArrayRangeSet = ArrayRangeSet::new();
         assert!(set.insert(0..2));
         assert!(set.insert(4..6));
-        assert_eq!(set.len(), 2);
+        assert_eq!(set.range_count(), 2);
         assert!(set.insert(2..4));
-        assert_eq!(set.len(), 1);
+        assert_eq!(set.range_count(), 1);
         assert_eq!(&set.elts().collect::<Vec<_>>()[..], [0, 1, 2, 3, 4, 5]);
     }
 
     #[test]
     fn single_merge_low() {
-        let mut set = ArrayRangeSet::new();
+        let mut set: ArrayRangeSet = ArrayRangeSet::new();
         assert!(set.insert(0..2));
         assert!(set.insert(4..6));
-        assert_eq!(set.len(), 2);
+        assert_eq!(set.range_count(), 2);
         assert!(set.insert(2..3));
-        assert_eq!(set.len(), 2);
+        assert_eq!(set.range_count(), 2);
         assert_eq!(&set.elts().collect::<Vec<_>>()[..], [0, 1, 2, 4, 5]);
     }
 
     #[test]
     fn single_merge_high() {
-        let mut set = ArrayRangeSet::new();
+        let mut set: ArrayRangeSet = ArrayRangeSet::new();
         assert!(set.insert(0..2));
         assert!(set.insert(4..6));
-        assert_eq!(set.len(), 2);
+        assert_eq!(set.range_count(), 2);
         assert!(set.insert(3..4));
-        assert_eq!(set.len(), 2);
+        assert_eq!(set.range_count(), 2);
         assert_eq!(&set.elts().collect::<Vec<_>>()[..], [0, 1, 3, 4, 5]);
     }
 
     #[test]
     fn double_merge_wide() {
-        let mut set = ArrayRangeSet::new();
+        let mut set: ArrayRangeSet = ArrayRangeSet::new();
         assert!(set.insert(0..2));
         assert!(set.insert(4..6));
-        assert_eq!(set.len(), 2);
+        assert_eq!(set.range_count(), 2);
         assert!(set.insert(1..5));
-        assert_eq!(set.len(), 1);
+        assert_eq!(set.range_count(), 1);
         assert_eq!(&set.elts().collect::<Vec<_>>()[..], [0, 1, 2, 3, 4, 5]);
     }
 
     #[test]
     fn double_remove() {
-        let mut set = ArrayRangeSet::new();
+        let mut set: ArrayRangeSet = ArrayRangeSet::new();
         assert!(set.insert(0..2));
         assert!(set.insert(4..6));
         assert!(set.remove(1..5));
-        assert_eq!(set.len(), 2);
+        assert_eq!(set.range_count(), 2);
         assert_eq!(&set.elts().collect::<Vec<_>>()[..], [0, 5]);
     }
 
     #[test]
     fn insert_multiple() {
-        let mut set = ArrayRangeSet::new();
+        let mut set: ArrayRangeSet = ArrayRangeSet::new();
         assert!(set.insert(0..1));
         assert!(set.insert(2..3));
         assert!(set.insert(4..5));
         assert!(set.insert(0..5));
-        assert_eq!(set.len(), 1);
+        assert_eq!(set.range_count(), 1);
     }
 
     #[test]
     fn remove_multiple() {
-        let mut set = ArrayRangeSet::new();
+        let mut set: ArrayRangeSet = ArrayRangeSet::new();
         assert!(set.insert(0..1));
         assert!(set.insert(2..3));
         assert!(set.insert(4..5));
@@ -96,7 +96,7 @@ mod array_range_set {
 
     #[test]
     fn double_insert() {
-        let mut set = ArrayRangeSet::new();
+        let mut set: ArrayRangeSet = ArrayRangeSet::new();
         assert!(set.insert(0..2));
         assert!(!set.insert(0..2));
         assert!(set.insert(2..4));
@@ -105,18 +105,18 @@ mod array_range_set {
         assert!(!set.insert(1..2));
         assert!(!set.insert(1..3));
         assert!(!set.insert(1..4));
-        assert_eq!(set.len(), 1);
+        assert_eq!(set.range_count(), 1);
     }
 
     #[test]
     fn skip_empty_ranges() {
-        let mut set = ArrayRangeSet::new();
+        let mut set: ArrayRangeSet = ArrayRangeSet::new();
         assert!(!set.insert(2..2));
-        assert_eq!(set.len(), 0);
+        assert_eq!(set.range_count(), 0);
         assert!(!set.insert(4..4));
-        assert_eq!(set.len(), 0);
+        assert_eq!(set.range_count(), 0);
         assert!(!set.insert(0..0));
-        assert_eq!(set.len(), 0);
+        assert_eq!(set.range_count(), 0);
     }
 
     #[test]
@@ -147,7 +147,7 @@ mod array_range_set {
 
     #[test]
     fn min_max() {
-        let mut set = ArrayRangeSet::new();
+        let mut set: ArrayRangeSet = ArrayRangeSet::new();
         set.insert(1..3);
         set.insert(4..5);
         set.insert(6..10);
@@ -176,7 +176,7 @@ mod array_range_set {
     }
 
     fn assert_sets_equal(set: &ArrayRangeSet, reference: &RefRangeSet) {
-        assert_eq!(set.len(), reference.len());
+        assert_eq!(set.range_count(), reference.len());
         assert_eq!(set.is_empty(), reference.is_empty());
         assert_eq!(set.elts().collect::<Vec<_>>()[..], reference.elts()[..]);
     }

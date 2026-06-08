@@ -1102,7 +1102,7 @@ impl<'a> Encodable for PathAckEncoder<'a> {
         buf.write(*path_id);
         buf.write_var(largest);
         buf.write_var(*delay);
-        buf.write_var(ranges.len() as u64 - 1);
+        buf.write_var(ranges.range_count() as u64 - 1);
         buf.write_var(first_size - 1);
         let mut prev = first.start;
         for block in rest {
@@ -1201,7 +1201,7 @@ impl<'a> Encodable for AckEncoder<'a> {
         buf.write(kind);
         buf.write_var(largest);
         buf.write_var(*delay);
-        buf.write_var(ranges.len() as u64 - 1);
+        buf.write_var(ranges.range_count() as u64 - 1);
         buf.write_var(first_size - 1);
         let mut prev = first.start;
         for block in rest {

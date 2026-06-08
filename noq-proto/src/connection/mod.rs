@@ -12,7 +12,7 @@ use bytes::{Bytes, BytesMut};
 use frame::StreamMetaVec;
 
 use rand::{RngExt, SeedableRng, rngs::StdRng};
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use thiserror::Error;
 use tracing::{debug, error, trace, trace_span, warn};
 
@@ -305,9 +305,7 @@ pub struct Connection {
     /// They may still have some state left in [`Connection::paths`] or
     /// [`Connection::local_cid_state`] since some of this has to be kept around for some
     /// time after a path is abandoned.
-    // TODO(flub): Make this a more efficient data structure.  Like ranges of abandoned
-    //    paths.  Or a set together with a minimum.  Or something.
-    abandoned_paths: FxHashSet<PathId>,
+    abandoned_paths: AbandonedPaths,
 
     /// State for n0's (<https://n0.computer>) nat traversal protocol.
     n0_nat_traversal: n0_nat_traversal::State,
@@ -542,7 +540,7 @@ impl Connection {
     ) -> Result<(PathId, bool), PathError> {
         let existing_open_path = self.paths.iter().find(|(id, path)| {
             network_path.is_probably_same_path(&path.data.network_path)
-                && !self.abandoned_paths.contains(*id)
+                && !self.abandoned_paths.contains(id)
         });
         match existing_open_path {
             Some((path_id, _state)) => Ok((*path_id, true)),
@@ -568,7 +566,7 @@ impl Connection {
             return Err(PathError::ServerSideNotAllowed);
         }
 
-        let max_abandoned = self.abandoned_paths.iter().max().copied();
+        let max_abandoned = self.abandoned_paths.max();
         let max_used = self.paths.keys().last().copied();
         let path_id = max_abandoned
             .max(max_used)
@@ -2806,7 +2804,7 @@ impl Connection {
         let in_use_count = self
             .local_max_path_id
             .next()
-            .saturating_sub(self.abandoned_paths.len() as u32)
+            .saturating_sub(self.abandoned_paths.len())
             .as_u32();
         let extra_needed = count.get().saturating_sub(in_use_count);
         let new_max_path_id = self.local_max_path_id.saturating_add(extra_needed);
@@ -2934,7 +2932,7 @@ impl Connection {
         }
 
         // Avoid DoS from unreasonably huge ack ranges by filtering out just the new acks.
-        let mut newly_acked = ArrayRangeSet::new();
+        let mut newly_acked: ArrayRangeSet = ArrayRangeSet::new();
         for range in ack.iter() {
             self.spaces[space].for_path(path).check_ack(range.clone())?;
             for (pn, _) in self.spaces[space]
@@ -3043,7 +3041,7 @@ impl Connection {
                         now,
                         space,
                         path,
-                        newly_acked.len() as u64,
+                        newly_acked.range_count() as u64,
                         ecn,
                         sent,
                         largest_sent_pn,
@@ -7208,6 +7206,42 @@ impl fmt::Debug for Connection {
     }
 }
 
+/// The set of abandoned paths.
+///
+/// Implementation based on ArrayRangeSet to share more code. The memory space is
+/// proportional to the number of concurrently open paths allowed. So does not grow
+/// unbounded.
+#[derive(Debug, Default)]
+struct AbandonedPaths(ArrayRangeSet<ABANDONED_PATH_INLINE_RANGES, u32>);
+
+/// Size of the stack-allocated array in the [`ArrayRangeSet`].
+///
+/// A range is 2 u32's, so this is 16 * (4 + 4) = 128 bytes. A good size for inline data,
+/// with plenty of ranges for common multipath use.
+const ABANDONED_PATH_INLINE_RANGES: usize = 16;
+
+impl AbandonedPaths {
+    /// The number of abandoned paths.
+    fn len(&self) -> u32 {
+        self.0.elts_count()
+    }
+
+    /// The largest abandoned path.
+    fn max(&self) -> Option<PathId> {
+        self.0.max().map(PathId::from)
+    }
+
+    /// Whether the path is already abandoned.
+    fn contains(&self, val: &PathId) -> bool {
+        self.0.contains(val.as_u32())
+    }
+
+    /// Adds another abandoned path.
+    fn insert(&mut self, val: PathId) {
+        self.0.insert_one(val.as_u32());
+    }
+}
+
 /// Hints when the caller identifies a network change.
 pub trait NetworkChangeHint: std::fmt::Debug + 'static {
     /// Inform the connection if a path may recover after a network change.
@@ -7724,5 +7758,38 @@ mod tests {
             assert_eq!(negotiate_max_idle_timeout(left, right), result);
             assert_eq!(negotiate_max_idle_timeout(right, left), result);
         }
+    }
+
+    #[test]
+    fn abandoned_paths() {
+        let mut t = AbandonedPaths::default();
+
+        t.insert(PathId(0));
+        t.insert(PathId(1));
+        assert_eq!(t.len(), 2);
+        assert_eq!(t.0.range_count(), 1); // 2 elements compacted into one range
+        assert!(t.contains(&PathId(0)));
+        assert!(t.contains(&PathId(1)));
+        assert!(!t.contains(&PathId(2)));
+        assert!(!t.contains(&PathId(3)));
+        assert_eq!(t.max(), Some(PathId(1)));
+
+        t.insert(PathId(3));
+        assert_eq!(t.len(), 3);
+        assert_eq!(t.0.range_count(), 2); // 3 elements compacted into 2 ranges
+        assert!(t.contains(&PathId(0)));
+        assert!(t.contains(&PathId(1)));
+        assert!(!t.contains(&PathId(2)));
+        assert!(t.contains(&PathId(3)));
+        assert_eq!(t.max(), Some(PathId(3)));
+
+        t.insert(PathId(2));
+        assert_eq!(t.len(), 4);
+        assert_eq!(t.0.range_count(), 1); // 4 elements compacted into 1 range
+        assert!(t.contains(&PathId(0)));
+        assert!(t.contains(&PathId(1)));
+        assert!(t.contains(&PathId(2)));
+        assert!(t.contains(&PathId(3)));
+        assert_eq!(t.max(), Some(PathId(3)));
     }
 }
