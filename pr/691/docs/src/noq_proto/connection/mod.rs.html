@@ -3041,7 +3041,7 @@
 <a href=#3041 id=3041 data-nosnippet>3041</a>                        now,
 <a href=#3042 id=3042 data-nosnippet>3042</a>                        space,
 <a href=#3043 id=3043 data-nosnippet>3043</a>                        path,
-<a href=#3044 id=3044 data-nosnippet>3044</a>                        newly_acked.len() <span class="kw">as </span>u64,
+<a href=#3044 id=3044 data-nosnippet>3044</a>                        newly_acked.range_count() <span class="kw">as </span>u64,
 <a href=#3045 id=3045 data-nosnippet>3045</a>                        ecn,
 <a href=#3046 id=3046 data-nosnippet>3046</a>                        sent,
 <a href=#3047 id=3047 data-nosnippet>3047</a>                        largest_sent_pn,
@@ -7219,7 +7219,7 @@
 <a href=#7219 id=7219 data-nosnippet>7219</a><span class="kw">impl </span>AbandonedPaths {
 <a href=#7220 id=7220 data-nosnippet>7220</a>    <span class="doccomment">/// The number of abandoned paths.
 <a href=#7221 id=7221 data-nosnippet>7221</a>    </span><span class="kw">fn </span>len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u32 {
-<a href=#7222 id=7222 data-nosnippet>7222</a>        <span class="self">self</span>.<span class="number">0</span>.iter().map(|r| r.end - r.start).sum::&lt;u32&gt;()
+<a href=#7222 id=7222 data-nosnippet>7222</a>        <span class="self">self</span>.<span class="number">0</span>.elts_count()
 <a href=#7223 id=7223 data-nosnippet>7223</a>    }
 <a href=#7224 id=7224 data-nosnippet>7224</a>
 <a href=#7225 id=7225 data-nosnippet>7225</a>    <span class="doccomment">/// The largest abandoned path.
@@ -7763,7 +7763,7 @@
 <a href=#7763 id=7763 data-nosnippet>7763</a>        t.insert(PathId(<span class="number">0</span>));
 <a href=#7764 id=7764 data-nosnippet>7764</a>        t.insert(PathId(<span class="number">1</span>));
 <a href=#7765 id=7765 data-nosnippet>7765</a>        <span class="macro">assert_eq!</span>(t.len(), <span class="number">2</span>);
-<a href=#7766 id=7766 data-nosnippet>7766</a>        <span class="macro">assert_eq!</span>(t.<span class="number">0</span>.len(), <span class="number">1</span>); <span class="comment">// 2 elements compacted into one range
+<a href=#7766 id=7766 data-nosnippet>7766</a>        <span class="macro">assert_eq!</span>(t.<span class="number">0</span>.range_count(), <span class="number">1</span>); <span class="comment">// 2 elements compacted into one range
 <a href=#7767 id=7767 data-nosnippet>7767</a>        </span><span class="macro">assert!</span>(t.contains(<span class="kw-2">&amp;</span>PathId(<span class="number">0</span>)));
 <a href=#7768 id=7768 data-nosnippet>7768</a>        <span class="macro">assert!</span>(t.contains(<span class="kw-2">&amp;</span>PathId(<span class="number">1</span>)));
 <a href=#7769 id=7769 data-nosnippet>7769</a>        <span class="macro">assert!</span>(!t.contains(<span class="kw-2">&amp;</span>PathId(<span class="number">2</span>)));
@@ -7772,7 +7772,7 @@
 <a href=#7772 id=7772 data-nosnippet>7772</a>
 <a href=#7773 id=7773 data-nosnippet>7773</a>        t.insert(PathId(<span class="number">3</span>));
 <a href=#7774 id=7774 data-nosnippet>7774</a>        <span class="macro">assert_eq!</span>(t.len(), <span class="number">3</span>);
-<a href=#7775 id=7775 data-nosnippet>7775</a>        <span class="macro">assert_eq!</span>(t.<span class="number">0</span>.len(), <span class="number">2</span>); <span class="comment">// 3 elements compacted into 2 ranges
+<a href=#7775 id=7775 data-nosnippet>7775</a>        <span class="macro">assert_eq!</span>(t.<span class="number">0</span>.range_count(), <span class="number">2</span>); <span class="comment">// 3 elements compacted into 2 ranges
 <a href=#7776 id=7776 data-nosnippet>7776</a>        </span><span class="macro">assert!</span>(t.contains(<span class="kw-2">&amp;</span>PathId(<span class="number">0</span>)));
 <a href=#7777 id=7777 data-nosnippet>7777</a>        <span class="macro">assert!</span>(t.contains(<span class="kw-2">&amp;</span>PathId(<span class="number">1</span>)));
 <a href=#7778 id=7778 data-nosnippet>7778</a>        <span class="macro">assert!</span>(!t.contains(<span class="kw-2">&amp;</span>PathId(<span class="number">2</span>)));
@@ -7781,7 +7781,7 @@
 <a href=#7781 id=7781 data-nosnippet>7781</a>
 <a href=#7782 id=7782 data-nosnippet>7782</a>        t.insert(PathId(<span class="number">2</span>));
 <a href=#7783 id=7783 data-nosnippet>7783</a>        <span class="macro">assert_eq!</span>(t.len(), <span class="number">4</span>);
-<a href=#7784 id=7784 data-nosnippet>7784</a>        <span class="macro">assert_eq!</span>(t.<span class="number">0</span>.len(), <span class="number">1</span>); <span class="comment">// 4 elements compacted into 1 range
+<a href=#7784 id=7784 data-nosnippet>7784</a>        <span class="macro">assert_eq!</span>(t.<span class="number">0</span>.range_count(), <span class="number">1</span>); <span class="comment">// 4 elements compacted into 1 range
 <a href=#7785 id=7785 data-nosnippet>7785</a>        </span><span class="macro">assert!</span>(t.contains(<span class="kw-2">&amp;</span>PathId(<span class="number">0</span>)));
 <a href=#7786 id=7786 data-nosnippet>7786</a>        <span class="macro">assert!</span>(t.contains(<span class="kw-2">&amp;</span>PathId(<span class="number">1</span>)));
 <a href=#7787 id=7787 data-nosnippet>7787</a>        <span class="macro">assert!</span>(t.contains(<span class="kw-2">&amp;</span>PathId(<span class="number">2</span>)));
