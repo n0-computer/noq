@@ -7214,6 +7214,10 @@ impl fmt::Debug for Connection {
 #[derive(Debug, Default)]
 struct AbandonedPaths(ArrayRangeSet<ABANDONED_PATH_INLINE_RANGES, u32>);
 
+/// Size of the stack-allocated array in the [`ArrayRangeSet`].
+///
+/// A range is 2 u32's, so this is 16 * (4 + 4) = 128 bytes. A good size for inline data,
+/// with plenty of ranges for common multipath use.
 const ABANDONED_PATH_INLINE_RANGES: usize = 16;
 
 impl AbandonedPaths {
