@@ -3843,13 +3843,7 @@ fn address_discovery_zero_rtt_accepted() {
 #[test]
 fn address_discovery_zero_rtt_rejection() {
     let _guard = subscribe();
-    let server_cfg = ServerConfig {
-        transport: Arc::new(TransportConfig {
-            address_discovery_role: crate::address_discovery::Role::default(),
-            ..TransportConfig::default()
-        }),
-        ..server_config()
-    };
+    let server_cfg = server_config();
     let alt_server_cfg = ServerConfig {
         transport: Arc::new(TransportConfig {
             address_discovery_role: crate::address_discovery::Role::send_only(),
