@@ -16,15 +16,24 @@ pub(crate) struct Role {
 
 impl Role {
     pub(crate) const fn send_only() -> Self {
-        Self { send: true, receive: false }
+        Self {
+            send: true,
+            receive: false,
+        }
     }
 
     pub(crate) const fn receive_only() -> Self {
-        Self { send: false, receive: true }
+        Self {
+            send: false,
+            receive: true,
+        }
     }
 
     pub(crate) const fn both() -> Self {
-        Self { send: true, receive: true }
+        Self {
+            send: true,
+            receive: true,
+        }
     }
 }
 
