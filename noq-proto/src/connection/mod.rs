@@ -7227,7 +7227,7 @@ impl AbandonedPaths {
         self.0.max().map(PathId::from)
     }
 
-    /// Whether the the path is already abandoned.
+    /// Whether the path is already abandoned.
     fn contains(&self, val: &PathId) -> bool {
         self.0.contains(val.as_u32())
     }
