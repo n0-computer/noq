@@ -3041,7 +3041,7 @@ impl Connection {
                         now,
                         space,
                         path,
-                        newly_acked.len() as u64,
+                        newly_acked.range_count() as u64,
                         ecn,
                         sent,
                         largest_sent_pn,
@@ -7219,7 +7219,7 @@ const ABANDONED_PATH_INLINE_RANGES: usize = 16;
 impl AbandonedPaths {
     /// The number of abandoned paths.
     fn len(&self) -> u32 {
-        self.0.iter().map(|r| r.end - r.start).sum::<u32>()
+        self.0.elts_count()
     }
 
     /// The largest abandoned path.
@@ -7763,7 +7763,7 @@ mod tests {
         t.insert(PathId(0));
         t.insert(PathId(1));
         assert_eq!(t.len(), 2);
-        assert_eq!(t.0.len(), 1); // 2 elements compacted into one range
+        assert_eq!(t.0.range_count(), 1); // 2 elements compacted into one range
         assert!(t.contains(&PathId(0)));
         assert!(t.contains(&PathId(1)));
         assert!(!t.contains(&PathId(2)));
@@ -7772,7 +7772,7 @@ mod tests {
 
         t.insert(PathId(3));
         assert_eq!(t.len(), 3);
-        assert_eq!(t.0.len(), 2); // 3 elements compacted into 2 ranges
+        assert_eq!(t.0.range_count(), 2); // 3 elements compacted into 2 ranges
         assert!(t.contains(&PathId(0)));
         assert!(t.contains(&PathId(1)));
         assert!(!t.contains(&PathId(2)));
@@ -7781,7 +7781,7 @@ mod tests {
 
         t.insert(PathId(2));
         assert_eq!(t.len(), 4);
-        assert_eq!(t.0.len(), 1); // 4 elements compacted into 1 range
+        assert_eq!(t.0.range_count(), 1); // 4 elements compacted into 1 range
         assert!(t.contains(&PathId(0)));
         assert!(t.contains(&PathId(1)));
         assert!(t.contains(&PathId(2)));

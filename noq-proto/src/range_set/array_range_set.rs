@@ -1,4 +1,5 @@
 use std::fmt::{self, Write};
+use std::iter::Sum;
 use std::ops::{Add, Range, Sub};
 
 use tinyvec::TinyVec;
@@ -67,7 +68,8 @@ where
         + Ord
         + From<u32>
         + Add<T, Output = T>
-        + Sub<T, Output = T>,
+        + Sub<T, Output = T>
+        + Sum,
 {
     pub(crate) fn new() -> Self {
         Default::default()
@@ -77,8 +79,12 @@ where
         self.0.iter().cloned()
     }
 
-    pub(crate) fn len(&self) -> usize {
+    pub(crate) fn range_count(&self) -> usize {
         self.0.len()
+    }
+
+    pub(crate) fn elts_count(&self) -> T {
+        self.0.iter().map(|r| r.end - r.start).sum()
     }
 
     pub(crate) fn contains(&self, x: T) -> bool {
