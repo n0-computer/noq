@@ -380,10 +380,13 @@ impl Connection {
 
     /// Opens a new path if no path exists yet for `network_path`.
     ///
-    /// If `network_path` has no local IP set, then this will open a new path
-    /// if no path exists for this remote address, independent of the existing
-    /// path's local IP. If a local IP is set, it will match against the full
-    /// four-tuple of existing paths.
+    /// If `network_path` has no local IP set, the comparison ignores the local interface and
+    /// matches any open path with the same remote address. If a local IP is set, only paths
+    /// with the same 4-tuple match.
+    ///
+    /// When a matching path is found, the returned future resolves to that existing path:
+    /// either immediately if the path is already established, or once it finishes opening
+    /// otherwise.
     ///
     /// Otherwise behaves exactly as [`open_path`].
     ///
@@ -392,14 +395,11 @@ impl Connection {
         &self,
         network_path: impl Into<FourTuple>,
         initial_status: PathStatus,
-    ) -> OpenPath {
+    ) -> Result<OpenPath, PathError> {
         let network_path = network_path.into();
         let mut state = self.0.lock_and_wake("open_path");
 
-        let network_path = match normalize_network_path(network_path, &state.inner) {
-            Ok(network_path) => network_path,
-            Err(err) => return OpenPath::rejected(err),
-        };
+        let network_path = normalize_network_path(network_path, &state.inner)?;
 
         let now = state.runtime.now();
         let open_res = state
@@ -410,51 +410,47 @@ impl Connection {
                 let recv = state.open_path.get(&path_id).map(|tx| tx.subscribe());
                 drop(state);
                 match recv {
-                    Some(recv) => OpenPath::new(path_id, recv, self.0.clone()),
-                    None => OpenPath::ready(path_id, self.0.clone()),
+                    Some(recv) => Ok(OpenPath::new(path_id, recv, self.0.clone())),
+                    None => Ok(OpenPath::ready(path_id, self.0.clone())),
                 }
             }
             Ok((path_id, _)) => {
                 let (tx, rx) = watch::channel(Ok(()));
                 state.open_path.insert(path_id, tx);
                 drop(state);
-                OpenPath::new(path_id, rx, self.0.clone())
+                Ok(OpenPath::new(path_id, rx, self.0.clone()))
             }
-            Err(err) => OpenPath::rejected(err),
+            Err(err) => Err(err),
         }
     }
 
     /// Opens an additional path if the multipath extension is negotiated.
     ///
-    /// This function takes a [`FourTuple`], which contains the remote address and an optional
-    /// local IP. If the local IP is set, the path will be opened with this source address,
-    /// and the endpoint must support sending from that IP address. You can also pass a
-    /// [`SocketAddr`] to only set the remote address and leave the local IP interface unspecified.
+    /// `network_path` is a [`FourTuple`] of the remote address and an optional local IP. If
+    /// the local IP is set, the path is opened with that source address, and the endpoint
+    /// must support sending from it. A bare [`SocketAddr`] may be passed to leave the local
+    /// interface unspecified.
     ///
-    /// The returned future completes once the path is either fully opened and ready to
-    /// carry application data, or if there was an error.
+    /// Returns `Err` immediately if the path cannot be allocated (for example, multipath is
+    /// not negotiated, the maximum path id is reached, no connection ids are available for
+    /// the new path, or the remote address is unsupported).
     ///
-    /// Dropping the returned future does not cancel the opening of the path, the
+    /// On success, the returned [`OpenPath`] future resolves once the path is fully opened
+    /// and ready to carry application data, or to [`PathError::ValidationFailed`] if path
+    /// validation later fails.
+    ///
+    /// Dropping the returned future does not cancel the opening of the path. The
     /// [`PathEvent::Established`] event will still be emitted from [`Self::path_events`] if
-    /// the path opens.  The [`PathId`] for the events can be extracted from
-    /// [`OpenPath::path_id`].
-    ///
-    /// Failure to open a path can either occur immediately, before polling the returned
-    /// future, or at a later time.  If the failure is immediate [`OpenPath::path_id`] will
-    /// return `None` and the future will be ready immediately.  If the failure happens
-    /// later, a [`PathEvent`] will be emitted.
+    /// the path opens, and the [`PathId`] is available via [`OpenPath::path_id`].
     pub fn open_path(
         &self,
         network_path: impl Into<FourTuple>,
         initial_status: PathStatus,
-    ) -> OpenPath {
+    ) -> Result<OpenPath, PathError> {
         let network_path = network_path.into();
         let mut state = self.0.lock_and_wake("open_path");
 
-        let network_path = match normalize_network_path(network_path, &state.inner) {
-            Ok(network_path) => network_path,
-            Err(err) => return OpenPath::rejected(err),
-        };
+        let network_path = normalize_network_path(network_path, &state.inner)?;
 
         let (on_open_path_send, on_open_path_recv) = watch::channel(Ok(()));
         let now = state.runtime.now();
@@ -463,9 +459,9 @@ impl Connection {
             Ok(path_id) => {
                 state.open_path.insert(path_id, on_open_path_send);
                 drop(state);
-                OpenPath::new(path_id, on_open_path_recv, self.0.clone())
+                Ok(OpenPath::new(path_id, on_open_path_recv, self.0.clone()))
             }
-            Err(err) => OpenPath::rejected(err),
+            Err(err) => Err(err),
         }
     }
 

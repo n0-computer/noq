@@ -16,11 +16,12 @@ use tokio_stream::{Stream, wrappers::WatchStream};
 use crate::connection::ConnectionRef;
 use crate::{Runtime, WeakConnectionHandle};
 
-/// Future produced by [`crate::Connection::open_path`]
+/// Future produced by [`crate::Connection::open_path`] and
+/// [`crate::Connection::open_path_ensure`].
 pub struct OpenPath(OpenPathInner);
 
 enum OpenPathInner {
-    /// Opening a path in underway
+    /// Opening a path is underway.
     ///
     /// This might fail later on.
     Ongoing {
@@ -28,12 +29,7 @@ enum OpenPathInner {
         path_id: PathId,
         conn: ConnectionRef,
     },
-    /// Opening a path failed immediately
-    Rejected {
-        /// The error that occurred
-        err: PathError,
-    },
-    /// The path is already open
+    /// The path is already open.
     Ready {
         path_id: PathId,
         conn: ConnectionRef,
@@ -57,21 +53,11 @@ impl OpenPath {
         Self(OpenPathInner::Ready { path_id, conn })
     }
 
-    pub(crate) fn rejected(err: PathError) -> Self {
-        Self(OpenPathInner::Rejected { err })
-    }
-
     /// Returns the path ID of the new path being opened.
-    ///
-    /// If an error occurred before a path ID was allocated, `None` is returned.  In this
-    /// case the future is ready and polling it will immediately yield the error.
-    ///
-    /// The returned value remains the same for the entire lifetime of this future.
-    pub fn path_id(&self) -> Option<PathId> {
+    pub fn path_id(&self) -> PathId {
         match self.0 {
-            OpenPathInner::Ongoing { path_id, .. } => Some(path_id),
-            OpenPathInner::Rejected { .. } => None,
-            OpenPathInner::Ready { path_id, .. } => Some(path_id),
+            OpenPathInner::Ongoing { path_id, .. } => path_id,
+            OpenPathInner::Ready { path_id, .. } => path_id,
         }
     }
 }
@@ -99,7 +85,6 @@ impl Future for OpenPath {
                 path_id,
                 ref mut conn,
             } => Poll::Ready(Ok(Path::new_unchecked(conn.clone(), path_id))),
-            OpenPathInner::Rejected { err } => Poll::Ready(Err(err)),
         }
     }
 }

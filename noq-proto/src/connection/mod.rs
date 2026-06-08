@@ -521,7 +521,7 @@ impl Connection {
     /// Opens a new path only if no path on the same network path currently exists.
     ///
     /// Returns `(path_id, true)` if the path already existed, or `(path_id, false)`
-    /// if was opened.
+    /// if it was opened.
     ///
     /// If `network_path` has no local IP set, then this will open a new path
     /// if no path exists for this remote address, independent of the existing

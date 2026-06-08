@@ -1027,10 +1027,10 @@ async fn test_open_path_ensure_existing_path() {
 
         // Re-ensuring the already-established path (PathId::ZERO) takes the
         // `existed` branch in `open_path_ensure`.
-        let fut = conn.open_path_ensure(FourTuple::from_remote(server_addr), PathStatus::Available);
-        let expected_path_id = fut
-            .path_id()
-            .expect("open_path_ensure should allocate or reuse a path id");
+        let fut = conn
+            .open_path_ensure(FourTuple::from_remote(server_addr), PathStatus::Available)
+            .unwrap();
+        let expected_path_id = fut.path_id();
 
         let path = tokio::time::timeout(Duration::from_millis(200), fut)
             .await
@@ -1082,6 +1082,7 @@ async fn test_multipath_observed_address() {
         tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
         let path = conn
             .open_path(FourTuple::from_remote(server_addr), PathStatus::Available)
+            .unwrap()
             .await
             .unwrap();
         let mut reports = path.observed_external_addr().unwrap();
@@ -1295,11 +1296,8 @@ async fn path_clone_stats_after_abandon() {
         // Open a second path, while giving the remote some time to issue cids.
         let path = tokio::time::timeout(Duration::from_secs(1), async {
             loop {
-                match conn
-                    .open_path(FourTuple::from_remote(server_addr), PathStatus::Available)
-                    .await
-                {
-                    Ok(path) => break path,
+                match conn.open_path(FourTuple::from_remote(server_addr), PathStatus::Available) {
+                    Ok(opening) => break opening.await.expect("unexpected path open error"),
                     Err(proto::PathError::RemoteCidsExhausted) => {
                         tokio::time::sleep(Duration::from_millis(20)).await;
                     }
@@ -1382,11 +1380,8 @@ async fn closed_includes_path_stats_for_all_known_paths() -> TestResult {
 
         // Open a second path.
         let path2 = loop {
-            match conn
-                .open_path(FourTuple::from_remote(server_addr), PathStatus::Available)
-                .await
-            {
-                Ok(p) => break p,
+            match conn.open_path(FourTuple::from_remote(server_addr), PathStatus::Available) {
+                Ok(p) => break p.await?,
                 Err(proto::PathError::RemoteCidsExhausted) => {
                     tokio::time::sleep(Duration::from_millis(20)).await;
                 }
@@ -1496,11 +1491,8 @@ async fn close_path() -> TestResult {
 
         // Open a second path, retrying until remote CIDs are available
         let path = loop {
-            match conn
-                .open_path(FourTuple::from_remote(server_addr), PathStatus::Available)
-                .await
-            {
-                Ok(path) => break path,
+            match conn.open_path(FourTuple::from_remote(server_addr), PathStatus::Available) {
+                Ok(path) => break path.await?,
                 Err(proto::PathError::RemoteCidsExhausted) => {
                     tokio::time::sleep(Duration::from_millis(20)).await;
                 }
