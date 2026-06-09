@@ -66,8 +66,10 @@ pub trait TokenLog: Send + Sync {
 pub struct TokenReuseError;
 
 /// Null implementation of [`TokenLog`], which never accepts tokens
+#[deprecated(note = "use `ValidationTokenConfig::disable_token_log` instead")]
 pub struct NoneTokenLog;
 
+#[allow(deprecated)]
 impl TokenLog for NoneTokenLog {
     fn check_and_insert(&self, _: u128, _: SystemTime, _: Duration) -> Result<(), TokenReuseError> {
         Err(TokenReuseError)
@@ -92,8 +94,10 @@ pub trait TokenStore: Send + Sync {
 }
 
 /// Null implementation of [`TokenStore`], which does not store any tokens
+#[deprecated(note = "use `ClientConfig::disable_token_store` instead")]
 pub struct NoneTokenStore;
 
+#[allow(deprecated)]
 impl TokenStore for NoneTokenStore {
     fn insert(&self, _: &str, _: Bytes) {}
     fn take(&self, _: &str) -> Option<Bytes> {

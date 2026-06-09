@@ -502,6 +502,12 @@ impl ValidationTokenConfig {
         self
     }
 
+    /// Disable the [`TokenLog`], making the server ignore all address validation tokens
+    pub fn disable_token_log(&mut self) -> &mut Self {
+        self.log = None;
+        self
+    }
+
     /// Number of address validation tokens sent to a client when its path is validated
     ///
     /// This refers only to tokens sent in NEW_TOKEN frames, in contrast to retry tokens.
@@ -601,6 +607,12 @@ impl ClientConfig {
     /// Defaults to [`TokenMemoryCache`], which is suitable for most internet applications.
     pub fn token_store(&mut self, store: Arc<dyn TokenStore>) -> &mut Self {
         self.token_store = Some(store);
+        self
+    }
+
+    /// Disable the [`TokenStore`], so that no validation tokens are stored
+    pub fn disable_token_store(&mut self) -> &mut Self {
+        self.token_store = None;
         self
     }
 
