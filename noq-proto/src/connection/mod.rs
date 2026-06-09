@@ -1592,7 +1592,7 @@ impl Connection {
             last_packet_number = Some(builder.packet_number);
 
             if space_id == SpaceId::Initial
-                && (self.side.is_client() || can_send.is_ack_eliciting())
+                && (self.side.is_client() || can_send.is_ack_eliciting() || needs_loss_probe)
             {
                 // https://www.rfc-editor.org/rfc/rfc9000.html#section-14.1
                 pad_datagram |= PadDatagram::ToMinMtu;
