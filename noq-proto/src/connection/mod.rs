@@ -1448,7 +1448,6 @@ impl Connection {
                 // A new datagram needs to be started.
                 transmit.segment_size()
             };
-            tracing::warn!(?max_packet_size, "max_packet_size");
             let can_send =
                 self.space_can_send(space_id, path_id, max_packet_size, connection_close_pending);
             let needs_loss_probe = self.spaces[space_id].for_path(path_id).loss_probes > 0;
@@ -1787,7 +1786,6 @@ impl Connection {
                     // included in the GSO batch.
                     builder.finish_and_track(now, self, path_id, PadDatagram::ToSegmentSize);
                 } else {
-                    tracing::info!(?pad_datagram, "HERE");
                     builder.finish_and_track(now, self, path_id, pad_datagram);
                 }
 
