@@ -6141,9 +6141,13 @@ impl Connection {
         if !scheduling_info.is_abandoned
             && space_id == SpaceId::Data
             && path.pending_on_path_challenge
+            // we don't want to send new challenges if we are already closing
             && !self.state.is_closed()
             && builder.frame_space_remaining() > frame::PathChallenge::SIZE_BOUND
-        // we don't want to send new challenges if we are already closing
+            // PATH_CHALLENGE must be part of datagrams expanded to the MIN_INITIAL_SIZE (1200
+            // bytes). A datagram can be expanded to this size if it's the first, as it defines the
+            // GSO segment size, or if the first datagram is larger than this.
+            && !(builder.buf.num_datagrams() > 1 && builder.buf.segment_size() < usize::from(MIN_INITIAL_SIZE))
         {
             path.pending_on_path_challenge = false;
 
@@ -6206,6 +6210,10 @@ impl Connection {
             && space_id == SpaceId::Data
             && builder.frame_space_remaining() > frame::PathResponse::SIZE_BOUND
             && let Some(token) = path.path_responses.pop_on_path(path.network_path)
+            // PATH_RESPONSE must be part of datagrams expanded to the MIN_INITIAL_SIZE (1200
+            // bytes). A datagram can be expanded to this size if it's the first, as it defines the
+            // GSO segment size, or if the first datagram is larger than this.
+            && !(builder.buf.num_datagrams() > 1 && builder.buf.segment_size() < usize::from(MIN_INITIAL_SIZE))
         {
             let response = frame::PathResponse(token);
             builder.write_frame(response, stats);
