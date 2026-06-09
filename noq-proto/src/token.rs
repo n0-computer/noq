@@ -170,9 +170,10 @@ impl IncomingToken {
                 {
                     return Ok(unvalidated);
                 }
-                if server_config
-                    .validation_token
-                    .log
+                let Some(log) = &server_config.validation_token.log else {
+                    return Ok(unvalidated);
+                };
+                if log
                     .check_and_insert(retry.nonce, issued, server_config.validation_token.lifetime)
                     .is_err()
                 {
