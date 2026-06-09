@@ -639,7 +639,7 @@ fn per_path_observed_address() -> TestResult {
     // create the endpoint pair with both address discovery and multipath enabled
     let transport_cfg = TransportConfig {
         max_concurrent_multipath_paths: NonZeroU32::new(MAX_PATHS),
-        address_discovery_role: crate::address_discovery::Role::Both,
+        address_discovery_role: crate::address_discovery::Role::both(),
         ..TransportConfig::default()
     };
     let mut pair = ConnPair::builder()

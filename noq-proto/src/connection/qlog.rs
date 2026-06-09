@@ -1287,11 +1287,11 @@ impl From<&crate::transport_parameters::PreferredAddress> for PreferredAddress {
 #[cfg(feature = "qlog")]
 impl crate::address_discovery::Role {
     fn to_qlog(self) -> Option<AddressDiscoveryRole> {
-        match self {
-            Self::SendOnly => Some(AddressDiscoveryRole::SendOnly),
-            Self::ReceiveOnly => Some(AddressDiscoveryRole::ReceiveOnly),
-            Self::Both => Some(AddressDiscoveryRole::Both),
-            Self::Disabled => None,
+        match (self.send, self.receive) {
+            (false, false) => None,
+            (true, false) => Some(AddressDiscoveryRole::SendOnly),
+            (false, true) => Some(AddressDiscoveryRole::ReceiveOnly),
+            (true, true) => Some(AddressDiscoveryRole::Both),
         }
     }
 }

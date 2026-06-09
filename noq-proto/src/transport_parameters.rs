@@ -145,7 +145,7 @@ macro_rules! make_struct {
                     preferred_address: None,
                     grease_transport_parameter: None,
                     write_order: None,
-                    address_discovery_role: address_discovery::Role::Disabled,
+                    address_discovery_role: address_discovery::Role::default(),
                     initial_max_path_id: None,
                     max_remote_nat_traversal_addresses: None,
                 }
@@ -840,7 +840,7 @@ mod test {
             }),
             grease_quic_bit: true,
             min_ack_delay: Some(2_000u32.into()),
-            address_discovery_role: address_discovery::Role::SendOnly,
+            address_discovery_role: address_discovery::Role::send_only(),
             initial_max_path_id: Some(PathId::MAX),
             max_remote_nat_traversal_addresses: Some(5u8.try_into().unwrap()),
             ..TransportParameters::default()
