@@ -1448,6 +1448,7 @@ impl Connection {
                 // A new datagram needs to be started.
                 transmit.segment_size()
             };
+            tracing::warn!(?max_packet_size, "max_packet_size");
             let can_send =
                 self.space_can_send(space_id, path_id, max_packet_size, connection_close_pending);
             let needs_loss_probe = self.spaces[space_id].for_path(path_id).loss_probes > 0;
@@ -1786,6 +1787,7 @@ impl Connection {
                     // included in the GSO batch.
                     builder.finish_and_track(now, self, path_id, PadDatagram::ToSegmentSize);
                 } else {
+                    tracing::info!(?pad_datagram, "HERE");
                     builder.finish_and_track(now, self, path_id, pad_datagram);
                 }
 
@@ -6181,6 +6183,10 @@ impl Connection {
             && path.pending_on_path_challenge
             && !self.state.is_closed()
             && builder.frame_space_remaining() > frame::PathChallenge::SIZE_BOUND
+            // PATH_CHALLENGE must be part of datagrams expanded to the MIN_INITIAL_SIZE (1200
+            // bytes). A datagram can be expanded to this size if it's the first, as it defines the
+            // GSO segment size, or if the first datagram is larger than this.
+            && !(builder.buf.num_datagrams() > 1 && builder.buf.segment_size() < usize::from(MIN_INITIAL_SIZE))
         // we don't want to send new challenges if we are already closing
         {
             path.pending_on_path_challenge = false;
