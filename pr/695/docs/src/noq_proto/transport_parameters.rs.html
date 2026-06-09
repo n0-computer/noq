@@ -145,7 +145,7 @@
 <a href=#145 id=145 data-nosnippet>145</a>                    preferred_address: <span class="prelude-val">None</span>,
 <a href=#146 id=146 data-nosnippet>146</a>                    grease_transport_parameter: <span class="prelude-val">None</span>,
 <a href=#147 id=147 data-nosnippet>147</a>                    write_order: <span class="prelude-val">None</span>,
-<a href=#148 id=148 data-nosnippet>148</a>                    address_discovery_role: address_discovery::Role::Disabled,
+<a href=#148 id=148 data-nosnippet>148</a>                    address_discovery_role: address_discovery::Role::default(),
 <a href=#149 id=149 data-nosnippet>149</a>                    initial_max_path_id: <span class="prelude-val">None</span>,
 <a href=#150 id=150 data-nosnippet>150</a>                    max_remote_nat_traversal_addresses: <span class="prelude-val">None</span>,
 <a href=#151 id=151 data-nosnippet>151</a>                }
@@ -840,7 +840,7 @@
 <a href=#840 id=840 data-nosnippet>840</a>            }),
 <a href=#841 id=841 data-nosnippet>841</a>            grease_quic_bit: <span class="bool-val">true</span>,
 <a href=#842 id=842 data-nosnippet>842</a>            min_ack_delay: <span class="prelude-val">Some</span>(<span class="number">2_000u32</span>.into()),
-<a href=#843 id=843 data-nosnippet>843</a>            address_discovery_role: address_discovery::Role::SendOnly,
+<a href=#843 id=843 data-nosnippet>843</a>            address_discovery_role: address_discovery::Role::send_only(),
 <a href=#844 id=844 data-nosnippet>844</a>            initial_max_path_id: <span class="prelude-val">Some</span>(PathId::MAX),
 <a href=#845 id=845 data-nosnippet>845</a>            max_remote_nat_traversal_addresses: <span class="prelude-val">Some</span>(<span class="number">5u8</span>.try_into().unwrap()),
 <a href=#846 id=846 data-nosnippet>846</a>            ..TransportParameters::default()
