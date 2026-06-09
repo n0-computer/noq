@@ -1242,7 +1242,7 @@
 <a href=#1242 id=1242 data-nosnippet>1242</a>            <span class="self">self</span>.largest_packet = <span class="prelude-val">Some</span>((packet, now));
 <a href=#1243 id=1243 data-nosnippet>1243</a>        }
 <a href=#1244 id=1244 data-nosnippet>1244</a>
-<a href=#1245 id=1245 data-nosnippet>1245</a>        <span class="kw">if </span><span class="self">self</span>.ranges.range_count() &gt; MAX_ACK_BLOCKS {
+<a href=#1245 id=1245 data-nosnippet>1245</a>        <span class="kw">if </span><span class="self">self</span>.ranges.len() &gt; MAX_ACK_BLOCKS {
 <a href=#1246 id=1246 data-nosnippet>1246</a>            <span class="self">self</span>.ranges.pop_min();
 <a href=#1247 id=1247 data-nosnippet>1247</a>        }
 <a href=#1248 id=1248 data-nosnippet>1248</a>    }

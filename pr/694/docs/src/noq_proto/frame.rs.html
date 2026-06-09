@@ -1176,7 +1176,7 @@
 <a href=#1176 id=1176 data-nosnippet>1176</a>        buf.write(<span class="kw-2">*</span>path_id);
 <a href=#1177 id=1177 data-nosnippet>1177</a>        buf.write_var(largest);
 <a href=#1178 id=1178 data-nosnippet>1178</a>        buf.write_var(<span class="kw-2">*</span>delay);
-<a href=#1179 id=1179 data-nosnippet>1179</a>        buf.write_var(ranges.range_count() <span class="kw">as </span>u64 - <span class="number">1</span>);
+<a href=#1179 id=1179 data-nosnippet>1179</a>        buf.write_var(ranges.len() <span class="kw">as </span>u64 - <span class="number">1</span>);
 <a href=#1180 id=1180 data-nosnippet>1180</a>        buf.write_var(first_size - <span class="number">1</span>);
 <a href=#1181 id=1181 data-nosnippet>1181</a>        <span class="kw">let </span><span class="kw-2">mut </span>prev = first.start;
 <a href=#1182 id=1182 data-nosnippet>1182</a>        <span class="kw">for </span>block <span class="kw">in </span>rest {
@@ -1284,7 +1284,7 @@
 <a href=#1284 id=1284 data-nosnippet>1284</a>        buf.write(kind);
 <a href=#1285 id=1285 data-nosnippet>1285</a>        buf.write_var(largest);
 <a href=#1286 id=1286 data-nosnippet>1286</a>        buf.write_var(<span class="kw-2">*</span>delay);
-<a href=#1287 id=1287 data-nosnippet>1287</a>        buf.write_var(ranges.range_count() <span class="kw">as </span>u64 - <span class="number">1</span>);
+<a href=#1287 id=1287 data-nosnippet>1287</a>        buf.write_var(ranges.len() <span class="kw">as </span>u64 - <span class="number">1</span>);
 <a href=#1288 id=1288 data-nosnippet>1288</a>        buf.write_var(first_size - <span class="number">1</span>);
 <a href=#1289 id=1289 data-nosnippet>1289</a>        <span class="kw">let </span><span class="kw-2">mut </span>prev = first.start;
 <a href=#1290 id=1290 data-nosnippet>1290</a>        <span class="kw">for </span>block <span class="kw">in </span>rest {
