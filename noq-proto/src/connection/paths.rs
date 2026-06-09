@@ -1063,10 +1063,13 @@ pub enum PathEvent {
     },
     /// A path was abandoned and is no longer usable.
     ///
+    /// Note that this may be the first event for a path: If a path is abandoned
+    /// before having been validated, no [`Self::Established`] event is emitted.
+    ///
     /// This event will always be followed by [`Self::Discarded`] after some time.
     #[non_exhaustive]
     Abandoned {
-        /// With path was abandoned.
+        /// The path that was abandoned.
         id: PathId,
         /// Reason why this path was abandoned.
         reason: PathAbandonReason,
