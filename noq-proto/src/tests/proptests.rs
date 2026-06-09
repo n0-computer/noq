@@ -335,6 +335,66 @@ fn poll_to_close(conn: &mut Connection) -> Option<ConnectionError> {
 }
 
 #[test]
+fn misaligned_gso_batch() {
+    let prefix = "misaligned_gso_batch";
+    let setup = PairSetup {
+        seed: Seed::Zeroes,
+        extensions: Extensions::MultipathOnly,
+        routing_setup: RoutingSetup::Basic,
+    };
+
+    let _guard = subscribe();
+    let (mut pair, client_config) = setup.run(prefix);
+    let (client_ch, server_ch) = pair.connect_with(client_config);
+    pair.drive();
+
+    let mut client = State::new(Side::Client, client_ch);
+    let mut server = State::new(Side::Server, server_ch);
+
+    let monkey_data: Vec<DataToInject> = vec![
+        DataToInject::Frame(crate::frame::Frame::Stream(crate::frame::Stream {
+            id: crate::StreamId(0),
+            offset: 0,
+            fin: false,
+            data: b"".to_vec().into(),
+        })),
+        DataToInject::Frame(crate::frame::Frame::Crypto(crate::frame::Crypto {
+            offset: 0,
+            data: vec![0u8; 361].into(),
+        })),
+        DataToInject::Bytes(vec![0u8; 933]),
+    ];
+
+    pair.client_conn_mut(client_ch)
+        .test_inject_data(monkey_data);
+
+    let interactions: Vec<TestOp> = vec![
+        TestOp::OpenPath {
+            side: Side::Client,
+            status: PathStatus::Available,
+            addr_idx: 0,
+        },
+        TestOp::ClosePath {
+            side: Side::Client,
+            path_idx: 0,
+            error_code: 0,
+        },
+        TestOp::CloseConn {
+            side: Side::Server,
+            error_code: 0,
+        },
+        TestOp::AdvanceTime,
+    ];
+
+    for interaction in interactions {
+        info!(?interaction, "INTERACTION STEP");
+        interaction.run(&mut pair, &mut client, &mut server);
+    }
+
+    assert!(!pair.drive_bounded(1000), "connection never became idle");
+}
+
+#[test]
 fn regression_unset_packet_acked() {
     let prefix = "regression_unset_packet_acked";
     let setup = PairSetup {

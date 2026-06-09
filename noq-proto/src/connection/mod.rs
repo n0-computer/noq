@@ -6181,6 +6181,10 @@ impl Connection {
             && path.pending_on_path_challenge
             && !self.state.is_closed()
             && builder.frame_space_remaining() > frame::PathChallenge::SIZE_BOUND
+            // PATH_CHALLENGE must be part of datagrams expanded to the MIN_INITIAL_SIZE (1200
+            // bytes). A datagram can be expanded to this size if it's the first, as it defines the
+            // GSO segment size, or if the first datagram is larger than this.
+            && !(builder.buf.num_datagrams() > 1 && builder.buf.segment_size() < usize::from(MIN_INITIAL_SIZE))
         // we don't want to send new challenges if we are already closing
         {
             path.pending_on_path_challenge = false;
