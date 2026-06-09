@@ -365,7 +365,8 @@ fn misaligned_gso_batch() {
         DataToInject::Bytes(vec![0u8; 933]),
     ];
 
-    pair.client_conn_mut(client_ch).test_inject_data(monkey_data);
+    pair.client_conn_mut(client_ch)
+        .test_inject_data(monkey_data);
 
     let interactions: Vec<TestOp> = vec![
         TestOp::OpenPath {
