@@ -370,7 +370,7 @@ impl TransportConfig {
     /// This will aid peers in inferring their reachable address, which in most NATd networks
     /// will not be easily available to them.
     pub fn send_observed_address_reports(&mut self, enabled: bool) -> &mut Self {
-        self.address_discovery_role.send_reports_to_peers(enabled);
+        self.address_discovery_role.send = enabled;
         self
     }
 
@@ -381,8 +381,7 @@ impl TransportConfig {
     /// reports cannot be trusted. This, however, can aid the current endpoint in inferring its
     /// reachable address, which in most NATd networks will not be easily available.
     pub fn receive_observed_address_reports(&mut self, enabled: bool) -> &mut Self {
-        self.address_discovery_role
-            .receive_reports_from_peers(enabled);
+        self.address_discovery_role.receive = enabled;
         self
     }
 

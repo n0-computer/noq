@@ -1,5 +1,6 @@
 use std::fmt::{self, Write};
-use std::ops::Range;
+use std::iter::Sum;
+use std::ops::{Add, Range, Sub};
 
 use tinyvec::TinyVec;
 
@@ -18,9 +19,11 @@ use tinyvec::TinyVec;
 /// of ranges is usually very low (since ACK numbers are in consecutive fashion
 /// unless reordering or packet loss occur).
 #[derive(Default, PartialEq, Eq)]
-pub(crate) struct ArrayRangeSet(TinyVec<[Range<u64>; ARRAY_RANGE_SET_INLINE_CAPACITY]>);
+pub(crate) struct ArrayRangeSet<const N: usize = ARRAY_RANGE_SET_INLINE_CAPACITY, T: Default = u64>(
+    TinyVec<[Range<T>; N]>,
+);
 
-impl fmt::Debug for ArrayRangeSet {
+impl<const N: usize, T: fmt::Debug + Default> fmt::Debug for ArrayRangeSet<N, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_char('[')?;
         let mut first = true;
@@ -39,9 +42,9 @@ impl fmt::Debug for ArrayRangeSet {
 /// The capacity of elements directly stored in [`ArrayRangeSet`]
 ///
 /// An inline capacity of 2 is chosen to keep `SentFrame` below 128 bytes.
-const ARRAY_RANGE_SET_INLINE_CAPACITY: usize = 2;
+pub(crate) const ARRAY_RANGE_SET_INLINE_CAPACITY: usize = 2;
 
-impl Clone for ArrayRangeSet {
+impl<const N: usize> Clone for ArrayRangeSet<N> {
     fn clone(&self) -> Self {
         // tinyvec keeps the heap representation after clones.
         // We rather prefer the inline representation for clones if possible,
@@ -56,25 +59,35 @@ impl Clone for ArrayRangeSet {
     }
 }
 
-impl ArrayRangeSet {
+impl<const N: usize, T> ArrayRangeSet<N, T>
+where
+    T: Default
+        + Clone
+        + Copy
+        + PartialOrd
+        + Ord
+        + From<u32>
+        + Add<T, Output = T>
+        + Sub<T, Output = T>
+        + Sum,
+{
     pub(crate) fn new() -> Self {
         Default::default()
     }
 
-    pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = Range<u64>> + '_ {
+    pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = Range<T>> + '_ {
         self.0.iter().cloned()
     }
 
-    pub(crate) fn elts(&self) -> impl Iterator<Item = u64> + '_ {
-        self.iter().flatten()
-    }
-
-    pub(crate) fn len(&self) -> usize {
+    pub(crate) fn range_count(&self) -> usize {
         self.0.len()
     }
 
-    #[cfg(test)]
-    pub(crate) fn contains(&self, x: u64) -> bool {
+    pub(crate) fn elts_count(&self) -> T {
+        self.0.iter().map(|r| r.end - r.start).sum()
+    }
+
+    pub(crate) fn contains(&self, x: T) -> bool {
         for range in self.0.iter() {
             if range.start > x {
                 // We only get here if there was no prior range that contained x
@@ -86,7 +99,7 @@ impl ArrayRangeSet {
         false
     }
 
-    pub(crate) fn iter_range(&self, range: Range<u64>) -> impl Iterator<Item = Range<u64>> + '_ {
+    pub(crate) fn iter_range(&self, range: Range<T>) -> impl Iterator<Item = Range<T>> + '_ {
         self.iter().filter_map(move |r| {
             if r.end > range.start && r.start < range.end {
                 Some(r.start.max(range.start)..r.end.min(range.end))
@@ -96,11 +109,11 @@ impl ArrayRangeSet {
         })
     }
 
-    pub(crate) fn insert_one(&mut self, x: u64) -> bool {
-        self.insert(x..x + 1)
+    pub(crate) fn insert_one(&mut self, x: T) -> bool {
+        self.insert(x..x + T::from(1u32))
     }
 
-    pub(crate) fn insert(&mut self, x: Range<u64>) -> bool {
+    pub(crate) fn insert(&mut self, x: Range<T>) -> bool {
         let mut result = false;
 
         if x.is_empty() {
@@ -162,7 +175,7 @@ impl ArrayRangeSet {
         true
     }
 
-    pub(crate) fn remove(&mut self, x: Range<u64>) -> bool {
+    pub(crate) fn remove(&mut self, x: Range<T>) -> bool {
         let mut result = false;
 
         if x.is_empty() {
@@ -210,7 +223,7 @@ impl ArrayRangeSet {
         self.0.is_empty()
     }
 
-    pub(crate) fn pop_min(&mut self) -> Option<Range<u64>> {
+    pub(crate) fn pop_min(&mut self) -> Option<Range<T>> {
         if !self.0.is_empty() {
             Some(self.0.remove(0))
         } else {
@@ -218,12 +231,24 @@ impl ArrayRangeSet {
         }
     }
 
-    pub(crate) fn min(&self) -> Option<u64> {
+    pub(crate) fn min(&self) -> Option<T> {
         self.iter().next().map(|x| x.start)
     }
 
-    pub(crate) fn max(&self) -> Option<u64> {
-        self.iter().next_back().map(|x| x.end - 1)
+    pub(crate) fn max(&self) -> Option<T> {
+        self.iter().next_back().map(|x| x.end - T::from(1))
+    }
+}
+
+/// Functions which need `Range<T>` to impl IntoIterator for u64.
+///
+/// `Range<T>` only implements [`IntoIterator`] for types implementing `std::iter::Step`,
+/// but that trait is unstable. We can work around this by duplicating these functions for
+/// [`u32`] and [`u64`]. Only we don't currently use the u32 version so it is u64-only for
+/// now.
+impl<const N: usize> ArrayRangeSet<N, u64> {
+    pub(crate) fn elts(&self) -> impl Iterator<Item = u64> + '_ {
+        self.iter().flatten()
     }
 }
 

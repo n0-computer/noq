@@ -1242,7 +1242,7 @@ impl PendingAcks {
             self.largest_packet = Some((packet, now));
         }
 
-        if self.ranges.len() > MAX_ACK_BLOCKS {
+        if self.ranges.range_count() > MAX_ACK_BLOCKS {
             self.ranges.pop_min();
         }
     }

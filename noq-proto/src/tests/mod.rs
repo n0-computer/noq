@@ -3709,7 +3709,7 @@ fn address_discovery() {
 
     let server = ServerConfig {
         transport: Arc::new(TransportConfig {
-            address_discovery_role: crate::address_discovery::Role::Both,
+            address_discovery_role: crate::address_discovery::Role::both(),
             ..TransportConfig::default()
         }),
         ..server_config()
@@ -3717,7 +3717,7 @@ fn address_discovery() {
     let mut pair = Pair::new(Default::default(), server);
     let client_config = ClientConfig {
         transport: Arc::new(TransportConfig {
-            address_discovery_role: crate::address_discovery::Role::Both,
+            address_discovery_role: crate::address_discovery::Role::both(),
             ..TransportConfig::default()
         }),
         ..client_config()
@@ -3756,7 +3756,7 @@ fn address_discovery_zero_rtt_accepted() {
     let _guard = subscribe();
     let server = ServerConfig {
         transport: Arc::new(TransportConfig {
-            address_discovery_role: crate::address_discovery::Role::Both,
+            address_discovery_role: crate::address_discovery::Role::both(),
             ..TransportConfig::default()
         }),
         ..server_config()
@@ -3766,14 +3766,14 @@ fn address_discovery_zero_rtt_accepted() {
     pair.server.handle_incoming = Box::new(|_| IncomingConnectionBehavior::Accept);
     let client_cfg = ClientConfig {
         transport: Arc::new(TransportConfig {
-            address_discovery_role: crate::address_discovery::Role::Both,
+            address_discovery_role: crate::address_discovery::Role::both(),
             ..TransportConfig::default()
         }),
         ..client_config()
     };
     let alt_client_cfg = ClientConfig {
         transport: Arc::new(TransportConfig {
-            address_discovery_role: crate::address_discovery::Role::Disabled,
+            address_discovery_role: crate::address_discovery::Role::default(),
             ..TransportConfig::default()
         }),
         ..client_cfg.clone()
@@ -3843,16 +3843,10 @@ fn address_discovery_zero_rtt_accepted() {
 #[test]
 fn address_discovery_zero_rtt_rejection() {
     let _guard = subscribe();
-    let server_cfg = ServerConfig {
-        transport: Arc::new(TransportConfig {
-            address_discovery_role: crate::address_discovery::Role::Disabled,
-            ..TransportConfig::default()
-        }),
-        ..server_config()
-    };
+    let server_cfg = server_config();
     let alt_server_cfg = ServerConfig {
         transport: Arc::new(TransportConfig {
-            address_discovery_role: crate::address_discovery::Role::SendOnly,
+            address_discovery_role: crate::address_discovery::Role::send_only(),
             ..TransportConfig::default()
         }),
         ..server_cfg.clone()
@@ -3860,7 +3854,7 @@ fn address_discovery_zero_rtt_rejection() {
     let mut pair = Pair::new(Default::default(), server_cfg);
     let client_cfg = ClientConfig {
         transport: Arc::new(TransportConfig {
-            address_discovery_role: crate::address_discovery::Role::Both,
+            address_discovery_role: crate::address_discovery::Role::both(),
             ..TransportConfig::default()
         }),
         ..client_config()
@@ -3913,7 +3907,7 @@ fn address_discovery_retransmission() {
 
     let server = ServerConfig {
         transport: Arc::new(TransportConfig {
-            address_discovery_role: crate::address_discovery::Role::Both,
+            address_discovery_role: crate::address_discovery::Role::both(),
             // Assume a low-latency connection so pacing doesn't interfere with the test
             initial_rtt: Duration::from_millis(10),
             ..TransportConfig::default()
@@ -3923,7 +3917,7 @@ fn address_discovery_retransmission() {
     let mut pair = Pair::new(Default::default(), server);
     let client_config = ClientConfig {
         transport: Arc::new(TransportConfig {
-            address_discovery_role: crate::address_discovery::Role::Both,
+            address_discovery_role: crate::address_discovery::Role::both(),
             // Assume a low-latency connection so pacing doesn't interfere with the test
             initial_rtt: Duration::from_millis(10),
             ..TransportConfig::default()
@@ -3957,7 +3951,7 @@ fn address_discovery_rebind_retransmission() {
 
     let server = ServerConfig {
         transport: Arc::new(TransportConfig {
-            address_discovery_role: crate::address_discovery::Role::Both,
+            address_discovery_role: crate::address_discovery::Role::both(),
             // Assume a low-latency connection so pacing doesn't interfere with the test
             initial_rtt: Duration::from_millis(10),
             mtu_discovery_config: None,
@@ -3968,7 +3962,7 @@ fn address_discovery_rebind_retransmission() {
     let mut pair = Pair::new(Default::default(), server);
     let client_config = ClientConfig {
         transport: Arc::new(TransportConfig {
-            address_discovery_role: crate::address_discovery::Role::Both,
+            address_discovery_role: crate::address_discovery::Role::both(),
             // Assume a low-latency connection so pacing doesn't interfere with the test
             initial_rtt: Duration::from_millis(10),
             mtu_discovery_config: None,
