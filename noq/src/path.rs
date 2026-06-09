@@ -16,8 +16,10 @@ use tokio_stream::{Stream, wrappers::WatchStream};
 use crate::connection::ConnectionRef;
 use crate::{Runtime, WeakConnectionHandle};
 
-/// Future produced by [`crate::Connection::open_path`] and
-/// [`crate::Connection::open_path_ensure`].
+/// Future produced by [`Connection::open_path`] and [`Connection::open_path_ensure`].
+///
+/// [`Connection::open_path`]: crate::Connection::open_path
+/// [`Connection::open_path_ensure`]: crate::Connection::open_path_ensure
 pub struct OpenPath(OpenPathInner);
 
 enum OpenPathInner {

@@ -384,11 +384,11 @@ impl Connection {
     /// matches any open path with the same remote address. If a local IP is set, only paths
     /// with the same 4-tuple match.
     ///
-    /// When a matching path is found, the returned future resolves to that existing path:
-    /// either immediately if the path is already established, or once it finishes opening
-    /// otherwise.
+    /// When a matching path is found, the returned future resolves to that existing path,
+    /// either immediately if the path is already established, or once the in-progress open
+    /// finishes.
     ///
-    /// Otherwise behaves exactly as [`open_path`].
+    /// Behaves exactly as [`open_path`] otherwise.
     ///
     /// [`open_path`]: Self::open_path
     pub fn open_path_ensure(
@@ -426,7 +426,7 @@ impl Connection {
     ///
     /// `network_path` is a [`FourTuple`] of the remote address and an optional local IP. If
     /// the local IP is set, the path is opened with that source address, and the endpoint
-    /// must support sending from it. A bare [`SocketAddr`] may be passed to leave the local
+    /// must support sending from it. A [`SocketAddr`] may also be passed, which leaves the local
     /// interface unspecified.
     ///
     /// Returns `Err` immediately if the path cannot be allocated (for example, multipath is
@@ -450,17 +450,12 @@ impl Connection {
 
         let network_path = normalize_network_path(network_path, &state.inner)?;
 
-        let (on_open_path_send, on_open_path_recv) = watch::channel(Ok(()));
         let now = state.runtime.now();
-        let open_res = state.inner.open_path(network_path, opts, now);
-        match open_res {
-            Ok(path_id) => {
-                state.open_path.insert(path_id, on_open_path_send);
-                drop(state);
-                Ok(OpenPath::new(path_id, on_open_path_recv, self.0.clone()))
-            }
-            Err(err) => Err(err),
-        }
+        let path_id = state.inner.open_path(network_path, opts, now)?;
+        let (on_open_path_send, on_open_path_recv) = watch::channel(Ok(()));
+        state.open_path.insert(path_id, on_open_path_send);
+        drop(state);
+        Ok(OpenPath::new(path_id, on_open_path_recv, self.0.clone()))
     }
 
     /// Returns the [`Path`] structure of an open path
