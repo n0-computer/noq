@@ -1161,6 +1161,99 @@ fn path_scheduling_path_status() -> TestResult {
     Ok(())
 }
 
+/// Tracks `sent_packets` per path and on the connection, and checks it against
+/// `udp_tx.datagrams`.
+///
+/// `sent_packets` counts individual QUIC packets, while `udp_tx.datagrams` counts UDP
+/// datagrams. Since packets can be coalesced into a single datagram (e.g. during the
+/// handshake), `sent_packets` must always be at least `udp_tx.datagrams`, and the
+/// connection total must equal the sum across paths. See
+/// <https://github.com/n0-computer/noq/issues/565>.
+#[test]
+fn sent_packets_tracked_per_path() -> TestResult {
+    let _guard = subscribe();
+    let mut pair = ConnPair::builder().enable_multipath().connect();
+
+    // After the handshake, path 0 has sent at least one packet, and the per-packet
+    // counter must be at least the per-datagram counter (they diverge when packets are
+    // coalesced into a single datagram).
+    let stats_path0 = pair.conn_mut(Client).path_stats(PathId::ZERO).unwrap();
+    assert!(
+        stats_path0.sent_packets > 0,
+        "path 0 should have sent packets after the handshake"
+    );
+    assert!(
+        stats_path0.sent_packets >= stats_path0.udp_tx.datagrams,
+        "sent_packets ({}) must be >= udp_tx.datagrams ({})",
+        stats_path0.sent_packets,
+        stats_path0.udp_tx.datagrams,
+    );
+
+    // Open a 2nd path and send some data on it.
+    let server_addr = pair.routes.public_server_addr();
+    let path_1 = pair.open_path(
+        Client,
+        FourTuple::from_remote(server_addr),
+        PathStatus::Available,
+    )?;
+    pair.drive();
+    assert_matches!(
+        pair.poll(Client),
+        Some(Event::Path(crate::PathEvent::Established { id })) if id == path_1
+    );
+
+    // Put path 0 into Backup so the scheduler prefers the new path 1 for application
+    // data (mirrors `path_scheduling_path_status`).
+    pair.set_path_status(Client, PathId::ZERO, PathStatus::Backup)?;
+    pair.drive();
+
+    let path0_before = pair
+        .conn_mut(Client)
+        .path_stats(PathId::ZERO)
+        .unwrap()
+        .sent_packets;
+    let path1_before = pair
+        .conn_mut(Client)
+        .path_stats(path_1)
+        .unwrap()
+        .sent_packets;
+
+    // Sending a STREAM frame goes out on path 1, so its counter should grow. Path 0 may
+    // still emit a few control/ACK packets, but the bulk of the new packets land on
+    // path 1.
+    let s = pair.streams(Client).open(Dir::Uni).unwrap();
+    pair.send_stream(Client, s).write(b"hello").unwrap();
+    pair.drive();
+
+    let path0_stats = pair.conn_mut(Client).path_stats(PathId::ZERO).unwrap();
+    let path1_stats = pair.conn_mut(Client).path_stats(path_1).unwrap();
+    let path0_delta = path0_stats.sent_packets - path0_before;
+    let path1_delta = path1_stats.sent_packets - path1_before;
+    assert!(
+        path1_delta > 0,
+        "path 1 sent_packets should grow after sending a STREAM frame"
+    );
+    assert!(
+        path1_delta > path0_delta,
+        "the STREAM frame should drive more packets on path 1 ({path1_delta}) \
+         than on path 0 ({path0_delta})"
+    );
+
+    // Per-packet counter stays consistent with per-datagram counter on each path.
+    assert!(path0_stats.sent_packets >= path0_stats.udp_tx.datagrams);
+    assert!(path1_stats.sent_packets >= path1_stats.udp_tx.datagrams);
+
+    // The connection total must equal the sum across the live paths.
+    let conn_stats = pair.conn_mut(Client).stats();
+    assert_eq!(
+        conn_stats.sent_packets,
+        path0_stats.sent_packets + path1_stats.sent_packets,
+        "connection sent_packets must equal the sum across paths"
+    );
+
+    Ok(())
+}
+
 #[test]
 fn server_abandon_last_verified_path() -> TestResult {
     // The client abandons the last verified path the server has. The server is expected to
