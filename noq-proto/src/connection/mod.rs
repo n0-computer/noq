@@ -2492,15 +2492,12 @@ impl Connection {
                         }
                         PathTimer::LossDetection => {
                             self.on_loss_detection_timeout(now, path_id);
-                            self.qlog.emit_recovery_metrics(
-                                path_id,
-                                &mut self
-                                    .paths
-                                    .get_mut(&path_id)
-                                    .expect("loss-detection timer fires only on live paths")
-                                    .data,
-                                now,
-                            );
+                            if let Some(path) = self.paths.get_mut(&path_id) {
+                                self.qlog
+                                    .emit_recovery_metrics(path_id, &mut path.data, now);
+                            } else {
+                                error!("LossDetection fired for unknown path");
+                            }
                         }
                         PathTimer::PathValidationFailed => {
                             let Some(path) = self.paths.get_mut(&path_id) else {
