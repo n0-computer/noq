@@ -4390,3 +4390,44 @@ fn timely_graceful_close() {
     info!(?client_draining_delay);
     assert_eq!(client_draining_delay, ONE_WAY_LATENCY * 2);
 }
+
+/// Server sends correct tail-loss probes for a lost Initial.
+///
+/// The server's first response during the handshake is lost. It should send 2 tail-loss
+/// probes correctly.
+#[test]
+fn initial_tail_loss_probe() {
+    let _guard = subscribe();
+    let (mut pair, client_cfg) = ConnPair::builder().disable_mtud_discovery().build_pair();
+
+    pair.begin_connect(client_cfg);
+    pair.step();
+
+    // Drop the first response by the server.
+    pair.client.inbound.clear();
+    info!("dropped client inbound queue");
+
+    // Neither peers have anything to send right now, but steps time forward to next timeout
+    // which is on the client-side.
+    pair.step();
+
+    // Client PTO fires: sends 2 tail-loss probes, padded because Initial and ack-eliciting.
+    info!("client tail-loss probes");
+    pair.drive_client();
+    assert_eq!(pair.server.inbound.len(), 2,);
+    assert_eq!(pair.server.inbound[0].packet.len(), 1200);
+    assert_eq!(pair.server.inbound[1].packet.len(), 1200);
+
+    // Server PTO fires: sends 2 tail-loss probes in the Initial space, padded because
+    // Initial and ack-eliciting.
+    info!("server tail-loss probes");
+    pair.drive_server();
+    assert_eq!(pair.client.inbound.len(), 2,);
+    assert_eq!(pair.client.inbound[0].packet.len(), 1200,);
+    assert_eq!(pair.client.inbound[1].packet.len(), 1200);
+
+    // Continue until connection established.
+    info!("continue connection establishment");
+    pair.drive();
+    pair.server.assert_accept();
+}

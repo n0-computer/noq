@@ -485,8 +485,11 @@ impl ConnPairBuilder {
         self
     }
 
-    /// Builds the [`ConnPair`] and connects the two endpoints.
-    pub(super) fn connect(self) -> ConnPair {
+    /// Builds an unconnected [`Pair`] and corresponding [`ClientConfig`].
+    ///
+    /// This is useful if you want to construct a [`ConnPair`] while manually controlling
+    /// the connection establishment. Otherwise [`Self::connect`] should be used.
+    pub(super) fn build_pair(self) -> (Pair, ClientConfig) {
         let Self {
             latency,
             mtu,
@@ -524,6 +527,13 @@ impl ConnPairBuilder {
         if let Some(routes) = routes {
             pair.routes = routes;
         }
+
+        (pair, client_cfg)
+    }
+
+    /// Builds the [`ConnPair`] and connects the two endpoints.
+    pub(super) fn connect(self) -> ConnPair {
+        let (pair, client_cfg) = self.build_pair();
         ConnPair::connect_with(pair, client_cfg)
     }
 }
