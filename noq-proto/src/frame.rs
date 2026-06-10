@@ -558,6 +558,62 @@ impl Frame {
                 })
         )
     }
+
+    #[cfg(test)]
+    pub(crate) fn to_encodable_frame(&self) -> Option<EncodableFrame<'_>> {
+        match self {
+            Self::Padding => None,
+            Self::Ping => Some(EncodableFrame::Ping(Ping)),
+            Self::Ack(ack) => Some(EncodableFrame::Ack(ack.as_encoder())),
+            Self::PathAck(path_ack) => Some(EncodableFrame::PathAck(path_ack.as_encoder())),
+            Self::ResetStream(reset_stream) => Some(EncodableFrame::ResetStream(*reset_stream)),
+            Self::StopSending(stop_sending) => Some(EncodableFrame::StopSending(*stop_sending)),
+            Self::Crypto(crypto) => Some(EncodableFrame::Crypto(crypto.clone())),
+            Self::NewToken(new_token) => Some(EncodableFrame::NewToken(new_token.clone())),
+            Self::Stream(_stream) => None,
+            Self::MaxData(max_data) => Some(EncodableFrame::MaxData(*max_data)),
+            Self::MaxStreamData(max_stream_data) => {
+                Some(EncodableFrame::MaxStreamData(*max_stream_data))
+            }
+            Self::MaxStreams(max_streams) => Some(EncodableFrame::MaxStreams(*max_streams)),
+            Self::DataBlocked(_data_blocked) => None,
+            Self::StreamDataBlocked(_stream_data_blocked) => None,
+            Self::StreamsBlocked(_streams_blocked) => None,
+            Self::NewConnectionId(new_connection_id) => {
+                Some(EncodableFrame::NewConnectionId(*new_connection_id))
+            }
+            Self::RetireConnectionId(retire_connection_id) => {
+                Some(EncodableFrame::RetireConnectionId(*retire_connection_id))
+            }
+            Self::PathChallenge(path_challenge) => {
+                Some(EncodableFrame::PathChallenge(*path_challenge))
+            }
+            Self::PathResponse(path_response) => Some(EncodableFrame::PathResponse(*path_response)),
+            Self::Close(close) => Some(EncodableFrame::Close(close.encoder(1000))),
+            Self::Datagram(datagram) => Some(EncodableFrame::Datagram(datagram.clone())),
+            Self::AckFrequency(ack_frequency) => Some(EncodableFrame::AckFrequency(*ack_frequency)),
+            Self::ImmediateAck => Some(EncodableFrame::ImmediateAck(ImmediateAck)),
+            Self::HandshakeDone => Some(EncodableFrame::HandshakeDone(HandshakeDone)),
+            Self::ObservedAddr(observed_addr) => Some(EncodableFrame::ObservedAddr(*observed_addr)),
+            Self::PathAbandon(path_abandon) => Some(EncodableFrame::PathAbandon(*path_abandon)),
+            Self::PathStatusAvailable(path_status_available) => {
+                Some(EncodableFrame::PathStatusAvailable(*path_status_available))
+            }
+            Self::PathStatusBackup(path_status_backup) => {
+                Some(EncodableFrame::PathStatusBackup(*path_status_backup))
+            }
+            Self::MaxPathId(max_path_id) => Some(EncodableFrame::MaxPathId(*max_path_id)),
+            Self::PathsBlocked(paths_blocked) => Some(EncodableFrame::PathsBlocked(*paths_blocked)),
+            Self::PathCidsBlocked(path_cids_blocked) => {
+                Some(EncodableFrame::PathCidsBlocked(*path_cids_blocked))
+            }
+            Self::AddAddress(add_address) => Some(EncodableFrame::AddAddress(*add_address)),
+            Self::ReachOut(reach_out) => Some(EncodableFrame::ReachOut(*reach_out)),
+            Self::RemoveAddress(remove_address) => {
+                Some(EncodableFrame::RemoveAddress(*remove_address))
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, derive_more::Display)]
@@ -753,7 +809,7 @@ impl Encodable for MaxStreams {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, derive_more::Display)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, derive_more::Display)]
 #[cfg_attr(test, derive(Arbitrary))]
 #[display("{} {} seq: {sequence}", self.get_type(), DisplayOption::new("path_id", path_id.as_ref()))]
 pub(crate) struct RetireConnectionId {
@@ -1054,6 +1110,16 @@ impl PathAck {
             ecn,
         }
     }
+
+    #[cfg(test)]
+    fn as_encoder(&self) -> PathAckEncoder<'_> {
+        PathAckEncoder {
+            path_id: self.path_id,
+            delay: self.delay,
+            ranges: &self.ranges,
+            ecn: self.ecn.as_ref(),
+        }
+    }
 }
 
 #[derive(derive_more::Display)]
@@ -1155,6 +1221,15 @@ impl Ack {
         ecn: Option<&'a EcnCounts>,
     ) -> AckEncoder<'a> {
         AckEncoder { delay, ranges, ecn }
+    }
+
+    #[cfg(test)]
+    fn as_encoder(&self) -> AckEncoder<'_> {
+        AckEncoder {
+            delay: self.delay,
+            ranges: &self.ranges,
+            ecn: self.ecn.as_ref(),
+        }
     }
 
     pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = Range<u64>> + '_ {
@@ -1404,7 +1479,7 @@ impl NewToken {
     }
 }
 
-#[derive(Debug, Clone, derive_more::Display)]
+#[derive(Debug, Clone, Copy, derive_more::Display)]
 #[cfg_attr(test, derive(Arbitrary, PartialEq, Eq))]
 #[display("MAX_PATH_ID path_id: {_0}")]
 pub(crate) struct MaxPathId(pub(crate) PathId);
@@ -1431,7 +1506,7 @@ impl Encodable for MaxPathId {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, derive_more::Display)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, derive_more::Display)]
 #[cfg_attr(test, derive(Arbitrary))]
 #[display("PATHS_BLOCKED remote_max_path_id: {_0}")]
 pub(crate) struct PathsBlocked(pub(crate) PathId);
@@ -1459,7 +1534,7 @@ impl Decodable for PathsBlocked {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, derive_more::Display)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, derive_more::Display)]
 #[cfg_attr(test, derive(Arbitrary))]
 #[display("PATH_CIDS_BLOCKED path_id: {path_id} next_seq: {next_seq}")]
 pub(crate) struct PathCidsBlocked {
@@ -2101,7 +2176,7 @@ impl Encodable for AckFrequency {
 
 /// Conjunction of the information contained in the address discovery frames
 /// ([`FrameType::ObservedIpv4Addr`], [`FrameType::ObservedIpv6Addr`]).
-#[derive(Debug, PartialEq, Eq, Clone, derive_more::Display)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, derive_more::Display)]
 #[display("{} seq_no: {seq_no} addr: {}", self.get_type(), self.socket_addr())]
 #[cfg_attr(test, derive(Arbitrary))]
 pub(crate) struct ObservedAddr {
@@ -2179,7 +2254,7 @@ impl Encodable for ObservedAddr {
 
 /* Multipath <https://datatracker.ietf.org/doc/draft-ietf-quic-multipath/> */
 
-#[derive(Debug, PartialEq, Eq, derive_more::Display)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, derive_more::Display)]
 #[cfg_attr(test, derive(Arbitrary))]
 #[display("PATH_ABANDON path_id: {path_id}")]
 pub(crate) struct PathAbandon {
@@ -2212,7 +2287,7 @@ impl Decodable for PathAbandon {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, derive_more::Display)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, derive_more::Display)]
 #[cfg_attr(test, derive(Arbitrary))]
 #[display("PATH_STATUS_AVAILABLE path_id: {path_id} seq_no: {status_seq_no}")]
 pub(crate) struct PathStatusAvailable {
@@ -2246,7 +2321,7 @@ impl Decodable for PathStatusAvailable {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, derive_more::Display)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, derive_more::Display)]
 #[cfg_attr(test, derive(Arbitrary))]
 #[display("PATH_STATUS_BACKUP path_id: {path_id} seq_no: {status_seq_no}")]
 pub(crate) struct PathStatusBackup {
@@ -2373,7 +2448,7 @@ impl Encodable for AddAddress {
 /// Conjunction of the information contained in the reach out frames.
 ///
 /// ([`FrameType::ReachOutAtIpv4`], [`FrameType::ReachOutAtIpv6`])
-#[derive(Debug, PartialEq, Eq, Clone, derive_more::Display)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, derive_more::Display)]
 #[display("REACH_OUT round: {round} local_addr: {}", self.socket_addr())]
 #[cfg_attr(test, derive(Arbitrary))]
 pub(crate) struct ReachOut {
