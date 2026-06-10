@@ -5022,7 +5022,7 @@ impl Connection {
                             .data
                             .on_path_response_received(now, response.0, network_path)
                         {
-                            OnPath { was_open } => {
+                            OnPath { was_open } if !self.abandoned_paths.contains(&path_id) => {
                                 let qlog = self.qlog.with_time(now);
 
                                 self.timers.stop(
@@ -5068,6 +5068,12 @@ impl Connection {
                                     // re-validate the previous path.
                                     prev.reset_on_path_challenges();
                                 }
+                            }
+                            OnPath { .. } => {
+                                trace!(
+                                    %response,
+                                    "ignoring PATH_RESPONSE received after path is abandoned"
+                                );
                             }
                             Ignored {
                                 sent_on,
@@ -6143,9 +6149,13 @@ impl Connection {
         if !scheduling_info.is_abandoned
             && space_id == SpaceId::Data
             && path.pending_on_path_challenge
+            // we don't want to send new challenges if we are already closing
             && !self.state.is_closed()
             && builder.frame_space_remaining() > frame::PathChallenge::SIZE_BOUND
-        // we don't want to send new challenges if we are already closing
+            // PATH_CHALLENGE must be part of datagrams expanded to the MIN_INITIAL_SIZE (1200
+            // bytes). A datagram can be expanded to this size if it's the first, as it defines the
+            // GSO segment size, or if the first datagram is larger than this.
+            && !(builder.buf.num_datagrams() > 1 && builder.buf.segment_size() < usize::from(MIN_INITIAL_SIZE))
         {
             path.pending_on_path_challenge = false;
 
@@ -6208,6 +6218,10 @@ impl Connection {
             && space_id == SpaceId::Data
             && builder.frame_space_remaining() > frame::PathResponse::SIZE_BOUND
             && let Some(token) = path.path_responses.pop_on_path(path.network_path)
+            // PATH_RESPONSE must be part of datagrams expanded to the MIN_INITIAL_SIZE (1200
+            // bytes). A datagram can be expanded to this size if it's the first, as it defines the
+            // GSO segment size, or if the first datagram is larger than this.
+            && !(builder.buf.num_datagrams() > 1 && builder.buf.segment_size() < usize::from(MIN_INITIAL_SIZE))
         {
             let response = frame::PathResponse(token);
             builder.write_frame(response, stats);
