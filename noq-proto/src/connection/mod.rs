@@ -5022,7 +5022,7 @@ impl Connection {
                             .data
                             .on_path_response_received(now, response.0, network_path)
                         {
-                            OnPath { was_open } => {
+                            OnPath { was_open } if !self.abandoned_paths.contains(&path_id) => {
                                 let qlog = self.qlog.with_time(now);
 
                                 self.timers.stop(
@@ -5045,13 +5045,7 @@ impl Connection {
                                 );
 
                                 if !was_open {
-                                    // A PATH_ABANDON for this path may have been received before
-                                    // this PATH_RESPONSE (e.g. if the former was sent over a faster
-                                    // path). Only emit the `Established` event if the path has not
-                                    // been abandoned already.
-                                    if is_multipath_negotiated
-                                        && !self.abandoned_paths.contains(&path_id)
-                                    {
+                                    if is_multipath_negotiated {
                                         self.events.push_back(Event::Path(
                                             PathEvent::Established { id: path_id },
                                         ));
@@ -5074,6 +5068,12 @@ impl Connection {
                                     // re-validate the previous path.
                                     prev.reset_on_path_challenges();
                                 }
+                            }
+                            OnPath { .. } => {
+                                trace!(
+                                    %response,
+                                    "ignoring PATH_RESPONSE received after path is abandoned"
+                                );
                             }
                             Ignored {
                                 sent_on,
