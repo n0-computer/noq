@@ -5045,7 +5045,13 @@ impl Connection {
                                 );
 
                                 if !was_open {
-                                    if is_multipath_negotiated {
+                                    // A PATH_ABANDON for this path may have been received before
+                                    // this PATH_RESPONSE (e.g. if the former was sent over a faster
+                                    // path). Only emit the `Established` event if the path has not
+                                    // been abandoned already.
+                                    if is_multipath_negotiated
+                                        && !self.abandoned_paths.contains(&path_id)
+                                    {
                                         self.events.push_back(Event::Path(
                                             PathEvent::Established { id: path_id },
                                         ));

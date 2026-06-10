@@ -606,6 +606,89 @@ fn close_path() -> TestResult {
     Ok(())
 }
 
+/// Regression: We never emit [`PathEvent::Established`] after [`PathEvent::Abandoned`].
+///
+/// It may happen that a PATH_RESPONSE validating a path is received after a
+/// PATH_ABANDON (due to reordering or the different path latencies). We used to
+/// emit a [`PathEvent::Establish`] *after* [`PathEvent::Abandoned`], which makes
+/// no sense. This was fixed, and this test ensures that this doesn't happen again.
+#[test]
+fn no_establish_after_abandon() -> TestResult {
+    let _guard = subscribe();
+    let mut pair = ConnPair::builder().enable_multipath().connect();
+
+    let server_addr = pair.routes.public_server_addr();
+    let path_id = pair.open_path(
+        Client,
+        FourTuple::from_remote(server_addr),
+        PathStatus::Available,
+    )?;
+    assert_ne!(path_id, PathId::ZERO);
+
+    // Client sends PATH_CHALLENGE
+    pair.drive_client();
+    pair.advance_time();
+    // Server receives PATH_CHALLENGE and replies with PATH_RESPONSE and its
+    // own PATH_CHALLENGE. Server has *not* validated the path yet.
+    pair.drive_server();
+    pair.advance_time();
+    // Client receives PATH_RESPONSE and PATH_CHALLENGE. It has now validated
+    // the path, and sends a PATH_RESPONSE. We hold back the packet containing
+    // the PATH_RESPONSE.
+    pair.drive_client();
+    let withheld: Vec<_> = pair.server.inbound.drain(..).collect();
+    assert!(
+        !withheld.is_empty(),
+        "expected the client's PATH_RESPONSE to be in flight"
+    );
+
+    // Now abandon the path on the client and deliver the PATH_ABANDON frame to
+    // the server.
+    pair.close_path(Client, path_id, 0u8.into())?;
+    pair.advance_time();
+    pair.drive_client();
+    pair.drive_server();
+
+    // Now deliver the withheld PATH_RESPONSE. It validates the *already
+    // abandoned* path.
+    for pkt in withheld {
+        pair.server.inbound.push_back(pkt);
+    }
+    pair.advance_time();
+    pair.drive_client();
+    pair.drive_server();
+
+    // On the client, we get Established and then Abandoned
+    assert_matches!(
+        pair.poll(Client),
+        Some(Event::Path(PathEvent::Established { id }))
+        if id == path_id
+    );
+    assert_matches!(
+        pair.poll(Client),
+        Some(Event::Path(PathEvent::Abandoned {
+            id,
+            reason: PathAbandonReason::ApplicationClosed { .. }
+        }))
+        if id == path_id
+    );
+    assert_matches!(pair.poll(Client), None);
+
+    // Server only gets a PathEvent::Abandoned. This is the actual regression test:
+    // Before the fix, we would get a PathEvent::Established after Abandoned.
+    assert_matches!(
+        pair.poll(Server),
+        Some(Event::Path(PathEvent::Abandoned {
+            id,
+            reason: PathAbandonReason::RemoteAbandoned { .. }
+        }))
+        if id == path_id
+    );
+    assert_matches!(pair.poll(Server), None);
+
+    Ok(())
+}
+
 #[test]
 fn close_last_path() -> TestResult {
     let _guard = subscribe();
