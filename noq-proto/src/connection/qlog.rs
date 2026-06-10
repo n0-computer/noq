@@ -990,6 +990,17 @@ impl ToQlog for frame::StreamMetaEncoder {
 }
 
 #[cfg(feature = "qlog")]
+impl ToQlog for frame::ResetStreamAt {
+    fn to_qlog(&self) -> QuicFrame {
+        // TODO: Teach qlog about this frame type.
+        QuicFrame::Unknown {
+            frame_type_bytes: Some(self.get_type().to_u64()),
+            raw: None,
+        }
+    }
+}
+
+#[cfg(feature = "qlog")]
 impl Frame {
     /// Converts a [`crate::Frame`] into a [`QuicFrame`].
     pub(crate) fn to_qlog(&self) -> QuicFrame {
@@ -1077,6 +1088,7 @@ impl Frame {
             Self::AddAddress(f) => f.to_qlog(),
             Self::ReachOut(f) => f.to_qlog(),
             Self::RemoveAddress(f) => f.to_qlog(),
+            Self::ResetStreamAt(f) => f.to_qlog(),
         }
     }
 }

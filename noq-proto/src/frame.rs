@@ -133,8 +133,8 @@ pub enum FrameType {
     ReachOutAtIpv6,
     #[assoc(to_u64 = 0x3d7f94)]
     RemoveAddress,
-    // #[assoc(to_u64 = 0x24)]
-    // ResetStreamAt,
+    #[assoc(to_u64 = 0x24)]
+    ResetStreamAt,
 }
 
 /// Encounter a frame ID that was not valid.
@@ -219,6 +219,7 @@ pub(super) enum EncodableFrame<'a> {
     MaxStreamData(MaxStreamData),
     MaxStreams(MaxStreams),
     StreamsBlocked(StreamsBlocked),
+    ResetStreamAt(ResetStreamAt),
 }
 
 impl<'a> EncodableFrame<'a> {
@@ -253,7 +254,8 @@ impl<'a> EncodableFrame<'a> {
             | EncodableFrame::MaxData(_)
             | EncodableFrame::MaxStreamData(_)
             | EncodableFrame::MaxStreams(_)
-            | EncodableFrame::StreamsBlocked(_) => true,
+            | EncodableFrame::StreamsBlocked(_)
+            | EncodableFrame::ResetStreamAt(_) => true,
         }
     }
 }
@@ -465,6 +467,7 @@ pub(crate) enum Frame {
     AddAddress(AddAddress),
     ReachOut(ReachOut),
     RemoveAddress(RemoveAddress),
+    ResetStreamAt(ResetStreamAt),
 }
 
 impl Frame {
@@ -516,6 +519,7 @@ impl Frame {
             AddAddress(frame) => frame.get_type(),
             ReachOut(frame) => frame.get_type(),
             RemoveAddress(_) => self::RemoveAddress::TYPE,
+            ResetStreamAt(_) => FrameType::ResetStreamAt,
         }
     }
 
@@ -1709,6 +1713,18 @@ impl Iter {
                     self.take_remaining()
                 },
             }),
+            FrameType::ResetStreamAt => {
+                let frame = ResetStreamAt {
+                    id: self.bytes.get()?,
+                    error_code: self.bytes.get()?,
+                    final_offset: self.bytes.get()?,
+                    reliable_size: self.bytes.get()?,
+                };
+                if frame.reliable_size > frame.final_offset {
+                    return Err(IterErr::Malformed);
+                }
+                Frame::ResetStreamAt(frame)
+            }
         })
     }
 
@@ -2491,6 +2507,41 @@ impl Encodable for RemoveAddress {
     fn encode<W: BufMut>(&self, buf: &mut W) {
         buf.write(Self::TYPE);
         buf.write(self.seq_no);
+    }
+}
+
+/// RESET_STREAM_AT frame.
+///
+/// <https://datatracker.ietf.org/doc/html/draft-ietf-quic-reliable-stream-reset>
+// #[allow(unreachable_pub)] // fuzzing only
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(test, derive(Arbitrary))]
+#[derive(Debug, Copy, Clone, derive_more::Display)]
+#[display("RESET_STREAM id: {id}")]
+pub(crate) struct ResetStreamAt {
+    pub(crate) id: StreamId,
+    pub(crate) error_code: VarInt,
+    pub(crate) final_offset: VarInt,
+    pub(crate) reliable_size: VarInt,
+}
+
+impl ResetStreamAt {
+    pub(crate) const fn get_type(&self) -> FrameType {
+        FrameType::ResetStreamAt
+    }
+}
+
+impl FrameStruct for ResetStreamAt {
+    const SIZE_BOUND: usize = 1 + 8 + 8 + 8 + 8;
+}
+
+impl Encodable for ResetStreamAt {
+    fn encode<W: BufMut>(&self, out: &mut W) {
+        out.write(FrameType::ResetStream); // 1 byte
+        out.write(self.id); // <= 8 bytes
+        out.write(self.error_code); // <= 8 bytes
+        out.write(self.final_offset); // <= 8 bytes
+        out.write(self.reliable_size); // <= 8 bytes
     }
 }
 
