@@ -1821,8 +1821,9 @@ dependencies = [
 
 [[package]]
 name = "n0-qlog"
-version = "0.1.1"
-source = "git+https://github.com/n0-computer/n0-qlog?branch=Frando%2Fchase-upstream#6e1d48a31e8ff976a440a4ecbdb311e857ba8c78"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bb1c2fc610d1facce51b0bf5d8245b309c91996a933defdf7742c92ac78a58cb"
 dependencies = [
  "humantime",
  "serde",
