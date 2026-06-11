@@ -7,6 +7,8 @@ use crate::{
     frame,
 };
 
+use super::ResetStreamAtError;
+
 #[derive(Debug)]
 pub(super) struct Send {
     pub(super) max_data: u64,
@@ -50,6 +52,29 @@ impl Send {
             Ok(())
         } else {
             Err(FinishError::ClosedStream)
+        }
+    }
+
+    pub(super) fn reset_at(&mut self, offset: VarInt) -> Result<(), ResetStreamAtError> {
+        if let Some(error_code) = self.stop_reason {
+            return Err(ResetStreamAtError::Stopped(error_code));
+        }
+        match self.state {
+            SendState::Ready | SendState::DataSent { .. } if offset.0 >= self.pending.offset() => {
+                Err(ResetStreamAtError::InvalidReliableSize)
+            }
+            SendState::Ready => {
+                self.state = SendState::DataSent {
+                    finish_acked: false,
+                };
+                self.pending.truncate(offset.0);
+                Ok(())
+            }
+            SendState::DataSent { .. } => {
+                self.pending.truncate(offset.0);
+                Ok(())
+            }
+            SendState::ResetSent => Err(ResetStreamAtError::ClosedStream),
         }
     }
 

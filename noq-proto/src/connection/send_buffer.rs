@@ -94,6 +94,37 @@ impl SendBufferData {
         }
     }
 
+    /// Discard data from the end of the buffer.
+    ///
+    /// Calling this with offset outside of [`Self::range`] is essentially a no-op since
+    /// nothing needs to be truncated.
+    fn truncate(&mut self, offset: u64) {
+        if !self.range().contains(&offset) {
+            return;
+        }
+
+        // clear truncated data
+        let mut n = self.offset;
+        for segment in self.segments.iter_mut() {
+            if (n + segment.len() as u64) < offset {
+                n += segment.len() as u64;
+            } else if n < offset {
+                segment.truncate((offset - n) as usize);
+                n += offset - n;
+            } else {
+                segment.clear();
+            }
+        }
+
+        // remove empty segments
+        self.segments.retain(|s| !s.is_empty());
+
+        // shrink segments if we have a lot of unused capacity
+        if self.segments.len() * 4 < self.segments.capacity() {
+            self.segments.shrink_to_fit();
+        }
+    }
+
     /// Discard data from the front of the buffer
     ///
     /// Calling this with n > len() is allowed and will simply clear the buffer.
@@ -232,6 +263,11 @@ impl SendBuffer {
         self.retransmits.remove(0..self.fully_acked_offset());
     }
 
+    pub(super) fn truncate(&mut self, offset: u64) {
+        self.data.truncate(offset);
+        self.retransmits.remove(offset..self.offset());
+    }
+
     /// Compute the next range to transmit on this stream and update state to account for that
     /// transmission.
     ///
@@ -324,7 +360,7 @@ impl SendBuffer {
     }
 
     /// Offset up to which all data has been acknowledged
-    fn fully_acked_offset(&self) -> u64 {
+    pub(super) fn fully_acked_offset(&self) -> u64 {
         self.data.range().start
     }
 

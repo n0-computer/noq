@@ -558,7 +558,8 @@ pub struct Retransmits {
     pub(super) remove_address: BTreeSet<RemoveAddress>,
     /// Round and local addresses to advertise in `REACH_OUT` frames
     pub(super) reach_out: PendingReachOutFrames,
-    pub(super) reset_stream_at: Option<u64>,
+    /// Pending RESET_STREAM_AT frames: (StreamId, offset, error_code).
+    pub(super) reset_stream_at: Vec<(StreamId, VarInt, VarInt)>,
 }
 
 impl Retransmits {
@@ -610,7 +611,7 @@ impl Retransmits {
             && add_address.is_empty()
             && remove_address.is_empty()
             && reach_out.is_empty()
-            && reset_stream_at.is_none()
+            && reset_stream_at.is_empty()
     }
 }
 
@@ -668,12 +669,7 @@ impl ::std::ops::BitOrAssign for Retransmits {
         self.add_address.extend(add_address.iter().copied());
         self.remove_address.extend(remove_address.iter().copied());
         self.reach_out.append(&mut reach_out);
-        self.reset_stream_at = match (self.reset_stream_at, reset_stream_at) {
-            (None, None) => None,
-            (None, Some(v)) => Some(v),
-            (Some(v), None) => Some(v),
-            (Some(l), Some(r)) => Some(l.min(r)),
-        };
+        self.reset_stream_at.extend_from_slice(&reset_stream_at);
     }
 }
 

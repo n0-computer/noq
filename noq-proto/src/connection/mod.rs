@@ -98,8 +98,8 @@ pub use streams::StreamsState;
 #[cfg(not(fuzzing))]
 use streams::StreamsState;
 pub use streams::{
-    Chunks, ClosedStream, FinishError, ReadError, ReadableError, RecvStream, SendStream,
-    ShouldTransmit, StreamEvent, Streams, WriteError,
+    Chunks, ClosedStream, FinishError, ReadError, ReadableError, RecvStream, ResetStreamAtError,
+    SendStream, ShouldTransmit, StreamEvent, Streams, WriteError,
 };
 
 mod timer;
@@ -7728,8 +7728,12 @@ impl SentFrames {
             StreamsBlocked(streams_blocked) => {
                 self.retransmits_mut().streams_blocked[streams_blocked.dir as usize] = true
             }
-            ResetStreamAt(reset_stream_at) => {
-                todo!();
+            ResetStreamAt(frame) => {
+                self.retransmits_mut().reset_stream_at.push((
+                    frame.id,
+                    frame.final_offset,
+                    frame.error_code,
+                ));
             }
         }
     }
