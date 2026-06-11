@@ -281,6 +281,11 @@ impl<'a, 'b> PacketBuilder<'a, 'b> {
         let space_id = self.space;
         let (size, padded, sent) = self.finish(conn, now);
 
+        // Count only tracked sends. Off-path PATH_CHALLENGE/PATH_RESPONSE packets call
+        // `finish` directly and only share the path's logical identifier, not the
+        // network path itself, so they stay out of per-path stats.
+        conn.path_stats.for_path(path_id).sent_packets += 1;
+
         let size = match padded || ack_eliciting {
             true => size as u16,
             false => 0,
@@ -365,10 +370,6 @@ impl<'a, 'b> PacketBuilder<'a, 'b> {
         trace!(size = %packet_len, "wrote packet");
         self.qlog.finalize(packet_len);
         conn.qlog.emit_packet_sent(self.qlog, now);
-        // Every finished packet consumes a packet number on its path; count it here, in
-        // the common build path, so off-path PATH_CHALLENGE/PATH_RESPONSE packets (which
-        // call `finish` directly rather than `finish_and_track`) are also counted.
-        conn.path_stats.for_path(self.path).sent_packets += 1;
         (packet_len, pad, self.sent_frames)
     }
 
