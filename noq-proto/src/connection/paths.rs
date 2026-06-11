@@ -770,6 +770,7 @@ impl RecoveryMetrics {
             ssthresh: updated.ssthresh,
             pacing_rate: updated.pacing_rate,
             path_id: Some(path_id.as_u32() as u64),
+            ex_data: Default::default(),
         })
     }
 }

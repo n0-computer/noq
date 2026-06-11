@@ -25,7 +25,7 @@ use qlog::{
     events::{
         ApplicationError, ConnectionClosedFrameError, Event, EventData, RawInfo, TupleEndpointInfo,
         quic::{
-            self, AckedRanges, AddressDiscoveryRole, ConnectionStarted, ErrorSpace, PacketHeader,
+            self, AckRange, AddressDiscoveryRole, ConnectionStarted, ErrorSpace, PacketHeader,
             PacketLost, PacketLostTrigger, PacketReceived, PacketSent, PacketType,
             ParametersRestored, ParametersSet, PreferredAddress, QlogTimerType, QuicFrame,
             StreamType, TimerEventType, TimerType, TimerUpdated, TransportInitiator, TupleAssigned,
@@ -93,6 +93,7 @@ impl QlogStream {
             start_time,
             trace,
             qlog::events::EventImportance::Extra,
+            qlog::streamer::EventTimePrecision::MicroSeconds,
             config.writer,
         );
 
@@ -156,7 +157,7 @@ impl QlogSink {
                 return;
             };
             stream.emit_event(
-                EventData::ConnectionStarted(ConnectionStarted {
+                EventData::QuicConnectionStarted(ConnectionStarted {
                     local: tuple_endpoint_info(local_ip, None, Some(local_cid)),
                     remote: tuple_endpoint_info(
                         Some(remote.ip()),
@@ -168,7 +169,7 @@ impl QlogSink {
             );
 
             let params = transport_params.to_qlog(TransportInitiator::Local);
-            let event = EventData::ParametersSet(params);
+            let event = EventData::QuicParametersSet(Box::new(params));
             stream.emit_event(event, now);
         }
     }
@@ -184,7 +185,7 @@ impl QlogSink {
                 return;
             };
 
-            stream.emit_event(EventData::MetricsUpdated(metrics), now);
+            stream.emit_event(EventData::QuicMetricsUpdated(metrics), now);
         }
     }
 
@@ -219,7 +220,7 @@ impl QlogSink {
                 is_mtu_probe_packet: None,
             };
 
-            stream.emit_event(EventData::PacketLost(event), now);
+            stream.emit_event(EventData::QuicPacketLost(event), now);
         }
     }
 
@@ -230,7 +231,7 @@ impl QlogSink {
                 return;
             };
             let params = conn.peer_params.to_qlog_restored();
-            let event = EventData::ParametersRestored(params);
+            let event = EventData::QuicParametersRestored(params);
             stream.emit_event(event, now);
         }
     }
@@ -242,7 +243,7 @@ impl QlogSink {
                 return;
             };
             let params = conn.peer_params.to_qlog(TransportInitiator::Remote);
-            let event = EventData::ParametersSet(params);
+            let event = EventData::QuicParametersSet(Box::new(params));
             stream.emit_event(event, now);
         }
     }
@@ -266,7 +267,7 @@ impl QlogSink {
                 )),
             };
 
-            stream.emit_event(EventData::TupleAssigned(event), now);
+            stream.emit_event(EventData::QuicTupleAssigned(event), now);
         }
     }
 
@@ -277,7 +278,7 @@ impl QlogSink {
                 return;
             };
             let tuple_id = packet.inner.header.path_id.map(fmt_tuple_id);
-            stream.emit_event_with_tuple_id(EventData::PacketSent(packet.inner), now, tuple_id);
+            stream.emit_event_with_tuple_id(EventData::QuicPacketSent(packet.inner), now, tuple_id);
         }
     }
 
@@ -291,7 +292,7 @@ impl QlogSink {
             packet.emit_padding();
             let tuple_id = packet.inner.header.path_id.map(fmt_tuple_id);
             let event = packet.inner;
-            stream.emit_event_with_tuple_id(EventData::PacketReceived(event), now, tuple_id);
+            stream.emit_event_with_tuple_id(EventData::QuicPacketReceived(event), now, tuple_id);
         }
     }
 
@@ -361,7 +362,7 @@ impl QlogSink {
             event_type,
             delta,
         };
-        stream.emit_event(EventData::TimerUpdated(event), now);
+        stream.emit_event(EventData::QuicTimerUpdated(event), now);
     }
 
     /// Returns a [`QlogSinkWithTime`] that passes along a `now` timestamp.
@@ -448,11 +449,11 @@ impl QlogSentPacket {
     pub(crate) fn frame_padding(&mut self, count: usize) {
         #[cfg(feature = "qlog")]
         self.frame_raw(QuicFrame::Padding {
-            raw: Some(RawInfo {
+            raw: Some(Box::new(RawInfo {
                 length: Some(count as u64),
                 payload_length: Some(count as u64),
                 data: None,
-            }),
+            })),
         });
     }
 
@@ -544,11 +545,11 @@ impl QlogRecvPacket {
                 .frames
                 .get_or_insert_default()
                 .push(QuicFrame::Padding {
-                    raw: Some(RawInfo {
+                    raw: Some(Box::new(RawInfo {
                         length: Some(self.padding as u64),
                         payload_length: Some(self.padding as u64),
                         data: None,
-                    }),
+                    })),
                 });
             self.padding = 0;
         }
@@ -566,12 +567,12 @@ impl<'a> ToQlog for frame::AckEncoder<'a> {
     fn to_qlog(&self) -> QuicFrame {
         QuicFrame::Ack {
             ack_delay: Some(self.delay as f32),
-            acked_ranges: Some(AckedRanges::Double(
+            acked_ranges: Some(
                 self.ranges
                     .iter()
-                    .map(|range| (range.start, range.end))
+                    .map(|range| AckRange::new(range.start, range.end))
                     .collect(),
-            )),
+            ),
             ect1: self.ecn.map(|e| e.ect1),
             ect0: self.ecn.map(|e| e.ect0),
             ce: self.ecn.map(|e| e.ce),
@@ -628,7 +629,7 @@ impl ToQlog for frame::Close {
                     ConnectionClosedFrameError::TransportError(transport_error)
                 });
                 QuicFrame::ConnectionClose {
-                    error_space: Some(ErrorSpace::TransportError),
+                    error_space: Some(ErrorSpace::Transport),
                     error,
                     error_code,
                     reason: String::from_utf8(f.reason.to_vec()).ok(),
@@ -637,7 +638,7 @@ impl ToQlog for frame::Close {
                 }
             }
             Self::Application(f) => QuicFrame::ConnectionClose {
-                error_space: Some(ErrorSpace::ApplicationError),
+                error_space: Some(ErrorSpace::Application),
                 error: None,
                 error_code: Some(f.error_code.into_inner()),
                 reason: String::from_utf8(f.reason.to_vec()).ok(),
@@ -653,10 +654,10 @@ impl ToQlog for frame::Crypto {
     fn to_qlog(&self) -> QuicFrame {
         QuicFrame::Crypto {
             offset: self.offset,
-            raw: Some(RawInfo {
+            raw: Some(Box::new(RawInfo {
                 length: Some(self.data.len() as u64),
                 ..Default::default()
-            }),
+            })),
         }
     }
 }
@@ -665,10 +666,10 @@ impl ToQlog for frame::Crypto {
 impl ToQlog for frame::Datagram {
     fn to_qlog(&self) -> QuicFrame {
         QuicFrame::Datagram {
-            raw: Some(RawInfo {
+            raw: Some(Box::new(RawInfo {
                 length: Some(self.data.len() as u64),
                 ..Default::default()
-            }),
+            })),
         }
     }
 }
@@ -772,7 +773,7 @@ impl ToQlog for frame::NewToken {
             token: qlog::Token {
                 ty: Some(TokenType::Retry),
                 raw: Some(RawInfo {
-                    data: HexSlice::maybe_string(Some(&self.token)),
+                    data: HexSlice::maybe_string(Some(&self.token)).map(Box::new),
                     length: Some(self.token.len() as u64),
                     payload_length: None,
                 }),
@@ -819,12 +820,12 @@ impl ToQlog for frame::PathAckEncoder<'_> {
         QuicFrame::PathAck {
             path_id: self.path_id.as_u32() as u64,
             ack_delay: Some(self.delay as f32),
-            acked_ranges: Some(AckedRanges::Double(
+            acked_ranges: Some(
                 self.ranges
                     .iter()
-                    .map(|range| (range.start, range.end))
+                    .map(|range| AckRange::new(range.start, range.end))
                     .collect(),
-            )),
+            ),
             ect1: self.ecn.map(|e| e.ect1),
             ect0: self.ecn.map(|e| e.ect0),
             ce: self.ecn.map(|e| e.ce),
@@ -981,10 +982,10 @@ impl ToQlog for frame::StreamMetaEncoder {
             stream_id: meta.id.into(),
             offset: Some(meta.offsets.start),
             fin: Some(meta.fin),
-            raw: Some(RawInfo {
+            raw: Some(Box::new(RawInfo {
                 length: Some(meta.offsets.end - meta.offsets.start),
                 ..Default::default()
-            }),
+            })),
         }
     }
 }
@@ -995,18 +996,20 @@ impl Frame {
     pub(crate) fn to_qlog(&self) -> QuicFrame {
         match self {
             Self::Padding => QuicFrame::Padding {
-                raw: Some(RawInfo {
+                raw: Some(Box::new(RawInfo {
                     length: None,
                     payload_length: Some(1),
                     data: None,
-                }),
+                })),
             },
             Self::Ping => frame::Ping.to_qlog(),
             Self::Ack(f) => QuicFrame::Ack {
                 ack_delay: Some(f.delay as f32),
-                acked_ranges: Some(AckedRanges::Double(
-                    f.iter().map(|range| (range.start, range.end)).collect(),
-                )),
+                acked_ranges: Some(
+                    f.iter()
+                        .map(|range| AckRange::new(range.start, range.end))
+                        .collect(),
+                ),
                 ect1: f.ecn.as_ref().map(|e| e.ect1),
                 ect0: f.ecn.as_ref().map(|e| e.ect0),
                 ce: f.ecn.as_ref().map(|e| e.ce),
@@ -1020,10 +1023,10 @@ impl Frame {
                 stream_id: s.id.into(),
                 offset: Some(s.offset),
                 fin: Some(s.fin),
-                raw: Some(RawInfo {
+                raw: Some(Box::new(RawInfo {
                     length: Some(s.data.len() as u64),
                     ..Default::default()
-                }),
+                })),
             },
             Self::MaxData(v) => v.to_qlog(),
             Self::MaxStreamData(f) => f.to_qlog(),
@@ -1058,12 +1061,12 @@ impl Frame {
                 ect0: ack.ecn.as_ref().map(|e| e.ect0),
                 ce: ack.ecn.as_ref().map(|e| e.ce),
                 raw: None,
-                acked_ranges: Some(AckedRanges::Double(
+                acked_ranges: Some(
                     ack.ranges
                         .iter()
-                        .map(|range| (range.start, range.end))
+                        .map(|range| AckRange::new(range.start, range.end))
                         .collect(),
-                )),
+                ),
             },
             Self::PathAbandon(frame) => frame.to_qlog(),
             Self::PathStatusAvailable(frame) => frame.to_qlog(),
