@@ -7,7 +7,7 @@ use std::{
 
 use bytes::Bytes;
 use pin_project_lite::pin_project;
-use proto::{ClosedStream, ConnectionError, FinishError, StreamId};
+use proto::{ClosedStream, ConnectionError, FinishError, ResetStreamAtError, StreamId};
 use thiserror::Error;
 use tokio::sync::futures::OwnedNotified;
 
@@ -216,6 +216,29 @@ impl SendStream {
             return Ok(());
         }
         conn.inner.send_stream(self.stream).reset(error_code)?;
+        Ok(())
+    }
+
+    /// Close the send stream immediately, delivering data up to `offset`.
+    ///
+    /// No new data can be written after calling this method. Data up to `offset` is still
+    /// reliably delivered, but any remaining stream data may never be transmitted or lost.
+    ///
+    /// Fails if [`Self::finish`], [`Self::reset`] or [`Self::reset_at`] was previously
+    /// called, of if the remote stopped the stream.
+    pub fn reset_at(
+        &mut self,
+        offset: VarInt,
+        error_code: VarInt,
+    ) -> Result<(), ResetStreamAtError> {
+        let mut conn = self.conn.lock_and_wake("SendStream::reset_at");
+        if self.is_0rtt && conn.check_0rtt().is_err() {
+            conn.skip_waking();
+            return Ok(());
+        }
+        conn.inner
+            .send_stream(self.stream)
+            .reset_at(offset, error_code)?;
         Ok(())
     }
 

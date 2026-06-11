@@ -356,6 +356,30 @@ impl<'a> SendStream<'a> {
         Ok(())
     }
 
+    /// Abandon transmitting data on a stream, deliver reliably up to `offset`.
+    pub fn reset_at(
+        &mut self,
+        offset: VarInt,
+        error_code: VarInt,
+    ) -> Result<(), ResetStreamAtError> {
+        let max_send_data = self.state.max_send_data(self.id);
+        let stream = self
+            .state
+            .send
+            .get_mut(&self.id)
+            .map(get_or_insert_send(max_send_data))
+            .ok_or(ResetStreamAtError::ClosedStream)?;
+
+        if matches!(stream.state, SendState::ResetSent) {
+            return Err(ResetStreamAtError::ClosedStream);
+        }
+        stream.reset_at(offset)?;
+        self.pending
+            .reset_stream_at
+            .push((self.id, offset, error_code));
+        Ok(())
+    }
+
     /// Set the priority of a stream
     ///
     /// # Panics
@@ -540,6 +564,24 @@ impl From<ClosedStream> for io::Error {
     fn from(x: ClosedStream) -> Self {
         Self::new(io::ErrorKind::NotConnected, x)
     }
+}
+
+/// Errors for resetting a stream with partial delivery.
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum ResetStreamAtError {
+    /// The stream has already been stopped.
+    ///
+    /// The peer is no longer accepting data on this stream.
+    ///
+    /// Carries an application-defined error code.
+    #[error("stopped by peer: code {0}")]
+    Stopped(VarInt),
+    /// The stream has already been finished or reset.
+    #[error("closed stream")]
+    ClosedStream,
+    /// The reliable size is larger than the number of bytes sent on the stream.
+    #[error("invalid reliable size")]
+    InvalidReliableSize,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
