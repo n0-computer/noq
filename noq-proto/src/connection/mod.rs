@@ -26,7 +26,7 @@ use crate::{
     congestion::Controller,
     connection::{
         qlog::{QlogRecvPacket, QlogSink},
-        spaces::LostPacket,
+        spaces::{LostPacket, PathRetransmits},
         stats::PathStatsMap,
         timer::{ConnTimer, PathTimer},
     },
@@ -3446,6 +3446,7 @@ impl Connection {
                 }
                 self.spaces[pn_space].pending |= info.retransmits;
                 let path = self.path_data_mut(path_id);
+                path.requeue_path_retransmits(&info.path_retransmits);
                 path.mtud.on_non_probe_lost(packet, info.size);
                 path.congestion.on_packet_lost(info.size, packet, now);
 
@@ -6201,9 +6202,7 @@ impl Connection {
 
                     self.next_observed_addr_seq_no =
                         self.next_observed_addr_seq_no.saturating_add(1u8);
-                    path.observed_addr_sent = true;
-
-                    space.pending.observed_addr = false;
+                    path.pending_observed_addr = false;
                 }
             }
         }
@@ -6240,9 +6239,7 @@ impl Connection {
 
                     self.next_observed_addr_seq_no =
                         self.next_observed_addr_seq_no.saturating_add(1u8);
-                    path.observed_addr_sent = true;
-
-                    space.pending.observed_addr = false;
+                    path.pending_observed_addr = false;
                 }
             }
         }
@@ -6299,7 +6296,7 @@ impl Connection {
                 .config
                 .address_discovery_role
                 .should_report(&self.peer_params.address_discovery_role)
-            && (!path.observed_addr_sent || space.pending.observed_addr)
+            && (!path.pending_observed_addr)
         {
             let frame =
                 frame::ObservedAddr::new(path.network_path.remote, self.next_observed_addr_seq_no);
@@ -6307,9 +6304,7 @@ impl Connection {
                 builder.write_frame(frame, stats);
 
                 self.next_observed_addr_seq_no = self.next_observed_addr_seq_no.saturating_add(1u8);
-                path.observed_addr_sent = true;
-
-                space.pending.observed_addr = false;
+                path.pending_observed_addr = false;
             }
         }
 
@@ -7631,6 +7626,7 @@ const MAX_HANDSHAKE_OR_0RTT_HEADER_SIZE: usize =
 #[derive(Default)]
 struct SentFrames {
     retransmits: ThinRetransmits,
+    path_retransmits: PathRetransmits,
     /// The packet number of the largest acknowledged packet for each path
     largest_acked: FxHashMap<PathId, u64>,
     stream_frames: StreamMetaVec,
@@ -7670,7 +7666,7 @@ impl SentFrames {
             PathResponse(_) => self.non_retransmits = true,
             HandshakeDone(_) => self.retransmits_mut().handshake_done = true,
             ReachOut(frame) => self.retransmits_mut().reach_out.push(frame),
-            ObservedAddr(_) => self.retransmits_mut().observed_addr = true,
+            ObservedAddr(_) => self.path_retransmits.observed_address = true,
             Ping(_) => self.non_retransmits = true,
             ImmediateAck(_) => self.non_retransmits = true,
             AckFrequency(_) => self.retransmits_mut().ack_frequency = true,

@@ -293,6 +293,7 @@ impl<'a, 'b> PacketBuilder<'a, 'b> {
             size,
             ack_eliciting,
             retransmits: sent.retransmits,
+            path_retransmits: sent.path_retransmits,
             stream_frames: sent.stream_frames,
         };
 
