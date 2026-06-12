@@ -6296,7 +6296,7 @@ impl Connection {
                 .config
                 .address_discovery_role
                 .should_report(&self.peer_params.address_discovery_role)
-            && (!path.pending_observed_addr)
+            && path.pending_observed_addr
         {
             let frame =
                 frame::ObservedAddr::new(path.network_path.remote, self.next_observed_addr_seq_no);
