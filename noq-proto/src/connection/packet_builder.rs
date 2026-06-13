@@ -281,6 +281,11 @@ impl<'a, 'b> PacketBuilder<'a, 'b> {
         let space_id = self.space;
         let (size, padded, sent) = self.finish(conn, now);
 
+        // Count only tracked sends. Off-path PATH_CHALLENGE/PATH_RESPONSE packets call
+        // `finish` directly and only share the path's logical identifier, not the
+        // network path itself, so they stay out of per-path stats.
+        conn.path_stats.for_path(path_id).sent_packets += 1;
+
         let size = match padded || ack_eliciting {
             true => size as u16,
             false => 0,
