@@ -218,8 +218,9 @@ pub(super) struct PathData {
     ///
     /// Note that this is across all spaces on this path
     pub(super) in_flight: InFlight,
-    /// Whether this path has had it's remote address reported back to the peer. This only happens
-    /// if both peers agree to so based on their transport parameters.
+    /// Whether this path needs to report its remote address back to the peer.
+    ///
+    /// This only happens if both peers agree to do so based on their transport parameters.
     pub(super) pending_observed_addr: bool,
     /// Observed address frame with the largest sequence number received from the peer on this path.
     pub(super) last_observed_addr_report: Option<ObservedAddr>,
