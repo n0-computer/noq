@@ -2181,7 +2181,7 @@ impl Encodable for ObservedAddr {
 
 #[derive(Debug, PartialEq, Eq, derive_more::Display)]
 #[cfg_attr(test, derive(Arbitrary))]
-#[display("PATH_ABANDON path_id: {path_id}")]
+#[display("PATH_ABANDON path_id: {path_id}, error: {error_code}")]
 pub(crate) struct PathAbandon {
     pub(crate) path_id: PathId,
     pub(crate) error_code: TransportErrorCode,
