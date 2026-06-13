@@ -221,6 +221,7 @@ pub(super) struct PathData {
     /// Whether this path needs to report its remote address back to the peer.
     ///
     /// This only happens if both peers agree to do so based on their transport parameters.
+    // TODO(@divma): use PathRetransmits directly
     pub(super) pending_observed_addr: bool,
     /// Observed address frame with the largest sequence number received from the peer on this path.
     pub(super) last_observed_addr_report: Option<ObservedAddr>,
@@ -1178,6 +1179,13 @@ pub struct ClosedPath {
 #[derive(Debug, Default, Clone)]
 pub(super) struct PathRetransmits {
     pub(super) observed_address: bool,
+}
+
+impl PathRetransmits {
+    pub(super) fn is_empty(&self) -> bool {
+        let PathRetransmits { observed_address } = self;
+        !observed_address
+    }
 }
 
 #[cfg(test)]

@@ -509,7 +509,7 @@ pub(super) struct LostPacket {
 
 /// Retransmittable data queue.
 ///
-/// Data in this queue must be retransmittable over any path.
+/// Data in this queue must be retransmittable over any path in the same [`SpaceKind`].
 #[allow(unreachable_pub)] // fuzzing only
 #[derive(Debug, Default, Clone)]
 pub struct Retransmits {
