@@ -654,8 +654,8 @@ impl PathData {
     }
 
     /// Handles lost retransmittable data that must be sent over this path.
-    pub(crate) fn requeue_path_retransmits(&mut self, path_retransmits: &super::PathRetransmits) {
-        let super::PathRetransmits { observed_address } = path_retransmits;
+    pub(crate) fn requeue_path_retransmits(&mut self, path_retransmits: &PathRetransmits) {
+        let PathRetransmits { observed_address } = path_retransmits;
         self.pending_observed_addr |= observed_address;
     }
 
@@ -1171,6 +1171,12 @@ pub enum SetPathStatusError {
 #[error("closed path")]
 pub struct ClosedPath {
     pub(super) _private: (),
+}
+
+/// Path-specific retransmittable data lost in a packet.
+#[derive(Debug, Default, Clone)]
+pub(super) struct PathRetransmits {
+    pub(super) observed_address: bool,
 }
 
 #[cfg(test)]

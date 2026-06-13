@@ -10,7 +10,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use sorted_index_buffer::SortedIndexBuffer;
 use tracing::trace;
 
-use super::PathId;
+use super::{PathId, paths::PathRetransmits};
 use crate::{
     Dir, Duration, FourTuple, Instant, StreamId, TransportError, TransportErrorCode, VarInt,
     connection::StreamsState,
@@ -498,13 +498,6 @@ pub(super) struct SentPacket {
     ///
     /// The actual application data is stored with the stream state.
     pub(super) stream_frames: frame::StreamMetaVec,
-}
-
-/// Data that must be retransmitted over the same path.
-#[derive(Debug, Clone, Default)]
-pub(super) struct PathRetransmits {
-    /// OBSERVED_ADDR frames.
-    pub(super) observed_address: bool,
 }
 
 /// Represents one or more packets that are deemed lost.
