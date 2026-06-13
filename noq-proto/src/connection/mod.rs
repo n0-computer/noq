@@ -6186,26 +6186,7 @@ impl Connection {
 
             // Always include an OBSERVED_ADDR frame with a PATH_CHALLENGE, regardless
             // of whether one has already been sent on this path.
-            if space_id == SpaceId::Data
-                && self
-                    .config
-                    .address_discovery_role
-                    .should_report(&self.peer_params.address_discovery_role)
-            {
-                let frame = frame::ObservedAddr::new(
-                    path.network_path.remote,
-                    self.next_observed_addr_seq_no,
-                );
-                if builder.frame_space_remaining() > frame.size() {
-                    builder.write_frame(frame, stats);
-
-                    self.next_observed_addr_seq_no =
-                        self.next_observed_addr_seq_no.saturating_add(1u8);
-                    path.observed_addr_sent = true;
-
-                    space.pending.observed_addr = false;
-                }
-            }
+            path.pending_observed_addr = true;
         }
 
         // PATH_RESPONSE
@@ -6225,25 +6206,29 @@ impl Connection {
             // NOTE: this is technically not required but might be useful to ride the
             // request/response nature of path challenges to refresh an observation
             // Since PATH_RESPONSE is a probing frame, this is allowed by the spec.
-            if space_id == SpaceId::Data
-                && self
-                    .config
-                    .address_discovery_role
-                    .should_report(&self.peer_params.address_discovery_role)
-            {
-                let frame = frame::ObservedAddr::new(
-                    path.network_path.remote,
-                    self.next_observed_addr_seq_no,
-                );
-                if builder.frame_space_remaining() > frame.size() {
-                    builder.write_frame(frame, stats);
+            path.pending_observed_addr = true;
+        }
 
-                    self.next_observed_addr_seq_no =
-                        self.next_observed_addr_seq_no.saturating_add(1u8);
-                    path.observed_addr_sent = true;
+        // OBSERVED_ADDR
+        if !scheduling_info.is_abandoned
+            && scheduling_info.may_send_data
+            && space_id == SpaceId::Data
+            && self
+                .config
+                .address_discovery_role
+                .should_report(&self.peer_params.address_discovery_role)
+            && (space.pending.observed_addr.remove(&path_id) || path.pending_observed_addr)
+        {
+            let frame =
+                frame::ObservedAddr::new(path.network_path.remote, self.next_observed_addr_seq_no);
+            if builder.frame_space_remaining() > frame.size() {
+                builder.write_frame(frame, stats);
 
-                    space.pending.observed_addr = false;
-                }
+                self.next_observed_addr_seq_no = self.next_observed_addr_seq_no.saturating_add(1u8);
+                path.pending_observed_addr = false;
+                builder.retransmits_mut().observed_addr.insert(path_id);
+            } else {
+                path.pending_observed_addr = true;
             }
         }
 
@@ -6289,28 +6274,6 @@ impl Connection {
             // Consider remotely issued CIDs as retired now that we have sent this frame at
             // least once.
             self.remote_cids.remove(&abandoned_path_id);
-        }
-
-        // OBSERVED_ADDR
-        if !scheduling_info.is_abandoned
-            && scheduling_info.may_send_data
-            && space_id == SpaceId::Data
-            && self
-                .config
-                .address_discovery_role
-                .should_report(&self.peer_params.address_discovery_role)
-            && (!path.observed_addr_sent || space.pending.observed_addr)
-        {
-            let frame =
-                frame::ObservedAddr::new(path.network_path.remote, self.next_observed_addr_seq_no);
-            if builder.frame_space_remaining() > frame.size() {
-                builder.write_frame(frame, stats);
-
-                self.next_observed_addr_seq_no = self.next_observed_addr_seq_no.saturating_add(1u8);
-                path.observed_addr_sent = true;
-
-                space.pending.observed_addr = false;
-            }
         }
 
         // CRYPTO
@@ -7670,7 +7633,7 @@ impl SentFrames {
             PathResponse(_) => self.non_retransmits = true,
             HandshakeDone(_) => self.retransmits_mut().handshake_done = true,
             ReachOut(frame) => self.retransmits_mut().reach_out.push(frame),
-            ObservedAddr(_) => self.retransmits_mut().observed_addr = true,
+            ObservedAddr(_) => { /* We don't have the PathId, it's added externally */ }
             Ping(_) => self.non_retransmits = true,
             ImmediateAck(_) => self.non_retransmits = true,
             AckFrequency(_) => self.retransmits_mut().ack_frequency = true,
