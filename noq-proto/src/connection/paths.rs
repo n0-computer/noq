@@ -218,9 +218,11 @@ pub(super) struct PathData {
     ///
     /// Note that this is across all spaces on this path
     pub(super) in_flight: InFlight,
-    /// Whether this path has had it's remote address reported back to the peer. This only happens
-    /// if both peers agree to so based on their transport parameters.
-    pub(super) observed_addr_sent: bool,
+    /// Whether this path needs to report its remote address back to the peer.
+    ///
+    /// This only happens if both peers agree to do so based on their transport parameters.
+    // TODO(@divma): use PathRetransmits directly
+    pub(super) pending_observed_addr: bool,
     /// Observed address frame with the largest sequence number received from the peer on this path.
     pub(super) last_observed_addr_report: Option<ObservedAddr>,
     /// The QUIC-MULTIPATH path status
@@ -348,7 +350,7 @@ impl PathData {
                 ),
             first_packet_after_rtt_sample: None,
             in_flight: InFlight::new(),
-            observed_addr_sent: false,
+            pending_observed_addr: true,
             last_observed_addr_report: None,
             status: Default::default(),
             first_packet: None,
@@ -398,7 +400,7 @@ impl PathData {
             mtud: prev.mtud.clone(),
             first_packet_after_rtt_sample: prev.first_packet_after_rtt_sample,
             in_flight: InFlight::new(),
-            observed_addr_sent: false,
+            pending_observed_addr: true,
             last_observed_addr_report: None,
             status: prev.status.clone(),
             first_packet: None,
@@ -651,6 +653,12 @@ impl PathData {
                 Some(addr)
             }
         }
+    }
+
+    /// Handles lost retransmittable data that must be sent over this path.
+    pub(crate) fn requeue_path_retransmits(&mut self, path_retransmits: &PathRetransmits) {
+        let PathRetransmits { observed_address } = path_retransmits;
+        self.pending_observed_addr |= observed_address;
     }
 
     pub(crate) fn remote_status(&self) -> Option<PathStatus> {
@@ -1165,6 +1173,19 @@ pub enum SetPathStatusError {
 #[error("closed path")]
 pub struct ClosedPath {
     pub(super) _private: (),
+}
+
+/// Path-specific retransmittable data lost in a packet.
+#[derive(Debug, Default, Clone)]
+pub(super) struct PathRetransmits {
+    pub(super) observed_address: bool,
+}
+
+impl PathRetransmits {
+    pub(super) fn is_empty(&self) -> bool {
+        let PathRetransmits { observed_address } = self;
+        !observed_address
+    }
 }
 
 #[cfg(test)]
