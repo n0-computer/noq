@@ -490,7 +490,7 @@ pub(super) struct SentPacket {
     pub(super) largest_acked: FxHashMap<PathId, u64>,
     /// Data which needs to be retransmitted in case the packet is lost.
     ///
-    /// These might be retransmitted over any available path.
+    /// These might be retransmitted over any available path in the same [`SpaceKind`].
     pub(super) retransmits: ThinRetransmits,
     /// Path-specific data which needs to be retransmitted in case the packet is lost.
     pub(super) path_retransmits: PathRetransmits,

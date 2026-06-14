@@ -25,8 +25,8 @@ use crate::{
     config::{ServerConfig, TransportConfig},
     congestion::Controller,
     connection::{
-        qlog::{QlogRecvPacket, QlogSink},
         paths::PathRetransmits,
+        qlog::{QlogRecvPacket, QlogSink},
         spaces::LostPacket,
         stats::PathStatsMap,
         timer::{ConnTimer, PathTimer},
