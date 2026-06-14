@@ -338,7 +338,7 @@ impl TimerTable {
     }
 
     /// Get the next queued timeout
-    pub(super) fn peek(&mut self) -> Option<Instant> {
+    pub(super) fn peek(&self) -> Option<Instant> {
         // TODO: this is currently linear in the number of paths
 
         let min_generic = self.generic.iter().filter_map(|&x| x).min();
