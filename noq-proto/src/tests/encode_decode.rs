@@ -92,3 +92,54 @@ fn maybe_frame_known_never_padding(frame: MaybeFrame) {
         prop_assert_ne!(ft, FrameType::Padding);
     }
 }
+
+#[test]
+fn reset_stream_at_type_byte_and_roundtrip() {
+    use crate::frame::ResetStreamAt;
+    use crate::{Dir, Side, StreamId, VarInt};
+
+    let frame = ResetStreamAt {
+        id: StreamId::new(Side::Client, Dir::Uni, 3),
+        error_code: VarInt::from_u32(42),
+        final_offset: VarInt::from_u32(1000),
+        reliable_size: VarInt::from_u32(250),
+    };
+
+    let mut encoded = BytesMut::new();
+    encode_frame(&Frame::ResetStreamAt(frame), &mut encoded);
+    // The RFC assigns RESET_STREAM_AT the frame type 0x24, which fits in a single varint byte.
+    assert_eq!(encoded[0], 0x24, "RESET_STREAM_AT must use frame type 0x24");
+
+    let mut iter = crate::frame::Iter::new(encoded.freeze()).unwrap();
+    let decoded = iter.next().unwrap().unwrap();
+    assert_eq!(decoded, Frame::ResetStreamAt(frame));
+    assert!(iter.take_remaining().is_empty());
+}
+
+#[test]
+fn reset_stream_at_reliable_exceeds_final_is_rejected() {
+    use crate::TransportErrorCode;
+    use crate::frame::ResetStreamAt;
+    use crate::{Dir, Side, StreamId, VarInt};
+
+    // A reliable size larger than the final size is malformed and must be rejected with a
+    // FRAME_ENCODING_ERROR (draft-ietf-quic-reliable-stream-reset section 4). `encode` does not
+    // validate, so we can construct the illegal wire bytes directly.
+    let frame = ResetStreamAt {
+        id: StreamId::new(Side::Client, Dir::Bi, 0),
+        error_code: VarInt::from_u32(7),
+        final_offset: VarInt::from_u32(10),
+        reliable_size: VarInt::from_u32(11),
+    };
+
+    let mut encoded = BytesMut::new();
+    encode_frame(&Frame::ResetStreamAt(frame), &mut encoded);
+
+    let mut iter = crate::frame::Iter::new(encoded.freeze()).unwrap();
+    let err = iter
+        .next()
+        .unwrap()
+        .expect_err("reliable > final must not decode");
+    let err = crate::TransportError::from(err);
+    assert_eq!(err.code, TransportErrorCode::FRAME_ENCODING_ERROR);
+}

@@ -2517,12 +2517,26 @@ impl Encodable for RemoveAddress {
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(test, derive(Arbitrary))]
 #[derive(Debug, Copy, Clone, derive_more::Display)]
-#[display("RESET_STREAM id: {id}")]
+#[display("RESET_STREAM_AT id: {id}, final: {final_offset}, reliable: {reliable_size}")]
 pub(crate) struct ResetStreamAt {
     pub(crate) id: StreamId,
     pub(crate) error_code: VarInt,
     pub(crate) final_offset: VarInt,
+    // The wire format requires `reliable_size <= final_offset`; a frame violating this is a
+    // `FRAME_ENCODING_ERROR` on decode. Constrain generated values so that the encode/decode
+    // round-trip proptest only produces decodable frames.
+    #[cfg_attr(test, strategy(reset_stream_at_reliable_size(#final_offset)))]
     pub(crate) reliable_size: VarInt,
+}
+
+/// Proptest strategy producing a `reliable_size` no larger than `final_offset`, as required by
+/// the RESET_STREAM_AT wire format.
+#[cfg(test)]
+fn reset_stream_at_reliable_size(
+    final_offset: VarInt,
+) -> impl proptest::strategy::Strategy<Value = VarInt> {
+    use proptest::strategy::Strategy;
+    (0..=final_offset.0).prop_map(VarInt)
 }
 
 impl ResetStreamAt {
@@ -2537,7 +2551,7 @@ impl FrameStruct for ResetStreamAt {
 
 impl Encodable for ResetStreamAt {
     fn encode<W: BufMut>(&self, out: &mut W) {
-        out.write(FrameType::ResetStream); // 1 byte
+        out.write(FrameType::ResetStreamAt); // 1 byte
         out.write(self.id); // <= 8 bytes
         out.write(self.error_code); // <= 8 bytes
         out.write(self.final_offset); // <= 8 bytes

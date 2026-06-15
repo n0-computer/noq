@@ -558,8 +558,15 @@ pub struct Retransmits {
     pub(super) remove_address: BTreeSet<RemoveAddress>,
     /// Round and local addresses to advertise in `REACH_OUT` frames
     pub(super) reach_out: PendingReachOutFrames,
-    /// Pending RESET_STREAM_AT frames: (StreamId, offset, error_code).
-    pub(super) reset_stream_at: Vec<(StreamId, VarInt, VarInt)>,
+    /// Streams that need a RESET_STREAM_AT frame (re)transmitted, paired with the reliable size the
+    /// pending/sent frame carries.
+    ///
+    /// The final size, reliable size, and error code of an outgoing frame are reconstructed from
+    /// the live send-stream state when it is written (mirroring how `reset_stream` rebuilds its
+    /// final offset), so the stored reliable size is ignored on (re)transmission. It is retained
+    /// only so that, on acknowledgement, a frame carrying a now-superseded (larger) reliable size
+    /// can be distinguished from the current one (see `reset_at_acked`).
+    pub(super) reset_stream_at: Vec<(StreamId, VarInt)>,
 }
 
 impl Retransmits {

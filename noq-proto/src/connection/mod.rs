@@ -3152,6 +3152,9 @@ impl Connection {
             for (id, _) in retransmits.reset_stream.iter() {
                 self.streams.reset_acked(*id);
             }
+            for (id, reliable_size) in retransmits.reset_stream_at.iter() {
+                self.streams.reset_at_acked(*id, *reliable_size);
+            }
         }
 
         for frame in info.stream_frames {
@@ -5100,7 +5103,16 @@ impl Connection {
                     }
                 }
                 Frame::ResetStreamAt(frame) => {
-                    todo!();
+                    // We only advertise (and thus permit) RESET_STREAM_AT when the extension is
+                    // enabled; receiving one otherwise is a protocol violation.
+                    if !self.endpoint_config.reset_stream_at {
+                        return Err(TransportError::PROTOCOL_VIOLATION(
+                            "RESET_STREAM_AT frame received without negotiating the extension",
+                        ));
+                    }
+                    if self.streams.received_reset_at(frame)?.should_transmit() {
+                        self.spaces[SpaceId::Data].pending.max_data = true;
+                    }
                 }
                 Frame::DataBlocked(DataBlocked(offset)) => {
                     debug!(offset, "peer claims to be blocked at connection level");
@@ -7728,13 +7740,10 @@ impl SentFrames {
             StreamsBlocked(streams_blocked) => {
                 self.retransmits_mut().streams_blocked[streams_blocked.dir as usize] = true
             }
-            ResetStreamAt(frame) => {
-                self.retransmits_mut().reset_stream_at.push((
-                    frame.id,
-                    frame.final_offset,
-                    frame.error_code,
-                ));
-            }
+            ResetStreamAt(frame) => self
+                .retransmits_mut()
+                .reset_stream_at
+                .push((frame.id, frame.reliable_size)),
         }
     }
 }

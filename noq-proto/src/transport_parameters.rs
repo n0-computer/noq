@@ -221,7 +221,9 @@ impl TransportParameters {
             || cached.grease_quic_bit && !self.grease_quic_bit
             || cached.address_discovery_role != self.address_discovery_role
             || cached.max_remote_nat_traversal_addresses != self.max_remote_nat_traversal_addresses
-            || cached.reset_stream_at != self.reset_stream_at
+            // The extension may be newly enabled on resumption, but a server MUST NOT disable it
+            // (draft-ietf-quic-reliable-stream-reset §3).
+            || cached.reset_stream_at && !self.reset_stream_at
         {
             return Err(TransportError::PROTOCOL_VIOLATION(
                 "0-RTT accepted with incompatible transport parameters",
@@ -1000,5 +1002,28 @@ mod test {
         };
         high_limit.validate_resumption_from(&low_limit).unwrap();
         low_limit.validate_resumption_from(&high_limit).unwrap_err();
+    }
+
+    #[test]
+    fn reset_stream_at_empty_value_enables_support() {
+        // The parameter is advertised with an empty value.
+        let mut buf = Vec::new();
+        buf.write_var(TransportParameterId::ResetStreamAt as u64);
+        buf.write_var(0);
+        let params = TransportParameters::read(Side::Server, &mut buf.as_slice()).unwrap();
+        assert!(params.reset_stream_at);
+    }
+
+    #[test]
+    fn reset_stream_at_rejects_non_empty_value() {
+        // A non-empty `reset_stream_at` value must be rejected.
+        let mut buf = Vec::new();
+        buf.write_var(TransportParameterId::ResetStreamAt as u64);
+        buf.write_var(1);
+        buf.put_u8(0);
+        assert_eq!(
+            TransportParameters::read(Side::Server, &mut buf.as_slice()),
+            Err(Error::Malformed)
+        );
     }
 }

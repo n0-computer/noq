@@ -153,14 +153,20 @@ impl Recv {
     }
 
     /// Whether data is still being accepted from the peer
+    ///
+    /// Remains true after a RESET_STREAM_AT frame is received, since the sender may still
+    /// retransmit reliable data needed to fill gaps below the reliable size.
     pub(super) fn is_receiving(&self) -> bool {
-        matches!(self.state, RecvState::Recv { .. })
+        matches!(
+            self.state,
+            RecvState::Recv { .. } | RecvState::ResetRecvdAt { .. }
+        )
     }
 
     fn final_offset(&self) -> Option<u64> {
         match self.state {
             RecvState::Recv { size } => size,
-            RecvState::ResetRecvd { size, .. } => Some(size),
+            RecvState::ResetRecvd { size, .. } | RecvState::ResetRecvdAt { size, .. } => Some(size),
         }
     }
 
@@ -199,9 +205,124 @@ impl Recv {
         Ok(true)
     }
 
+    /// Process a RESET_STREAM_AT (reliable reset) frame.
+    ///
+    /// `final_size` is the stream's final size and `reliable_size` (`<= final_size`) the offset up
+    /// to which data must still be delivered to the application. The error code is surfaced to the
+    /// application only after it has read all data up to the reliable size.
+    ///
+    /// Establishes the final size for flow control like [`Self::reset`], but instead of discarding
+    /// buffered data it retains it for delivery up to the reliable size. To avoid double-counting
+    /// connection flow control as retransmitted reliable data arrives, the receive high-water mark
+    /// is advanced to the final size here, so subsequent [`Self::ingest`] calls consume no further
+    /// credit.
+    pub(super) fn reset_at(
+        &mut self,
+        error_code: VarInt,
+        final_size: VarInt,
+        reliable_size: VarInt,
+        received: u64,
+        max_data: u64,
+    ) -> Result<ResetAtOutcome, TransportError> {
+        let final_size = final_size.into_inner();
+        // The wire decoder already rejects `reliable > final`; clamp defensively for callers that
+        // construct frames directly (e.g. fuzzing).
+        let reliable_size = reliable_size.into_inner().min(final_size);
+
+        // The final size is immutable once known and may not be below already-received data.
+        if let Some(known) = self.final_offset() {
+            if known != final_size {
+                return Err(TransportError::FINAL_SIZE_ERROR("inconsistent value"));
+            }
+        } else if self.end > final_size {
+            return Err(TransportError::FINAL_SIZE_ERROR(
+                "lower than high water mark",
+            ));
+        }
+
+        // We cannot un-deliver data already read beyond the reliable size.
+        let deliver_cap = reliable_size.max(self.assembler.bytes_read());
+
+        match self.state {
+            RecvState::ResetRecvd {
+                error_code: prev_code,
+                ..
+            } => {
+                // The error code is immutable across frames for the same stream (RFC §5.2).
+                if error_code != prev_code {
+                    return Err(TransportError::STREAM_STATE_ERROR(
+                        "RESET_STREAM_AT error code changed",
+                    ));
+                }
+                // An ordinary reset already fully terminated the stream (reliable size 0); a
+                // reliable reset cannot un-terminate it or reduce the reliable size below zero.
+                Ok(ResetAtOutcome::Ignored)
+            }
+            RecvState::ResetRecvdAt {
+                reliable_size: prev_cap,
+                error_code: prev_code,
+                ..
+            } => {
+                // The error code is immutable across frames for the same stream (RFC §5.2).
+                if error_code != prev_code {
+                    return Err(TransportError::STREAM_STATE_ERROR(
+                        "RESET_STREAM_AT error code changed",
+                    ));
+                }
+                if deliver_cap >= prev_cap {
+                    // The reliable size did not decrease; the spec requires ignoring increases.
+                    return Ok(ResetAtOutcome::Ignored);
+                }
+                self.state = RecvState::ResetRecvdAt {
+                    size: final_size,
+                    reliable_size: deliver_cap,
+                    error_code,
+                };
+                // Release connection credit for data between the old and new caps that will no
+                // longer be delivered. The final size, and thus `data_recvd`, is unchanged.
+                Ok(ResetAtOutcome::Applied {
+                    received_delta: 0,
+                    credit: prev_cap - deliver_cap,
+                })
+            }
+            RecvState::Recv { .. } => {
+                // Bounds-check the final size against flow control. The returned value is the
+                // number of so-far-unaccounted bytes up to the final size (`final_size - end`).
+                let received_delta = self.credit_consumed_by(final_size, received, max_data)?;
+                // Account every byte up to the final size as received, so retransmitted reliable
+                // data ingested later adds no further credit (see method docs).
+                self.end = final_size;
+                self.state = RecvState::ResetRecvdAt {
+                    size: final_size,
+                    reliable_size: deliver_cap,
+                    error_code,
+                };
+                // Release connection credit for the tail beyond the reliable size, which will never
+                // be delivered. Data up to the reliable size releases its credit as it is read.
+                Ok(ResetAtOutcome::Applied {
+                    received_delta,
+                    credit: final_size - deliver_cap,
+                })
+            }
+        }
+    }
+
     pub(super) fn reset_code(&self) -> Option<VarInt> {
         match self.state {
             RecvState::ResetRecvd { error_code, .. } => Some(error_code),
+            _ => None,
+        }
+    }
+
+    /// If a reliable reset (RESET_STREAM_AT) is in progress, the offset up to which data is still to
+    /// be delivered to the application.
+    ///
+    /// Used when a plain RESET_STREAM follows a RESET_STREAM_AT: only the credit for the
+    /// still-deliverable region `[bytes_read, cap)` must be released, because the tail beyond the
+    /// reliable size already had its credit released when the RESET_STREAM_AT was processed.
+    pub(super) fn reliable_reset_deliver_cap(&self) -> Option<u64> {
+        match self.state {
+            RecvState::ResetRecvdAt { reliable_size, .. } => Some(reliable_size),
             _ => None,
         }
     }
@@ -296,7 +417,16 @@ impl<'a> Chunks<'a> {
             ChunksState::Finalized => panic!("must not call next() after finalize()"),
         };
 
-        if let Some(chunk) = rs.assembler.read(max_length, self.ordered) {
+        // For a reliable reset, never deliver data beyond the reliable size. The cap is by stream
+        // offset (not the read cursor) so it is correct for unordered reads too.
+        let chunk = match rs.state {
+            RecvState::ResetRecvdAt { reliable_size, .. } => {
+                rs.assembler
+                    .read_capped(max_length, self.ordered, reliable_size)
+            }
+            _ => rs.assembler.read(max_length, self.ordered),
+        };
+        if let Some(chunk) = chunk {
             self.read += chunk.bytes.len() as u64;
             return Ok(Some(chunk));
         }
@@ -312,6 +442,26 @@ impl<'a> Chunks<'a> {
                 };
                 self.streams.stream_recv_freed(self.id, recv);
                 Err(ReadError::Reset(error_code))
+            }
+            RecvState::ResetRecvdAt {
+                reliable_size,
+                error_code,
+                ..
+            } => {
+                if rs.assembler.bytes_read() >= reliable_size {
+                    // All reliable data has been delivered; surface the reset and dispose of the
+                    // stream. Any data buffered beyond the reliable size is dropped undelivered.
+                    let state = mem::replace(&mut self.state, ChunksState::Reset(error_code));
+                    let recv = match state {
+                        ChunksState::Readable(recv) => StreamRecv::Open(recv),
+                        _ => unreachable!("state must be ChunkState::Readable"),
+                    };
+                    self.streams.stream_recv_freed(self.id, recv);
+                    Err(ReadError::Reset(error_code))
+                } else {
+                    // A gap remains below the reliable size; wait for the sender to retransmit it.
+                    Err(ReadError::Blocked)
+                }
             }
             RecvState::Recv { size } => {
                 if size == Some(rs.end) && rs.assembler.bytes_read() == rs.end {
@@ -429,10 +579,41 @@ impl From<IllegalOrderedRead> for ReadableError {
     }
 }
 
+/// The effect of a RESET_STREAM_AT frame on connection-level flow control, returned by
+/// [`Recv::reset_at`] for the caller to apply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ResetAtOutcome {
+    /// The frame was redundant, or attempted to increase the reliable size, and was ignored.
+    Ignored,
+    /// A reliable reset was newly established or its reliable size reduced.
+    Applied {
+        /// Amount to add to the connection-level received-bytes counter (`data_recvd`): the
+        /// never-arriving tail up to the final size. Zero when only reducing the reliable size.
+        received_delta: u64,
+        /// Connection flow-control credit to release immediately for data beyond the reliable size
+        /// that will never be delivered to the application.
+        credit: u64,
+    },
+}
+
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 enum RecvState {
-    Recv { size: Option<u64> },
-    ResetRecvd { size: u64, error_code: VarInt },
+    Recv {
+        size: Option<u64>,
+    },
+    ResetRecvd {
+        size: u64,
+        error_code: VarInt,
+    },
+    /// A RESET_STREAM_AT (reliable reset) was received. Stream data up to `reliable_size` is still
+    /// delivered to the application; once it has all been read, the application observes the reset
+    /// carrying `error_code`. `size` is the stream's final size (`>= reliable_size`), used for
+    /// flow-control accounting and final-size consistency checks.
+    ResetRecvdAt {
+        size: u64,
+        reliable_size: u64,
+        error_code: VarInt,
+    },
 }
 
 impl Default for RecvState {
@@ -540,5 +721,142 @@ mod tests {
             max_stream_data, RECV_WINDOW,
             "stream flow control credit isn't issued after stop"
         );
+    }
+
+    const WINDOW: u64 = 1024;
+
+    fn stream_id() -> StreamId {
+        StreamId::new(Side::Client, Dir::Uni, 0)
+    }
+
+    /// Ingest `len` bytes at `offset` into a receive stream, returning the new connection bytes.
+    fn ingest_at(r: &mut Recv, offset: u64, len: usize, received: u64) -> u64 {
+        let data = Bytes::from(vec![0u8; len]);
+        let (new_bytes, _) = r
+            .ingest(
+                frame::Stream {
+                    id: stream_id(),
+                    offset,
+                    fin: false,
+                    data,
+                },
+                len,
+                received,
+                WINDOW,
+            )
+            .unwrap();
+        new_bytes
+    }
+
+    #[test]
+    fn reset_at_establishes_reliable_reset() {
+        let mut r = Recv::new(WINDOW);
+        assert_eq!(ingest_at(&mut r, 0, 30, 0), 30);
+
+        // Final size 100, deliver up to 40.
+        let outcome = r
+            .reset_at(7u32.into(), 100u32.into(), 40u32.into(), 30, WINDOW)
+            .unwrap();
+        // The never-arriving tail [30, 100) is accounted as received (70 bytes); the never-delivered
+        // tail [40, 100) releases its connection credit immediately (60 bytes).
+        assert_eq!(
+            outcome,
+            ResetAtOutcome::Applied {
+                received_delta: 70,
+                credit: 60,
+            }
+        );
+        assert!(
+            r.is_receiving(),
+            "must keep accepting retransmitted reliable data"
+        );
+        assert_eq!(r.reset_code(), None, "reset surfaces only after delivery");
+    }
+
+    #[test]
+    fn reset_at_does_not_double_count_retransmits() {
+        let mut r = Recv::new(WINDOW);
+        assert_eq!(ingest_at(&mut r, 0, 20, 0), 20);
+        r.reset_at(0u32.into(), 100u32.into(), 40u32.into(), 20, WINDOW)
+            .unwrap();
+
+        // Retransmitted reliable data [20, 40) arriving after the reset must not consume any more
+        // connection credit: the final size was already fully accounted.
+        assert_eq!(ingest_at(&mut r, 20, 20, 100), 0);
+    }
+
+    #[test]
+    fn reset_at_ignores_reliable_size_increase() {
+        let mut r = Recv::new(WINDOW);
+        r.reset_at(0u32.into(), 100u32.into(), 40u32.into(), 0, WINDOW)
+            .unwrap();
+        // A later (reordered) frame raising the reliable size must be ignored.
+        let outcome = r
+            .reset_at(0u32.into(), 100u32.into(), 60u32.into(), 100, WINDOW)
+            .unwrap();
+        assert_eq!(outcome, ResetAtOutcome::Ignored);
+    }
+
+    #[test]
+    fn reset_at_reduces_reliable_size() {
+        let mut r = Recv::new(WINDOW);
+        r.reset_at(0u32.into(), 100u32.into(), 40u32.into(), 0, WINDOW)
+            .unwrap();
+        // Reducing 40 -> 25 releases the 15 bytes that will no longer be delivered.
+        let outcome = r
+            .reset_at(0u32.into(), 100u32.into(), 25u32.into(), 100, WINDOW)
+            .unwrap();
+        assert_eq!(
+            outcome,
+            ResetAtOutcome::Applied {
+                received_delta: 0,
+                credit: 15,
+            }
+        );
+    }
+
+    #[test]
+    fn reset_at_final_size_must_be_consistent() {
+        let mut r = Recv::new(WINDOW);
+        r.reset_at(0u32.into(), 100u32.into(), 40u32.into(), 0, WINDOW)
+            .unwrap();
+        let err = r
+            .reset_at(0u32.into(), 90u32.into(), 40u32.into(), 100, WINDOW)
+            .unwrap_err();
+        assert_eq!(err.code, crate::TransportErrorCode::FINAL_SIZE_ERROR);
+    }
+
+    #[test]
+    fn reset_at_final_size_below_high_water_is_error() {
+        let mut r = Recv::new(WINDOW);
+        assert_eq!(ingest_at(&mut r, 0, 50, 0), 50);
+        // A final size below the data already received is illegal.
+        let err = r
+            .reset_at(0u32.into(), 40u32.into(), 30u32.into(), 50, WINDOW)
+            .unwrap_err();
+        assert_eq!(err.code, crate::TransportErrorCode::FINAL_SIZE_ERROR);
+    }
+
+    #[test]
+    fn reset_at_respects_connection_flow_control() {
+        let mut r = Recv::new(WINDOW);
+        // Final size 50 would push consumption (20 already + 50) past the 40-byte budget.
+        let err = r
+            .reset_at(0u32.into(), 50u32.into(), 30u32.into(), 20, 40)
+            .unwrap_err();
+        assert_eq!(err.code, crate::TransportErrorCode::FLOW_CONTROL_ERROR);
+    }
+
+    #[test]
+    fn reset_at_error_code_is_immutable() {
+        let mut r = Recv::new(WINDOW);
+        r.reset_at(7u32.into(), 100u32.into(), 40u32.into(), 0, WINDOW)
+            .unwrap();
+        // A later frame for the same stream that changes the error code is a STREAM_STATE_ERROR
+        // (RFC §5.2), even when it does not reduce the reliable size.
+        let err = r
+            .reset_at(8u32.into(), 100u32.into(), 40u32.into(), 100, WINDOW)
+            .unwrap_err();
+        assert_eq!(err.code, crate::TransportErrorCode::STREAM_STATE_ERROR);
     }
 }

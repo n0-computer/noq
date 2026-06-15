@@ -94,27 +94,37 @@ impl SendBufferData {
         }
     }
 
-    /// Discard data from the end of the buffer.
+    /// Discard data from the end of the buffer, retaining only the bytes before `offset`.
     ///
-    /// Calling this with offset outside of [`Self::range`] is essentially a no-op since
-    /// nothing needs to be truncated.
+    /// `offset` is an absolute stream offset. Values at or beyond [`Self::range`]`.end` are a
+    /// no-op (nothing to drop); values at or below [`Self::range`]`.start` clear the buffer. The
+    /// front offset ([`Self::range`]`.start`) is never moved, so already-acknowledged-and-popped
+    /// data is unaffected.
     fn truncate(&mut self, offset: u64) {
-        if !self.range().contains(&offset) {
+        // Number of bytes to retain from the front of the buffer.
+        let new_len = offset.saturating_sub(self.offset).min(self.len as u64) as usize;
+        if new_len >= self.len {
             return;
         }
 
-        // clear truncated data
-        let mut n = self.offset;
+        // Walk the stored segments (and finally `last_segment`), keeping the first `new_len`
+        // bytes and dropping everything after them.
+        let mut kept = 0usize;
         for segment in self.segments.iter_mut() {
-            if (n + segment.len() as u64) < offset {
-                n += segment.len() as u64;
-            } else if n < offset {
-                segment.truncate((offset - n) as usize);
-                n += offset - n;
-            } else {
+            if kept >= new_len {
                 segment.clear();
+            } else if kept + segment.len() > new_len {
+                segment.truncate(new_len - kept);
+                kept = new_len;
+            } else {
+                kept += segment.len();
             }
         }
+        // Any remainder lives in `last_segment`. If the segments already cover `new_len`, the
+        // whole `last_segment` is beyond the cut and is dropped.
+        self.last_segment.truncate(new_len.saturating_sub(kept));
+
+        self.len = new_len;
 
         // remove empty segments
         self.segments.retain(|s| !s.is_empty());
@@ -263,9 +273,22 @@ impl SendBuffer {
         self.retransmits.remove(0..self.fully_acked_offset());
     }
 
+    /// Discard buffered data at or beyond `offset`, abandoning it.
+    ///
+    /// Used to implement RESET_STREAM_AT: data past the reliable size is no longer (re)transmitted.
+    /// The new end offset is clamped to the fully-acknowledged offset, so already-sent-and-acked
+    /// data is retained. Bookkeeping for the discarded tail (unsent cursor, queued retransmits, and
+    /// acknowledged ranges) is dropped to keep the buffer consistent.
     pub(super) fn truncate(&mut self, offset: u64) {
+        let old_end = self.offset();
         self.data.truncate(offset);
-        self.retransmits.remove(offset..self.offset());
+        let new_end = self.offset();
+        debug_assert!(new_end <= old_end);
+
+        // We no longer have the discarded data, so we must not try to send or track it.
+        self.unsent = self.unsent.min(new_end);
+        self.retransmits.remove(new_end..old_end);
+        self.acks.remove(new_end..old_end);
     }
 
     /// Compute the next range to transmit on this stream and update state to account for that
@@ -597,6 +620,94 @@ mod tests {
         assert!(buf.acks.is_empty());
     }
 
+    #[test]
+    fn truncate_basic() {
+        let mut buf = SendBuffer::new();
+        const MSG: &[u8] = b"Hello, world!"; // 13 bytes, coalesced into last_segment
+        buf.write(MSG);
+        assert_eq!(buf.offset(), 13);
+
+        buf.truncate(5);
+        assert_eq!(buf.offset(), 5);
+        assert_eq!(aggregate_unacked(&buf), &MSG[..5]);
+
+        // Truncating at or past the end is a no-op.
+        buf.truncate(100);
+        assert_eq!(buf.offset(), 5);
+        assert_eq!(aggregate_unacked(&buf), &MSG[..5]);
+
+        // poll_transmit never yields data beyond the truncation point.
+        assert_eq!(buf.poll_transmit(64), (0..5, true));
+        assert_eq!(buf.poll_transmit(64), (5..5, true));
+        assert!(!buf.has_unsent_data());
+    }
+
+    #[test]
+    fn truncate_multiple_segments() {
+        let mut buf = SendBuffer::new();
+        // Segments larger than MAX_COMBINE are stored as standalone segments.
+        buf.write(Bytes::from(vec![1u8; 2000]));
+        buf.write(Bytes::from(vec![2u8; 2000]));
+        assert_eq!(buf.offset(), 4000);
+
+        // Cut inside the second segment.
+        buf.truncate(3000);
+        assert_eq!(buf.offset(), 3000);
+        let data = aggregate_unacked(&buf);
+        assert_eq!(data.len(), 3000);
+        assert!(data[..2000].iter().all(|&x| x == 1));
+        assert!(data[2000..].iter().all(|&x| x == 2));
+
+        // Cut exactly at the boundary of the first segment.
+        buf.truncate(2000);
+        assert_eq!(buf.offset(), 2000);
+        let data = aggregate_unacked(&buf);
+        assert_eq!(data.len(), 2000);
+        assert!(data.iter().all(|&x| x == 1));
+    }
+
+    #[test]
+    fn truncate_after_ack_and_below_front() {
+        let mut buf = SendBuffer::new();
+        const MSG: &[u8] = b"abcdefghij"; // 10 bytes
+        buf.write(MSG);
+        assert_eq!(buf.poll_transmit(64), (0..10, true));
+        buf.ack(0..4); // drop the first 4 bytes from the front
+        assert_eq!(buf.fully_acked_offset(), 4);
+
+        // Truncate within the retained range.
+        buf.truncate(7);
+        assert_eq!(buf.offset(), 7);
+        assert_eq!(aggregate_unacked(&buf), b"efg");
+
+        // Truncating below the (advanced) front clears the buffer but keeps the front offset.
+        buf.truncate(2);
+        assert_eq!(buf.offset(), 4);
+        assert_eq!(buf.fully_acked_offset(), 4);
+        assert!(buf.is_fully_acked());
+        assert!(aggregate_unacked(&buf).is_empty());
+    }
+
+    #[test]
+    fn truncate_drops_retransmits_and_unacked() {
+        let mut buf = SendBuffer::new();
+        const MSG: &[u8] = b"Hello, world with extra data!"; // 29 bytes
+        buf.write(MSG);
+        assert_eq!(buf.poll_transmit(64), (0..29, true));
+        // Mark a tail range lost, queuing it for retransmission.
+        buf.retransmit(20..29);
+        assert_eq!(buf.unacked(), 29);
+        assert!(buf.has_unsent_data());
+
+        // Truncating away the lost tail must drop the queued retransmit and update accounting,
+        // otherwise a later poll_transmit would request data we no longer have and panic.
+        buf.truncate(15);
+        assert_eq!(buf.offset(), 15);
+        assert_eq!(buf.unacked(), 15);
+        assert!(!buf.has_unsent_data());
+        assert_eq!(buf.poll_transmit(64), (15..15, true));
+    }
+
     fn aggregate_unacked(buf: &SendBuffer) -> Vec<u8> {
         buf.data.to_vec()
     }
@@ -636,6 +747,8 @@ mod proptests {
         Retransmit(Range<u64>),
         // poll_transmit with the given max len
         PollTransmit(#[strategy(16usize..1024)] usize),
+        // truncate the buffer at a random offset within the sent range
+        Truncate(u64),
     }
 
     /// Map a range into a target range
@@ -689,6 +802,21 @@ mod proptests {
                     let range = map_range(range, 0..max_send_offset);
                     trace!("Op::Retransmit({:?})", range);
                     sb.retransmit(range);
+                }
+                Op::Truncate(raw) => {
+                    // Choose a truncation point within the data that has actually been sent.
+                    let target = if max_send_offset == 0 {
+                        0
+                    } else {
+                        raw % (max_send_offset + 1)
+                    };
+                    trace!("Op::Truncate({})", target);
+                    sb.truncate(target);
+                    // `truncate` clamps the new end to the fully-acked offset, so read back the
+                    // authoritative end and mirror it in the reference model.
+                    let new_end = sb.offset();
+                    buf.truncate(new_end as usize);
+                    max_send_offset = max_send_offset.min(new_end);
                 }
                 Op::PollTransmit(max_len) => {
                     trace!("Op::PollTransmit({})", max_len);

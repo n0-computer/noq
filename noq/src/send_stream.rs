@@ -219,16 +219,26 @@ impl SendStream {
         Ok(())
     }
 
-    /// Close the send stream immediately, delivering data up to `offset`.
+    /// Close the send stream, reliably delivering data up to `reliable_size` before the reset.
     ///
-    /// No new data can be written after calling this method. Data up to `offset` is still
-    /// reliably delivered, but any remaining stream data may never be transmitted or lost.
+    /// Sends a RESET_STREAM_AT frame ([draft-ietf-quic-reliable-stream-reset]): the peer is
+    /// delivered all stream data up to `reliable_size` and only then observes the reset carrying
+    /// `error_code`. Unlike [`Self::reset`], data up to the reliable size is retransmitted on loss.
+    /// No new data can be written after calling this; any data beyond the reliable size may never
+    /// be delivered.
     ///
-    /// Fails if [`Self::finish`], [`Self::reset`] or [`Self::reset_at`] was previously
-    /// called, of if the remote stopped the stream.
+    /// May be called repeatedly to *reduce* `reliable_size` (the error code must stay the same).
+    /// `reliable_size` may not exceed the number of bytes written to the stream.
+    ///
+    /// Fails with [`ResetStreamAtError::Unsupported`] if the peer did not advertise support for the
+    /// extension, or with [`ResetStreamAtError::ClosedStream`] if [`Self::finish`] or
+    /// [`Self::reset`] was previously called, or [`ResetStreamAtError::Stopped`] if the peer
+    /// stopped the stream.
+    ///
+    /// [draft-ietf-quic-reliable-stream-reset]: https://datatracker.ietf.org/doc/html/draft-ietf-quic-reliable-stream-reset
     pub fn reset_at(
         &mut self,
-        offset: VarInt,
+        reliable_size: VarInt,
         error_code: VarInt,
     ) -> Result<(), ResetStreamAtError> {
         let mut conn = self.conn.lock_and_wake("SendStream::reset_at");
@@ -238,7 +248,7 @@ impl SendStream {
         }
         conn.inner
             .send_stream(self.stream)
-            .reset_at(offset, error_code)?;
+            .reset_at(reliable_size, error_code)?;
         Ok(())
     }
 

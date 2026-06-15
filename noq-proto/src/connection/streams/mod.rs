@@ -15,7 +15,7 @@ use crate::{
 };
 
 mod recv;
-use recv::Recv;
+use recv::{Recv, ResetAtOutcome};
 pub use recv::{Chunks, ReadError, ReadableError};
 
 mod send;
@@ -340,8 +340,8 @@ impl<'a> SendStream<'a> {
             .map(get_or_insert_send(max_send_data))
             .ok_or(ClosedStream { _private: () })?;
 
-        if matches!(stream.state, SendState::ResetSent) {
-            // Redundant reset call
+        if matches!(stream.state, SendState::ResetSent) || stream.reset_at.is_some() {
+            // Redundant reset call, or a reliable reset (RESET_STREAM_AT) is already in progress.
             return Err(ClosedStream { _private: () });
         }
 
@@ -356,12 +356,32 @@ impl<'a> SendStream<'a> {
         Ok(())
     }
 
-    /// Abandon transmitting data on a stream, deliver reliably up to `offset`.
+    /// Abandon transmitting data on a stream, reliably delivering data up to `reliable_size` first.
+    ///
+    /// Sends a RESET_STREAM_AT frame ([draft-ietf-quic-reliable-stream-reset]): the peer is
+    /// delivered all stream data up to `reliable_size` and only then observes the reset carrying
+    /// `error_code`. Unlike [`Self::reset`], data up to the reliable size is retransmitted on loss.
+    ///
+    /// May be called repeatedly to *reduce* the reliable size (the error code must stay the same).
+    /// `reliable_size` may not exceed the number of bytes written to the stream.
+    ///
+    /// Returns [`ResetStreamAtError::Unsupported`] if the peer did not advertise support for the
+    /// extension, in which case no frame is sent and the stream is left untouched.
+    ///
+    /// [draft-ietf-quic-reliable-stream-reset]: https://datatracker.ietf.org/doc/html/draft-ietf-quic-reliable-stream-reset
+    ///
+    /// # Panics
+    /// - when applied to a receive stream
     pub fn reset_at(
         &mut self,
-        offset: VarInt,
+        reliable_size: VarInt,
         error_code: VarInt,
     ) -> Result<(), ResetStreamAtError> {
+        // We may only send RESET_STREAM_AT frames if the peer advertised that it can receive them.
+        if !self.state.peer_reset_stream_at {
+            return Err(ResetStreamAtError::Unsupported);
+        }
+
         let max_send_data = self.state.max_send_data(self.id);
         let stream = self
             .state
@@ -370,13 +390,22 @@ impl<'a> SendStream<'a> {
             .map(get_or_insert_send(max_send_data))
             .ok_or(ResetStreamAtError::ClosedStream)?;
 
-        if matches!(stream.state, SendState::ResetSent) {
-            return Err(ResetStreamAtError::ClosedStream);
+        // Restore the send window consumed by data beyond the reliable size, which we are about to
+        // discard. Connection-level flow control is left to the peer, which reissues credit based
+        // on the final size communicated in the RESET_STREAM_AT frame.
+        let unacked_before = stream.pending.unacked();
+        let queue_frame = stream.reset_at(reliable_size, error_code)?;
+        // The committed reliable size is the (possibly clamped) truncated send-buffer end.
+        let committed_reliable =
+            VarInt::try_from(stream.pending.offset()).expect("offset fits in varint");
+        let unacked_after = stream.pending.unacked();
+        self.state.unacked_data -= unacked_before - unacked_after;
+
+        if queue_frame {
+            self.pending
+                .reset_stream_at
+                .push((self.id, committed_reliable));
         }
-        stream.reset_at(offset)?;
-        self.pending
-            .reset_stream_at
-            .push((self.id, offset, error_code));
         Ok(())
     }
 
@@ -579,9 +608,15 @@ pub enum ResetStreamAtError {
     /// The stream has already been finished or reset.
     #[error("closed stream")]
     ClosedStream,
-    /// The reliable size is larger than the number of bytes sent on the stream.
+    /// The requested reliable reset is invalid given the stream's state: the reliable size exceeds
+    /// the bytes written, exceeds a previously committed reliable size, or the error code differs
+    /// from an earlier RESET_STREAM_AT for the same stream.
     #[error("invalid reliable size")]
     InvalidReliableSize,
+    /// The peer did not advertise support for receiving RESET_STREAM_AT frames, so a reliable reset
+    /// cannot be performed.
+    #[error("peer does not support reliable reset")]
+    Unsupported,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]

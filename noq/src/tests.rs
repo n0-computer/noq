@@ -181,6 +181,60 @@ fn read_after_close() {
     });
 }
 
+/// End-to-end check of RESET_STREAM_AT: the receiver is delivered the reliable prefix of a stream
+/// and then observes the reset with its application error code.
+#[tokio::test]
+async fn reliable_stream_reset_delivers_prefix() {
+    let _guard = subscribe();
+    let endpoint = endpoint();
+
+    const MSG: &[u8] = b"the quick brown fox jumps over the lazy dog";
+    // "the quick brown fox" -- the prefix the sender commits to delivering reliably.
+    const RELIABLE: usize = 19;
+    const CODE: u32 = 7;
+
+    let endpoint2 = endpoint.clone();
+    let server = tokio::spawn(async move {
+        let conn = endpoint2.accept().await.unwrap().await.unwrap();
+        let mut s = conn.open_uni().await.unwrap();
+        s.write_all(MSG).await.unwrap();
+        s.reset_at(
+            crate::VarInt::from_u32(RELIABLE as u32),
+            crate::VarInt::from_u32(CODE),
+        )
+        .expect("peer negotiated reset_stream_at");
+        // Keep the connection alive until the reliable reset is fully delivered and acknowledged,
+        // at which point the send half is freed and `stopped()` resolves.
+        _ = s.stopped().await;
+    });
+
+    let conn = endpoint
+        .connect(endpoint.local_addr().unwrap(), "localhost")
+        .unwrap()
+        .await
+        .unwrap();
+    let mut stream = conn.accept_uni().await.unwrap();
+
+    // Read until the reset surfaces, accumulating the delivered bytes.
+    let mut received = Vec::new();
+    let code = loop {
+        match stream.read_chunk(usize::MAX).await {
+            Ok(Some(chunk)) => received.extend_from_slice(&chunk),
+            Ok(None) => panic!("a reliable reset must surface a reset, not a clean finish"),
+            Err(crate::ReadError::Reset(code)) => break code,
+            Err(e) => panic!("unexpected read error: {e:?}"),
+        }
+    };
+
+    // The sender committed to delivering at least the reliable prefix; the stack may deliver more
+    // (up to the final size), but everything delivered is an in-order prefix of the stream.
+    assert!(received.len() >= RELIABLE && received.len() <= MSG.len());
+    assert_eq!(received, &MSG[..received.len()]);
+    assert_eq!(code, crate::VarInt::from_u32(CODE));
+
+    server.await.unwrap();
+}
+
 #[test]
 fn export_keying_material() {
     let _guard = subscribe();

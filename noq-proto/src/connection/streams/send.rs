@@ -21,6 +21,25 @@ pub(super) struct Send {
     pub(super) connection_blocked: bool,
     /// The reason the peer wants us to stop, if `STOP_SENDING` was received
     pub(super) stop_reason: Option<VarInt>,
+    /// State of an in-progress reliable reset (RESET_STREAM_AT), if any.
+    ///
+    /// When set, the stream is in [`SendState::DataSent`] and keeps (re)transmitting buffered data
+    /// up to the reliable size (the send buffer is truncated to it) before being closed with the
+    /// reset's error code. Distinguishes a reliable reset from an ordinary FIN-based finish.
+    pub(super) reset_at: Option<ResetAt>,
+}
+
+/// State for an in-progress reliable reset, see [`Send::reset_at`].
+#[derive(Debug)]
+pub(super) struct ResetAt {
+    /// The stream's final size: the send offset captured at the first `reset_at` call, reported in
+    /// every RESET_STREAM_AT frame for the stream. Immutable, even as the reliable size shrinks.
+    pub(super) final_size: u64,
+    /// The application error code carried by the reset. Immutable across frames.
+    pub(super) error_code: VarInt,
+    /// Whether the most recently transmitted RESET_STREAM_AT frame (carrying the current reliable
+    /// size) has been acknowledged. Reset to `false` whenever the reliable size is reduced.
+    pub(super) frame_acked: bool,
 }
 
 impl Send {
@@ -33,6 +52,7 @@ impl Send {
             fin_pending: false,
             connection_blocked: false,
             stop_reason: None,
+            reset_at: None,
         })
     }
 
@@ -55,24 +75,61 @@ impl Send {
         }
     }
 
-    pub(super) fn reset_at(&mut self, offset: VarInt) -> Result<(), ResetStreamAtError> {
-        if let Some(error_code) = self.stop_reason {
-            return Err(ResetStreamAtError::Stopped(error_code));
+    /// Begin or tighten a reliable reset (RESET_STREAM_AT), committing to delivering stream data up
+    /// to `reliable_size` before the stream is reset with `error_code`.
+    ///
+    /// The send buffer is truncated to the reliable size so data beyond it is no longer
+    /// (re)transmitted. The committed reliable size is read back from the buffer (it cannot drop
+    /// below already-acknowledged data). Returns whether a RESET_STREAM_AT frame needs to be
+    /// (re)queued for transmission.
+    ///
+    /// May be called repeatedly to *reduce* the reliable size; increasing it, changing the error
+    /// code, or calling it after a FIN-based finish or an ordinary reset is rejected.
+    pub(super) fn reset_at(
+        &mut self,
+        reliable_size: VarInt,
+        error_code: VarInt,
+    ) -> Result<bool, ResetStreamAtError> {
+        if let Some(code) = self.stop_reason {
+            return Err(ResetStreamAtError::Stopped(code));
         }
+        let reliable_size = reliable_size.into_inner();
         match self.state {
-            SendState::Ready | SendState::DataSent { .. } if offset.0 >= self.pending.offset() => {
-                Err(ResetStreamAtError::InvalidReliableSize)
-            }
             SendState::Ready => {
+                // The reliable size cannot exceed the data the application has written so far.
+                if reliable_size > self.pending.offset() {
+                    return Err(ResetStreamAtError::InvalidReliableSize);
+                }
                 self.state = SendState::DataSent {
                     finish_acked: false,
                 };
-                self.pending.truncate(offset.0);
-                Ok(())
+                self.reset_at = Some(ResetAt {
+                    final_size: self.pending.offset(),
+                    error_code,
+                    frame_acked: false,
+                });
+                self.pending.truncate(reliable_size);
+                Ok(true)
             }
             SendState::DataSent { .. } => {
-                self.pending.truncate(offset.0);
-                Ok(())
+                let current_reliable = self.pending.offset();
+                let Some(reset_at) = self.reset_at.as_mut() else {
+                    // The stream was finished with a FIN; reliable reset after FIN is unsupported.
+                    return Err(ResetStreamAtError::ClosedStream);
+                };
+                // The error code and final size are immutable; the reliable size may only shrink.
+                if error_code != reset_at.error_code || reliable_size > current_reliable {
+                    return Err(ResetStreamAtError::InvalidReliableSize);
+                }
+                self.pending.truncate(reliable_size);
+                if self.pending.offset() < current_reliable {
+                    // The reliable size genuinely shrank, so a new RESET_STREAM_AT carrying it must
+                    // be transmitted and acknowledged afresh.
+                    reset_at.frame_acked = false;
+                    Ok(true)
+                } else {
+                    Ok(false)
+                }
             }
             SendState::ResetSent => Err(ResetStreamAtError::ClosedStream),
         }
@@ -133,17 +190,42 @@ impl Send {
         }
     }
 
-    /// Returns whether the stream has been finished and all data has been acknowledged by the peer
+    /// Returns whether the stream is fully closed and all data has been acknowledged by the peer
+    ///
+    /// For a FIN-based finish this means the FIN and all data were acknowledged; for a reliable
+    /// reset it means the RESET_STREAM_AT frame and all data up to the reliable size were
+    /// acknowledged.
     pub(super) fn ack(&mut self, frame: frame::StreamMeta) -> bool {
         self.pending.ack(frame.offsets);
         match self.state {
             SendState::DataSent {
                 ref mut finish_acked,
             } => {
-                *finish_acked |= frame.fin;
-                *finish_acked && self.pending.is_fully_acked()
+                if let Some(reset_at) = &self.reset_at {
+                    // A reliable reset completes once the RESET_STREAM_AT frame and all data up to
+                    // the reliable size have been acknowledged. The FIN bit is never set on these
+                    // streams, so `finish_acked` is irrelevant here.
+                    reset_at.frame_acked && self.pending.is_fully_acked()
+                } else {
+                    *finish_acked |= frame.fin;
+                    *finish_acked && self.pending.is_fully_acked()
+                }
             }
             _ => false,
+        }
+    }
+
+    /// Records acknowledgement of a RESET_STREAM_AT frame carrying the current reliable size.
+    ///
+    /// Returns whether the reliable reset is now complete (the frame and all reliable data have
+    /// been acknowledged), in which case the stream may be freed.
+    pub(super) fn reset_at_acked(&mut self) -> bool {
+        match &mut self.reset_at {
+            Some(reset_at) => {
+                reset_at.frame_acked = true;
+                self.pending.is_fully_acked()
+            }
+            None => false,
         }
     }
 
@@ -344,6 +426,131 @@ pub enum FinishError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A `Send` with `data` bytes written and ready to be reset.
+    fn writer(data: &[u8]) -> Box<Send> {
+        let mut send = Send::new(VarInt::MAX);
+        let mut source = ByteSlice::from_slice(data);
+        send.write(&mut source, data.len() as u64).unwrap();
+        assert_eq!(send.offset(), data.len() as u64);
+        send
+    }
+
+    #[test]
+    fn reset_at_from_ready_truncates_and_keeps_final_size() {
+        let mut send = writer(b"0123456789"); // 10 bytes
+        assert!(send.reset_at(4u32.into(), 7u32.into()).unwrap());
+
+        // The buffer is truncated to the reliable size, but the final size is remembered.
+        assert_eq!(
+            send.offset(),
+            4,
+            "reliable size becomes the send-buffer end"
+        );
+        let reset_at = send.reset_at.as_ref().expect("reliable reset in progress");
+        assert_eq!(reset_at.final_size, 10);
+        assert_eq!(reset_at.error_code, VarInt::from_u32(7));
+        assert!(!reset_at.frame_acked);
+        // The stream is closing: not writable, but not a full reset either (data still flows).
+        assert!(!send.is_writable());
+        assert!(!send.is_reset());
+    }
+
+    #[test]
+    fn reset_at_reliable_size_may_equal_final_size() {
+        let mut send = writer(b"0123456789");
+        // Reliable size == bytes written is valid (deliver everything, then signal the reset).
+        assert!(send.reset_at(10u32.into(), 0u32.into()).unwrap());
+        assert_eq!(send.offset(), 10);
+        assert_eq!(send.reset_at.as_ref().unwrap().final_size, 10);
+    }
+
+    #[test]
+    fn reset_at_reliable_size_beyond_written_is_rejected() {
+        let mut send = writer(b"0123456789");
+        assert_eq!(
+            send.reset_at(11u32.into(), 0u32.into()),
+            Err(ResetStreamAtError::InvalidReliableSize)
+        );
+        // The stream is untouched and still writable.
+        assert!(send.is_writable());
+        assert!(send.reset_at.is_none());
+    }
+
+    #[test]
+    fn reset_at_on_stopped_stream_is_rejected() {
+        let mut send = writer(b"0123456789");
+        assert!(send.try_stop(9u32.into()));
+        assert_eq!(
+            send.reset_at(4u32.into(), 0u32.into()),
+            Err(ResetStreamAtError::Stopped(9u32.into()))
+        );
+    }
+
+    #[test]
+    fn reset_at_after_full_reset_is_rejected() {
+        let mut send = writer(b"0123456789");
+        send.reset();
+        assert_eq!(
+            send.reset_at(4u32.into(), 0u32.into()),
+            Err(ResetStreamAtError::ClosedStream)
+        );
+    }
+
+    #[test]
+    fn reset_at_may_only_reduce_reliable_size() {
+        let mut send = writer(b"0123456789");
+        assert!(send.reset_at(6u32.into(), 7u32.into()).unwrap());
+
+        // Reducing genuinely shrinks the buffer and requires re-acknowledging the frame.
+        assert!(send.reset_at(3u32.into(), 7u32.into()).unwrap());
+        assert_eq!(send.offset(), 3);
+        assert!(!send.reset_at.as_ref().unwrap().frame_acked);
+
+        // Re-requesting the same size is a no-op (no new frame needed).
+        assert!(!send.reset_at(3u32.into(), 7u32.into()).unwrap());
+        assert_eq!(send.offset(), 3);
+
+        // Increasing the reliable size, or changing the error code, is rejected.
+        assert_eq!(
+            send.reset_at(5u32.into(), 7u32.into()),
+            Err(ResetStreamAtError::InvalidReliableSize)
+        );
+        assert_eq!(
+            send.reset_at(2u32.into(), 8u32.into()),
+            Err(ResetStreamAtError::InvalidReliableSize)
+        );
+        // The final size never changes across reductions.
+        assert_eq!(send.reset_at.as_ref().unwrap().final_size, 10);
+    }
+
+    #[test]
+    fn reset_at_completes_only_when_frame_and_data_acknowledged() {
+        // Data acknowledged first, then the frame.
+        let mut send = writer(b"0123456789");
+        assert!(send.reset_at(4u32.into(), 0u32.into()).unwrap());
+        let meta = frame::StreamMeta {
+            id: crate::StreamId::new(crate::Side::Client, crate::Dir::Uni, 0),
+            offsets: 0..4,
+            fin: false,
+        };
+        assert!(!send.ack(meta), "data acked but RESET_STREAM_AT not yet");
+        assert!(
+            send.reset_at_acked(),
+            "frame ack now completes the reliable reset"
+        );
+
+        // Frame acknowledged first, then the data.
+        let mut send = writer(b"0123456789");
+        assert!(send.reset_at(4u32.into(), 0u32.into()).unwrap());
+        assert!(!send.reset_at_acked(), "frame acked but data not yet");
+        let meta = frame::StreamMeta {
+            id: crate::StreamId::new(crate::Side::Client, crate::Dir::Uni, 0),
+            offsets: 0..4,
+            fin: false,
+        };
+        assert!(send.ack(meta), "data ack now completes the reliable reset");
+    }
 
     #[test]
     fn bytes_array() {
