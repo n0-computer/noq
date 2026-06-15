@@ -1177,7 +1177,7 @@ pub(super) struct PathRetransmits {
 
 impl PathRetransmits {
     pub(super) fn is_empty(&self) -> bool {
-        let PathRetransmits { observed_address } = self;
+        let Self { observed_address } = self;
         !observed_address
     }
 }
