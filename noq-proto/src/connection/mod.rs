@@ -2127,7 +2127,7 @@ impl Connection {
         })
     }
 
-    /// Indicate what types of frames are ready to send for the given space.
+    /// Indicate what types of frames are ready to send for the given packet number space.
     ///
     /// Only for on-path data.
     ///
@@ -6964,7 +6964,9 @@ impl Connection {
     /// may need to be sent.
     fn can_send_1rtt(&self, path_id: PathId, max_size: usize) -> SendableFrames {
         let space_specific = self.paths.get(&path_id).is_some_and(|path| {
-            path.data.pending_on_path_challenge || !path.data.path_responses.is_empty()
+            path.data.pending_on_path_challenge
+                || !path.data.path_responses.is_empty()
+                || !path.data.pending.is_empty()
         });
 
         // Stream control frames are checked in PacketSpace::can_send, only check data here.
