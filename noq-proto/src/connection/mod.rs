@@ -2018,6 +2018,7 @@ impl Connection {
         // TODO: make off-path probes unlinkable.
         let cid = cid_queue.active();
 
+        // PATH_RESPONSE (off-path)
         let frame = frame::PathResponse(token);
 
         let buf = &mut TransmitBuf::new(buf, NonZeroUsize::MIN, MIN_INITIAL_SIZE.into());
@@ -2027,6 +2028,8 @@ impl Connection {
         let stats = &mut self.path_stats.for_path(path_id).frame_tx;
         builder.write_frame_with_log_msg(frame, stats, Some("(off-path)"));
 
+        // PATH_CHALLENGE (off-path)
+        //
         // If we are a client doing NAT traversal, always include a PATH_CHALLENGE with any
         // off-path PATH_RESPONSE. No need to schedule any retries for this, if NAT
         // traversal is taking place then this remote already is being probed with
@@ -2094,6 +2097,7 @@ impl Connection {
         };
         let token = self.rng.random();
 
+        // PATH_CHALLENGE (NAT probe)
         let frame = frame::PathChallenge(token);
 
         let mut buf = TransmitBuf::new(buf, NonZeroUsize::MIN, MIN_INITIAL_SIZE.into());
@@ -6141,17 +6145,16 @@ impl Connection {
                 .ack_frequency_sent(path_id, builder.packet_number, max_ack_delay);
         }
 
-        // PATH_CHALLENGE
+        // PATH_CHALLENGE (on-path)
         if !scheduling_info.is_abandoned
             && space_id == SpaceId::Data
             && path.pending_challenge
             // we don't want to send new challenges if we are already closing
             && !self.state.is_closed()
             && builder.frame_space_remaining() > frame::PathChallenge::SIZE_BOUND
-            // PATH_CHALLENGE must be part of datagrams expanded to the MIN_INITIAL_SIZE (1200
-            // bytes). A datagram can be expanded to this size if it's the first, as it defines the
-            // GSO segment size, or if the first datagram is larger than this.
-            && !(builder.buf.num_datagrams() > 1 && builder.buf.segment_size() < usize::from(MIN_INITIAL_SIZE))
+            // An on-path PATH_CHALLENGE must be part of datagrams expanded to the
+            // MIN_INITIAL_SIZE (1200 bytes).
+            && builder.buf.segment_size() >= usize::from(MIN_INITIAL_SIZE)
         {
             path.pending_challenge = false;
 
