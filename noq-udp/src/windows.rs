@@ -50,6 +50,19 @@ impl UdpSocketState {
         );
 
         socket.0.set_nonblocking(true)?;
+
+        // Suppress the Windows behavior of failing the next recv with WSAECONNRESET when a
+        // prior send drew an ICMP port-unreachable. See [`disable_conn_reset`].
+        if let Err(e) = disable_conn_reset(&*socket.0) {
+            if is_unsupported_error(&e) {
+                crate::log::debug!(
+                    "SIO_UDP_CONNRESET not supported, recv may emit errors after sending to a closed port"
+                );
+            } else {
+                return Err(e);
+            }
+        }
+
         let addr = socket.0.local_addr()?;
         let is_ipv6 = addr.as_socket_ipv6().is_some();
         let is_ipv4 = if is_ipv6 {
@@ -524,6 +537,40 @@ fn send(state: &UdpSocketState, socket: UdpSockRef<'_>, transmit: &Transmit<'_>)
             }
             Err(err)
         }
+    }
+}
+
+/// Disables the Windows behavior of reporting ICMP port-unreachable errors against recv.
+///
+/// On Windows a UDP datagram sent to a port with no listener draws an ICMP
+/// port-unreachable, and the OS surfaces that error (WSAECONNRESET) against the *next*
+/// recv on the same socket. For an unconnected QUIC socket the offending peer is one we
+/// may never hear from again, so failing an otherwise-healthy recv (and dropping any
+/// datagram queued behind the error) is never what we want. The `SIO_UDP_CONNRESET`
+/// ioctl with a `FALSE` argument turns the reporting off.
+///
+/// See <https://learn.microsoft.com/en-us/windows/win32/api/winsock2/nf-winsock2-wsaioctl>.
+fn disable_conn_reset(socket: &impl AsRawSocket) -> io::Result<()> {
+    // FALSE: do not report connection resets (ICMP port-unreachable) on recv.
+    let enabled: u32 = 0;
+    let mut bytes_returned: u32 = 0;
+    let rc = unsafe {
+        WinSock::WSAIoctl(
+            socket.as_raw_socket() as usize,
+            WinSock::SIO_UDP_CONNRESET,
+            &enabled as *const _ as *const _,
+            mem::size_of_val(&enabled) as u32,
+            ptr::null_mut(),
+            0,
+            &mut bytes_returned,
+            ptr::null_mut(),
+            None,
+        )
+    };
+
+    match rc == 0 {
+        true => Ok(()),
+        false => Err(io::Error::last_os_error()),
     }
 }
 
