@@ -317,6 +317,72 @@ fn socket_buffers() {
     );
 }
 
+/// Regression test for the Windows behavior suppressed via `SIO_UDP_CONNRESET`.
+///
+/// A recv must survive an ICMP error caused by an earlier send on the same socket.
+///
+/// On Windows, sending a UDP datagram to a port with no listener draws an ICMP
+/// port-unreachable, and the OS reports it against the *next* recv on that socket as
+/// WSAECONNRESET. Without `SIO_UDP_CONNRESET` disabled our recv surfaces that error, so
+/// a perfectly good datagram waiting behind it is lost and the recv fails. With the
+/// option set in `UdpSocketState::new` the error is suppressed and the real datagram is
+/// delivered.
+///
+/// This only exercises the bug on Windows. Other platforms do not deliver the ICMP
+/// error to an unconnected recv, so the recv just returns the datagram and the test
+/// passes whether or not the fix is present.
+#[test]
+fn recv_survives_icmp_unreachable_from_prior_send() {
+    use std::{thread, time::Duration};
+
+    // The socket under test, plus a legitimate peer to deliver a real datagram.
+    let receiver = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let receiver_addr = receiver.local_addr().unwrap();
+    let sender = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let sender_addr = sender.local_addr().unwrap();
+
+    // A definitely-closed port: bind a socket, take its address, then drop it.
+    let closed_addr = {
+        let tmp = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        tmp.local_addr().unwrap()
+    };
+
+    let receiver_state = UdpSocketState::new((&receiver).into()).unwrap();
+    // Reverse the non-blocking flag set by `UdpSocketState` so the recv below blocks
+    // until a datagram is ready, keeping the test non-racy. The read timeout is a
+    // safety net so a regression surfaces as a failure rather than a hang.
+    receiver.set_nonblocking(false).unwrap();
+    receiver
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+
+    // The receiver pokes the closed port. On Windows the ICMP port-unreachable that
+    // comes back arms WSAECONNRESET against the receiver's next recv.
+    receiver.send_to(b"void", closed_addr).unwrap();
+
+    // Give the ICMP reply time to arrive, so the error is pending before the real
+    // datagram and the recv.
+    thread::sleep(Duration::from_millis(100));
+
+    // The peer sends a real datagram that the receiver must deliver.
+    sender.send_to(b"hello", receiver_addr).unwrap();
+
+    // Without the fix this recv returns WSAECONNRESET on Windows instead of "hello".
+    let mut buf = [0u8; 16];
+    let mut meta = RecvMeta::default();
+    let n = receiver_state
+        .recv(
+            (&receiver).into(),
+            &mut [IoSliceMut::new(&mut buf)],
+            slice::from_mut(&mut meta),
+        )
+        .expect("recv must not surface the ICMP error");
+
+    assert_eq!(n, 1);
+    assert_eq!(&buf[..meta.len], b"hello");
+    assert_eq!(meta.addr.port(), sender_addr.port());
+}
+
 fn test_send_recv(send: &Socket, recv: &Socket, transmit: Transmit<'_>) {
     let send_state = UdpSocketState::new(send.into()).unwrap();
     let recv_state = UdpSocketState::new(recv.into()).unwrap();
