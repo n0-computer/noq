@@ -2654,7 +2654,7 @@ impl Connection {
         // TODO(flub): This is very brute-force: it pings *all* the paths.  Instead it would
         //    be nice if we could only send a single packet for this.
         for path_data in self.spaces[self.highest_space].number_spaces.values_mut() {
-            path_data.ping_pending = true;
+            path_data.pending_ping = true;
         }
     }
 
@@ -2666,7 +2666,7 @@ impl Connection {
             .number_spaces
             .get_mut(&path)
             .ok_or(ClosedPath { _private: () })?;
-        path_data.ping_pending = true;
+        path_data.pending_ping = true;
         Ok(())
     }
 
@@ -5919,10 +5919,10 @@ impl Connection {
         for (path_id, remote) in recoverable_paths.into_iter() {
             // Schedule a Ping for a liveness check.
             if let Some(path_space) = self.spaces[SpaceId::Data].number_spaces.get_mut(&path_id) {
-                path_space.ping_pending = true;
+                path_space.pending_ping = true;
 
                 if immediate_ack_allowed {
-                    path_space.immediate_ack_pending = true;
+                    path_space.pending_immediate_ack = true;
                 }
             }
 
@@ -6076,14 +6076,14 @@ impl Connection {
 
         // PING
         if !scheduling_info.is_abandoned
-            && mem::replace(&mut space.for_path(path_id).ping_pending, false)
+            && mem::replace(&mut space.for_path(path_id).pending_ping, false)
         {
             builder.write_frame(frame::Ping, stats);
         }
 
         // IMMEDIATE_ACK
         if !scheduling_info.is_abandoned
-            && mem::replace(&mut space.for_path(path_id).immediate_ack_pending, false)
+            && mem::replace(&mut space.for_path(path_id).pending_immediate_ack, false)
         {
             debug_assert_eq!(
                 space_id,
@@ -6800,7 +6800,7 @@ impl Connection {
         );
         self.spaces[SpaceId::Data]
             .for_path(path_id)
-            .immediate_ack_pending = true;
+            .pending_immediate_ack = true;
     }
 
     /// Decodes a packet, returning its decrypted payload, so it can be inspected in tests
