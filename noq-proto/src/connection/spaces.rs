@@ -10,7 +10,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use sorted_index_buffer::SortedIndexBuffer;
 use tracing::trace;
 
-use super::PathId;
+use super::{PathId, paths::PathResponses};
 use crate::{
     Dir, Duration, FourTuple, Instant, StreamId, TransportError, TransportErrorCode, VarInt,
     connection::StreamsState,
@@ -146,10 +146,9 @@ impl PacketSpace {
             .number_spaces
             .values()
             .any(|pns| pns.pending_acks.can_send());
-        let space_specific = self
-            .number_spaces
-            .get(&path_id)
-            .is_some_and(|s| s.pending_ping || s.pending_immediate_ack);
+        let space_specific = self.number_spaces.get(&path_id).is_some_and(|s| {
+            s.pending_ping || s.pending_immediate_ack || !s.pending_path_responses.is_empty()
+        });
         let other = !self.pending.is_empty(streams);
         SendableFrames {
             acks,
@@ -261,6 +260,12 @@ pub(super) struct PacketNumberSpace {
     pub(super) pending_acks: PendingAcks,
     /// An IMMEDIATE_ACK (draft-ietf-quic-ack-frequency) frame needs to be sent on this path.
     pub(super) pending_immediate_ack: bool,
+    /// Responses to path challenges that need to be sent, on and off-path.
+    ///
+    /// Responses are only tied to the 4-tuple they were received on, not to a specific path
+    /// generation. Whether the response is on or off-path only depends on the path's
+    /// 4-tuple at sending time.
+    pub(super) pending_path_responses: PathResponses,
     /// Packet deduplicator
     pub(super) dedup: Dedup,
 
@@ -300,9 +305,10 @@ impl PacketNumberSpace {
             ecn_counters: frame::EcnCounts::ZERO,
             ecn_feedback: frame::EcnCounts::ZERO,
             pending_ping: false,
-            pending_immediate_ack: false,
-            dedup: Default::default(),
             pending_acks: PendingAcks::new(),
+            pending_immediate_ack: false,
+            pending_path_responses: PathResponses::default(),
+            dedup: Default::default(),
             time_of_last_ack_eliciting_packet: None,
             loss_time: None,
             loss_probes: 0,
@@ -328,9 +334,10 @@ impl PacketNumberSpace {
             ecn_counters: frame::EcnCounts::ZERO,
             ecn_feedback: frame::EcnCounts::ZERO,
             pending_ping: false,
-            pending_immediate_ack: false,
-            dedup: Default::default(),
             pending_acks: PendingAcks::new(),
+            pending_immediate_ack: false,
+            pending_path_responses: PathResponses::default(),
+            dedup: Default::default(),
             time_of_last_ack_eliciting_packet: None,
             loss_time: None,
             loss_probes: 0,

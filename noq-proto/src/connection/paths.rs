@@ -192,13 +192,6 @@ pub(super) struct PathData {
     ///
     /// This is **not used** for n0 nat traversal challenge sending, which is off-path.
     pub(super) pending_challenge: bool,
-    /// Pending **on-path** response to a PATH_CHALLENGE frame.
-    ///
-    /// Only the challenge with the highest packet number needs to be responded to, so this
-    /// only ever contains one response. Likewise the 4-tuple of the response will always
-    /// match the 4-tuple of this path generation. The struct is re-used for off-path
-    /// responses however, where these vary.
-    pub(super) pending_response: PathResponses,
     /// On-path path challenges sent that we didn't receive a path response for yet.
     unconfirmed_challenges: IntMap<u64, SentChallengeInfo>,
     /// How often we've deemed a path challenge to be lost.
@@ -334,7 +327,6 @@ impl PathData {
             unconfirmed_challenges: Default::default(),
             lost_challenge_count: 0,
             pending_challenge: false,
-            pending_response: PathResponses::default(),
             validated: false,
             total_sent: 0,
             total_recvd: 0,
@@ -398,7 +390,6 @@ impl PathData {
             unconfirmed_challenges: Default::default(),
             lost_challenge_count: 0,
             pending_challenge: false,
-            pending_response: PathResponses::default(),
             validated: false,
             total_sent: 0,
             total_recvd: 0,
@@ -922,7 +913,8 @@ impl PathResponses {
         let response = *self.pending.last()?;
         // We use an exact comparison here, because once we've received for the first time,
         // we really should either already have a local_ip, or we will never get one
-        // (because our OS doesn't support it).
+        // (because our OS doesn't support it). And even if we get it wrong we are only
+        // slightly less efficient and would not include other on-path data in the packet.
         if response.network_path == network_path {
             // We don't bother searching further because we expect that the on-path response will
             // get drained in the immediate future by a call to `pop_on_path`
@@ -942,6 +934,13 @@ impl PathResponses {
         }
         self.pending.pop();
         Some(response.token)
+    }
+
+    /// Whether the next [`Self::pop_on_path`] will return something to send.
+    pub(crate) fn has_pending_on_path(&self, network_path: FourTuple) -> bool {
+        self.pending
+            .last()
+            .is_some_and(|response| response.network_path == network_path)
     }
 
     pub(crate) fn is_empty(&self) -> bool {

@@ -2011,9 +2011,13 @@ impl Connection {
         buf: &mut Vec<u8>,
         path_id: PathId,
     ) -> Option<Transmit> {
-        let path = self.paths.get_mut(&path_id).map(|state| &mut state.data)?;
+        let network_path = self
+            .paths
+            .get_mut(&path_id)
+            .map(|state| state.data.network_path)?;
         let cid_queue = self.remote_cids.get_mut(&path_id)?;
-        let (token, network_path) = path.pending_response.pop_off_path(path.network_path)?;
+        let pns = self.spaces[SpaceKind::Data].for_path(path_id);
+        let (token, network_path) = pns.pending_path_responses.pop_off_path(network_path)?;
 
         // TODO: make off-path probes unlinkable.
         let cid = cid_queue.active();
@@ -4979,14 +4983,16 @@ impl Connection {
                     close = Some(reason);
                 }
                 Frame::PathChallenge(challenge) => {
-                    let path = &mut self
-                        .path_mut(path_id)
-                        .expect("payload is processed only after the path becomes known");
-                    path.pending_response
+                    self.spaces[SpaceKind::Data]
+                        .for_path(path_id)
+                        .pending_path_responses
                         .push(number, challenge.0, network_path);
                     // If we were passively migrated (e.g. NAT rebinding), our local_ip will
                     // not match. Once we processed a non-probing packet the local_ip will
                     // finally be updated.
+                    let path = &mut self
+                        .path_mut(path_id)
+                        .expect("payload is processed only after the path becomes known");
                     if network_path.remote == path.network_path.remote {
                         // PATH_CHALLENGE on active path, possible off-path packet
                         // forwarding attack. Send a non-probing packet to recover the
@@ -6212,15 +6218,14 @@ impl Connection {
             }
         }
 
-        // PATH_RESPONSE
+        // PATH_RESPONSE (on-path)
         if !scheduling_info.is_abandoned
             && space_id == SpaceId::Data
             && builder.frame_space_remaining() > frame::PathResponse::SIZE_BOUND
-            && let Some(token) = path.pending_response.pop_on_path(path.network_path)
-            // PATH_RESPONSE must be part of datagrams expanded to the MIN_INITIAL_SIZE (1200
-            // bytes). A datagram can be expanded to this size if it's the first, as it defines the
-            // GSO segment size, or if the first datagram is larger than this.
-            && !(builder.buf.num_datagrams() > 1 && builder.buf.segment_size() < usize::from(MIN_INITIAL_SIZE))
+            // An on-path PATH_RESPONSE must be part of datagrams expanded to the
+            // MIN_INITIAL_SIZE (1200 bytes).
+            && builder.buf.segment_size() >= usize::from(MIN_INITIAL_SIZE)
+            && let Some(token) = space.for_path(path_id).pending_path_responses.pop_on_path(path.network_path)
         {
             let response = frame::PathResponse(token);
             builder.write_frame(response, stats);
@@ -6950,7 +6955,7 @@ impl Connection {
         }
     }
 
-    /// Whether we have on-path 1-RTT data to send.
+    /// Whether we have **on-path** 1-RTT data to send.
     ///
     /// This checks for frames that can only be sent in the data space (1-RTT):
     /// - Pending PATH_CHALLENGE frames on the active and previous path if just migrated.
@@ -6961,9 +6966,15 @@ impl Connection {
     /// See also [`PacketSpace::can_send`] which keeps track of all other frame types that
     /// may need to be sent.
     fn can_send_1rtt(&self, path_id: PathId, max_size: usize) -> SendableFrames {
-        let space_specific = self.paths.get(&path_id).is_some_and(|path| {
-            path.data.pending_challenge || !path.data.pending_response.is_empty()
-        });
+        let network_path = self.path_data(path_id).network_path;
+        let space_specific = self
+            .paths
+            .get(&path_id)
+            .is_some_and(|path| path.data.pending_challenge)
+            || self.spaces[SpaceKind::Data]
+                .number_spaces
+                .get(&path_id)
+                .is_some_and(|pns| pns.pending_path_responses.has_pending_on_path(network_path));
 
         // Stream control frames are checked in PacketSpace::can_send, only check data here.
         let other = self.streams.can_send_stream_data()
