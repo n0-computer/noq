@@ -51,15 +51,26 @@ impl UdpSocketState {
 
         socket.0.set_nonblocking(true)?;
 
-        // Suppress the Windows behavior of failing the next recv with WSAECONNRESET when a
-        // prior send drew an ICMP port-unreachable. See [`disable_conn_reset`].
-        if let Err(e) = disable_conn_reset(&*socket.0) {
-            if is_unsupported_error(&e) {
-                crate::log::debug!(
-                    "SIO_UDP_CONNRESET not supported, recv may emit errors after sending to a closed port"
-                );
-            } else {
-                return Err(e);
+        // Stop Windows from failing the next recv with WSAECONNRESET or WSAENETRESET when a
+        // prior send drew an ICMP error. WSAECONNRESET follows a port-unreachable (a send to a
+        // closed port) and WSAENETRESET follows a TTL-expired / net-unreachable; both are
+        // reported against the next recv on the same socket. We never want to fail the recv
+        // path due to a failed send. The SIO_UDP_CONNRESET and SIO_UDP_NETRESET ioctls with
+        // a FALSE argument switch these error reportings off completely.
+        for (control_code, name) in [
+            (WinSock::SIO_UDP_CONNRESET, "SIO_UDP_CONNRESET"),
+            (WinSock::SIO_UDP_NETRESET, "SIO_UDP_NETRESET"),
+        ] {
+            if let Err(e) = disable_udp_ioctl(&*socket.0, control_code) {
+                if is_unsupported_error(&e) {
+                    // SIO_UDP_NETRESET requires Windows 8+, and neither ioctl is implemented
+                    // under Wine.
+                    crate::log::debug!(
+                        "{name} not supported, recv may emit errors after a prior send drew an ICMP error"
+                    );
+                } else {
+                    return Err(e);
+                }
             }
         }
 
@@ -540,26 +551,22 @@ fn send(state: &UdpSocketState, socket: UdpSockRef<'_>, transmit: &Transmit<'_>)
     }
 }
 
-/// Disables the Windows behavior of reporting ICMP port-unreachable errors against recv.
+/// Disables a boolean UDP `WSAIoctl` notification flag on `socket` by passing `FALSE`.
 ///
-/// On Windows a UDP datagram sent to a port with no listener draws an ICMP
-/// port-unreachable, and the OS surfaces that error (WSAECONNRESET) against the *next*
-/// recv on the same socket. For an unconnected QUIC socket the offending peer is one we
-/// may never hear from again, so failing an otherwise-healthy recv (and dropping any
-/// datagram queued behind the error) is never what we want. The `SIO_UDP_CONNRESET`
-/// ioctl with a `FALSE` argument turns the reporting off.
+/// Used to turn off the ICMP-error notifications (`SIO_UDP_CONNRESET`,
+/// `SIO_UDP_NETRESET`) that Windows otherwise reports against the next recv. See
+/// [`UdpSocketState::new`] for why we suppress them.
 ///
 /// See <https://learn.microsoft.com/en-us/windows/win32/api/winsock2/nf-winsock2-wsaioctl>.
-fn disable_conn_reset(socket: &impl AsRawSocket) -> io::Result<()> {
-    // FALSE: do not report connection resets (ICMP port-unreachable) on recv.
-    let enabled: u32 = 0;
+fn disable_udp_ioctl(socket: &impl AsRawSocket, control_code: u32) -> io::Result<()> {
+    let disabled: u32 = 0; // FALSE
     let mut bytes_returned: u32 = 0;
     let rc = unsafe {
         WinSock::WSAIoctl(
             socket.as_raw_socket() as usize,
-            WinSock::SIO_UDP_CONNRESET,
-            &enabled as *const _ as *const _,
-            mem::size_of_val(&enabled) as u32,
+            control_code,
+            &disabled as *const _ as *const _,
+            mem::size_of_val(&disabled) as u32,
             ptr::null_mut(),
             0,
             &mut bytes_returned,
