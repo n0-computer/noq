@@ -61,15 +61,17 @@ impl UdpSocketState {
             (WinSock::SIO_UDP_CONNRESET, "SIO_UDP_CONNRESET"),
             (WinSock::SIO_UDP_NETRESET, "SIO_UDP_NETRESET"),
         ] {
-            if let Err(e) = disable_udp_ioctl(&*socket.0, control_code) {
-                if is_unsupported_error(&e) {
+            if let Err(error) = disable_udp_ioctl(&*socket.0, control_code) {
+                if is_unsupported_error(&error) {
                     // SIO_UDP_NETRESET requires Windows 8+, and neither ioctl is implemented
                     // under Wine.
                     crate::log::debug!(
                         "{name} not supported, recv may emit errors after a prior send drew an ICMP error"
                     );
                 } else {
-                    return Err(e);
+                    crate::log::debug!(
+                        "disabling {name} failed: {error}, recv may emit errors after a prior send drew an ICMP error"
+                    );
                 }
             }
         }
