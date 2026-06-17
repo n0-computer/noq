@@ -5670,13 +5670,7 @@ impl Connection {
                 );
             }
             paths::OnPathResponseReceived::Unknown => {
-                debug!(%response, "ignoring invalid PATH_RESPONSE");
-            }
-            paths::OnPathResponseReceived::Ignored {
-                sent_on,
-                current_path,
-            } => {
-                debug!(%sent_on, %current_path, %response, "ignoring valid PATH_RESPONSE");
+                debug!(%response, "ignoring unknown PATH_RESPONSE");
             }
         }
     }

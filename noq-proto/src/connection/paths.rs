@@ -514,7 +514,13 @@ impl PathData {
             // Response to an on-path PathChallenge that validates this path.
             // The sent path should match the current path. However, it's possible that the
             // challenge was sent when no local_ip was known. This case is allowed as well.
-            Some(info) if info.network_path.is_probably_same_path(&self.network_path) => {
+            Some(info) => {
+                // An on-path challenge that was sent on a different 4-tuple would be stored
+                // in a different path generation.
+                debug_assert!(
+                    info.network_path.is_probably_same_path(&self.network_path),
+                    "response can only be for same network path"
+                );
                 self.network_path.update_local_if_same_remote(&network_path);
                 let sent_instant = info.sent_instant;
                 if !std::mem::replace(&mut self.validated, true) {
@@ -529,22 +535,6 @@ impl PathData {
                 self.rtt.reset_initial_rtt(rtt);
 
                 OnPathResponseReceived::OnPath
-            }
-            // Response to an on-path PathChallenge that does not validate this path.
-            Some(info) => {
-                // This is a valid path response, but this validates a 4-tuple we no longer
-                // have in use. Keep only sent challenges for the current path.
-                self.unconfirmed_challenges
-                    .retain(|_token, i| i.network_path == self.network_path);
-
-                // If there are no challenges for the current path, schedule one
-                if !self.unconfirmed_challenges.is_empty() {
-                    self.pending_challenge = true;
-                }
-                OnPathResponseReceived::Ignored {
-                    sent_on: info.network_path,
-                    current_path: self.network_path,
-                }
             }
             None => {
                 // Response to an unknown PathChallenge. Does not indicate failure.
@@ -657,11 +647,6 @@ pub(super) enum OnPathResponseReceived {
     OnPath,
     /// The received token is unknown.
     Unknown,
-    /// The response is valid but it's not usable for path validation.
-    Ignored {
-        sent_on: FourTuple,
-        current_path: FourTuple,
-    },
 }
 
 /// Congestion metrics as described in [`recovery_metrics_updated`].
