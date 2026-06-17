@@ -6971,10 +6971,10 @@
 <a href=#6971 id=6971 data-nosnippet>6971</a>            </span>.paths
 <a href=#6972 id=6972 data-nosnippet>6972</a>            .get(<span class="kw-2">&amp;</span>path_id)
 <a href=#6973 id=6973 data-nosnippet>6973</a>            .is_some_and(|path| path.data.pending_challenge)
-<a href=#6974 id=6974 data-nosnippet>6974</a>            || !<span class="self">self</span>.spaces[SpaceKind::Data]
+<a href=#6974 id=6974 data-nosnippet>6974</a>            || <span class="self">self</span>.spaces[SpaceKind::Data]
 <a href=#6975 id=6975 data-nosnippet>6975</a>                .number_spaces
 <a href=#6976 id=6976 data-nosnippet>6976</a>                .get(<span class="kw-2">&amp;</span>path_id)
-<a href=#6977 id=6977 data-nosnippet>6977</a>                .is_some_and(|pns| !pns.pending_path_responses.has_pending_on_path(network_path));
+<a href=#6977 id=6977 data-nosnippet>6977</a>                .is_some_and(|pns| pns.pending_path_responses.has_pending_on_path(network_path));
 <a href=#6978 id=6978 data-nosnippet>6978</a>
 <a href=#6979 id=6979 data-nosnippet>6979</a>        <span class="comment">// Stream control frames are checked in PacketSpace::can_send, only check data here.
 <a href=#6980 id=6980 data-nosnippet>6980</a>        </span><span class="kw">let </span>other = <span class="self">self</span>.streams.can_send_stream_data()
