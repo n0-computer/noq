@@ -5783,7 +5783,7 @@ impl Connection {
                 &self.config,
             )
         };
-        new_path_data.last_observed_addr_report = path.data.last_observed_addr_report.clone();
+        new_path_data.last_observed_addr_report = path.data.last_observed_addr_report;
         if let Some(report) = observed_addr
             && let Some(updated) = new_path_data.update_observed_addr_report(report)
         {
