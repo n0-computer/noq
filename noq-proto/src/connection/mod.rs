@@ -87,7 +87,7 @@ pub use spaces::Retransmits;
 #[cfg(not(fuzzing))]
 use spaces::Retransmits;
 pub(crate) use spaces::SpaceKind;
-use spaces::{PacketSpace, SendableFrames, SentPacket, ThinRetransmits};
+use spaces::{OpenStatus, PacketSpace, SendableFrames, SentPacket, ThinRetransmits};
 
 mod stats;
 pub use stats::{ConnectionStats, FrameStats, PathStats, UdpStats};
@@ -334,15 +334,21 @@ impl Connection {
         let connection_side = ConnectionSide::from(side_args);
         let side = connection_side.side();
         let mut rng = StdRng::from_seed(rng_seed);
-        let initial_space = PacketSpace::new(now, SpaceId::Initial, &mut rng);
-        let handshake_space = PacketSpace::new(now, SpaceId::Handshake, &mut rng);
+        let mut initial_space = PacketSpace::new(now, SpaceId::Initial, &mut rng);
+        let mut handshake_space = PacketSpace::new(now, SpaceId::Handshake, &mut rng);
         #[cfg(test)]
-        let data_space = match config.deterministic_packet_numbers {
+        let mut data_space = match config.deterministic_packet_numbers {
             true => PacketSpace::new_deterministic(now, SpaceId::Data),
             false => PacketSpace::new(now, SpaceId::Data, &mut rng),
         };
         #[cfg(not(test))]
-        let data_space = PacketSpace::new(now, SpaceId::Data, &mut rng);
+        let mut data_space = PacketSpace::new(now, SpaceId::Data, &mut rng);
+
+        // The spaces for PathId::ZERO do not need the PathEvent::Established event.
+        initial_space.for_path(PathId::ZERO).open_status = OpenStatus::Informed;
+        handshake_space.for_path(PathId::ZERO).open_status = OpenStatus::Informed;
+        data_space.for_path(PathId::ZERO).open_status = OpenStatus::Informed;
+
         let state = State::handshake(state::Handshake {
             remote_cid_set: side.is_server(),
             expected_token: Bytes::new(),
@@ -359,8 +365,6 @@ impl Connection {
             ),
         )]);
 
-        let mut path = PathData::new(network_path, allow_mtud, None, 0, now, &config);
-        path.open_status = paths::OpenStatus::Informed;
         let mut this = Self {
             endpoint_config,
             crypto_state: CryptoState::new(crypto, init_cid, side, &mut rng),
@@ -370,7 +374,7 @@ impl Connection {
             paths: BTreeMap::from_iter([(
                 PathId::ZERO,
                 PathState {
-                    data: path,
+                    data: PathData::new(network_path, allow_mtud, None, 0, now, &config),
                     prev: None,
                 },
             )]),
@@ -4880,7 +4884,6 @@ impl Connection {
         packet: Packet,
         #[allow(unused)] qlog: &mut QlogRecvPacket,
     ) -> Result<(), TransportError> {
-        let is_multipath_negotiated = self.is_multipath_negotiated();
         let payload = packet.payload.freeze();
         let mut is_probing_packet = true;
         let mut close = None;
@@ -5007,79 +5010,7 @@ impl Connection {
                         self.open_nat_traversed_paths(now);
                     } else {
                         // Try to see if this is a response to an on-path PATH_CHALLENGE.
-
-                        let path = self
-                            .paths
-                            .get_mut(&path_id)
-                            .expect("payload is processed only after the path becomes known");
-
-                        use PathTimer::*;
-                        use paths::OnPathResponseReceived::*;
-                        match path
-                            .data
-                            .on_path_response_received(now, response.0, network_path)
-                        {
-                            OnPath { was_open } if !self.abandoned_paths.contains(&path_id) => {
-                                let qlog = self.qlog.with_time(now);
-
-                                self.timers.stop(
-                                    Timer::PerPath(path_id, PathValidationFailed),
-                                    qlog.clone(),
-                                );
-                                self.timers.stop(
-                                    Timer::PerPath(path_id, AbandonFromValidation),
-                                    qlog.clone(),
-                                );
-
-                                let next_challenge = path
-                                    .data
-                                    .earliest_on_path_expiring_challenge()
-                                    .map(|time| time + self.ack_frequency.max_ack_delay_for_pto());
-                                self.timers.set_or_stop(
-                                    Timer::PerPath(path_id, PathChallengeLost),
-                                    next_challenge,
-                                    qlog,
-                                );
-
-                                if !was_open {
-                                    if is_multipath_negotiated {
-                                        self.events.push_back(Event::Path(
-                                            PathEvent::Established { id: path_id },
-                                        ));
-                                    }
-                                    if let Some(observed) =
-                                        path.data.last_observed_addr_report.as_ref()
-                                    {
-                                        self.events.push_back(Event::Path(
-                                            PathEvent::ObservedAddr {
-                                                id: path_id,
-                                                addr: observed.socket_addr(),
-                                            },
-                                        ));
-                                    }
-                                }
-                                if let Some((_, ref mut prev)) = path.prev {
-                                    // If an on-path response was received while there is a
-                                    // previous path from a migration, then the new path is
-                                    // validated and we can stop sending challenges that try to
-                                    // re-validate the previous path.
-                                    prev.reset_on_path_challenges();
-                                }
-                            }
-                            OnPath { .. } => {
-                                trace!(
-                                    %response,
-                                    "ignoring PATH_RESPONSE received after path is abandoned"
-                                );
-                            }
-                            Ignored {
-                                sent_on,
-                                current_path,
-                            } => {
-                                debug!(%sent_on, %current_path, %response, "ignoring valid PATH_RESPONSE")
-                            }
-                            Unknown => debug!(%response, "ignoring invalid PATH_RESPONSE"),
-                        }
+                        self.handle_path_response_on_path(now, response, path_id, network_path);
                     }
                 }
                 Frame::MaxData(frame::MaxData(bytes)) => {
@@ -5348,10 +5279,12 @@ impl Connection {
                         ));
                     }
 
+                    let space_open_status =
+                        self.spaces[SpaceKind::Data].for_path(path_id).open_status;
                     let path = self.path_data_mut(path_id);
                     if path.network_path.remote == network_path.remote {
                         if let Some(updated) = path.update_observed_addr_report(observed)
-                            && path.open_status == paths::OpenStatus::Informed
+                            && space_open_status == OpenStatus::Informed
                         {
                             self.events.push_back(Event::Path(PathEvent::ObservedAddr {
                                 id: path_id,
@@ -5657,6 +5590,84 @@ impl Connection {
         }
 
         Ok(())
+    }
+
+    /// Handles any on-path PATH_RESPONSE frames.
+    ///
+    /// *path_id* and *network_path* are those on which the PATH_RESPONSE was received.
+    fn handle_path_response_on_path(
+        &mut self,
+        now: Instant,
+        response: frame::PathResponse,
+        path_id: PathId,
+        network_path: FourTuple,
+    ) {
+        let is_multipath_negotiated = self.is_multipath_negotiated();
+        let path = self
+            .paths
+            .get_mut(&path_id)
+            .expect("payload is processed only after the path becomes known");
+        match path
+            .data
+            .on_path_response_received(now, response.0, network_path)
+        {
+            paths::OnPathResponseReceived::OnPath if !self.abandoned_paths.contains(&path_id) => {
+                let qlog = self.qlog.with_time(now);
+                self.timers.stop(
+                    Timer::PerPath(path_id, PathTimer::PathValidationFailed),
+                    qlog.clone(),
+                );
+                self.timers.stop(
+                    Timer::PerPath(path_id, PathTimer::AbandonFromValidation),
+                    qlog.clone(),
+                );
+                let next_challenge = path
+                    .data
+                    .earliest_on_path_expiring_challenge()
+                    .map(|time| time + self.ack_frequency.max_ack_delay_for_pto());
+                self.timers.set_or_stop(
+                    Timer::PerPath(path_id, PathTimer::PathChallengeLost),
+                    next_challenge,
+                    qlog,
+                );
+                let pns = self.spaces[SpaceKind::Data].for_path(path_id);
+                if !matches!(pns.open_status, OpenStatus::Informed) {
+                    if is_multipath_negotiated {
+                        self.events
+                            .push_back(Event::Path(PathEvent::Established { id: path_id }));
+                    }
+                    pns.open_status = OpenStatus::Informed;
+                    if let Some(observed) = path.data.last_observed_addr_report.as_ref() {
+                        self.events.push_back(Event::Path(PathEvent::ObservedAddr {
+                            id: path_id,
+                            addr: observed.socket_addr(),
+                        }));
+                    }
+                }
+                if let Some((_, ref mut prev)) = path.prev {
+                    // If an on-path response was received while there is a
+                    // previous path from a migration, then the new path is
+                    // validated and we can stop sending challenges that try to
+                    // re-validate the previous path.
+                    prev.reset_on_path_challenges();
+                }
+            }
+            paths::OnPathResponseReceived::OnPath => {
+                trace!(
+                    %response,
+                    "ignoring PATH_RESPONSE received after path is abandoned"
+                );
+            }
+            paths::OnPathResponseReceived::Unknown => {
+                debug!(%response, "ignoring invalid PATH_RESPONSE");
+            }
+            paths::OnPathResponseReceived::Ignored {
+                sent_on,
+                current_path,
+            } => {
+                debug!(%sent_on, %current_path, %response, "ignoring valid PATH_RESPONSE");
+            }
+        }
     }
 
     /// Opens any paths that have been successfully NAT traversed.
@@ -6161,10 +6172,11 @@ impl Connection {
             builder.write_frame(challenge, stats);
             builder.require_padding();
             let pto = self.ack_frequency.max_ack_delay_for_pto() + path.rtt.pto_base();
-            match path.open_status {
-                paths::OpenStatus::Sent | paths::OpenStatus::Informed => {}
-                paths::OpenStatus::Pending => {
-                    path.open_status = paths::OpenStatus::Sent;
+            let pns = space.for_path(path_id);
+            match pns.open_status {
+                OpenStatus::Sent | OpenStatus::Informed => {}
+                OpenStatus::Pending => {
+                    pns.open_status = OpenStatus::Sent;
                     self.timers.set(
                         Timer::PerPath(path_id, PathTimer::AbandonFromValidation),
                         now + 3 * pto,
