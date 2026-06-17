@@ -2124,6 +2124,15 @@ fn on_path_challenge_lost_backoff() {
     assert_eq!(duration, Duration::from_millis(1));
 }
 
+/// This test used to generate a PROTOCOL_VIOLATION error from just packet loss and delayed packets.
+///
+/// The problem was receiving a PATH_CIDS_BLOCKED frame with path_id=1 and next_seq=1 when the server
+/// side had already abandoned and discarded path 1.
+/// In that case, we assumed the other side would violate the protocol, whereas in reality it's just
+/// a (very) delayed packet.
+///
+/// The fix was to properly check if the path was already abandoned that the PATH_CIDS_BLOCKED frame
+/// referred to.
 #[test]
 fn regression_delayed_path_cids_blocked() -> TestResult {
     let _guard = subscribe();
