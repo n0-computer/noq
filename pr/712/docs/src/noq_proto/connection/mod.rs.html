@@ -5816,12 +5816,12 @@
 <a href=#5816 id=5816 data-nosnippet>5816</a>            <span class="kw">return</span>;
 <a href=#5817 id=5817 data-nosnippet>5817</a>        }
 <a href=#5818 id=5818 data-nosnippet>5818</a>        <span class="kw">if </span><span class="self">self</span>.highest_space &lt; SpaceKind::Data {
-<a href=#5819 id=5819 data-nosnippet>5819</a>            <span class="kw">for </span>path <span class="kw">in </span><span class="self">self</span>.paths.values_mut() {
-<a href=#5820 id=5820 data-nosnippet>5820</a>                <span class="comment">// Clear the local address for it to be obtained from the socket again.
-<a href=#5821 id=5821 data-nosnippet>5821</a>                </span>path.data.network_path.local_ip = <span class="prelude-val">None</span>;
-<a href=#5822 id=5822 data-nosnippet>5822</a>            }
+<a href=#5819 id=5819 data-nosnippet>5819</a>            <span class="comment">// for path in self.paths.values_mut() {
+<a href=#5820 id=5820 data-nosnippet>5820</a>            //     // Clear the local address for it to be obtained from the socket again.
+<a href=#5821 id=5821 data-nosnippet>5821</a>            //     path.data.network_path.local_ip = None;
+<a href=#5822 id=5822 data-nosnippet>5822</a>            // }
 <a href=#5823 id=5823 data-nosnippet>5823</a>
-<a href=#5824 id=5824 data-nosnippet>5824</a>            <span class="self">self</span>.update_remote_cid(PathId::ZERO);
+<a href=#5824 id=5824 data-nosnippet>5824</a>            </span><span class="self">self</span>.update_remote_cid(PathId::ZERO);
 <a href=#5825 id=5825 data-nosnippet>5825</a>            <span class="self">self</span>.ping();
 <a href=#5826 id=5826 data-nosnippet>5826</a>
 <a href=#5827 id=5827 data-nosnippet>5827</a>            <span class="kw">return</span>;
