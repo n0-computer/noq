@@ -5393,8 +5393,6 @@ impl Connection {
                                 "PATHS_BLOCKED maximum path identifier was larger than local maximum",
                             ));
                         }
-                        debug!("received PATHS_BLOCKED({:?})", max_path_id);
-                        // TODO(@divma): ensure max concurrent paths
                     } else {
                         return Err(TransportError::PROTOCOL_VIOLATION(
                             "received PATHS_BLOCKED frame when not multipath was not negotiated",
