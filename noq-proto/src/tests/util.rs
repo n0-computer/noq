@@ -284,6 +284,12 @@ impl Pair {
         self.connect_with(client_config())
     }
 
+    pub(super) fn lax_connect(
+        &mut self,
+    ) -> (ConnectionHandle, Vec<Event>, ConnectionHandle, Vec<Event>) {
+        self.lax_connect_with(client_config())
+    }
+
     pub(super) fn connect_with(
         &mut self,
         config: ClientConfig,
@@ -294,6 +300,21 @@ impl Pair {
         let server_ch = self.server.assert_accept();
         self.finish_connect(client_ch, server_ch);
         (client_ch, server_ch)
+    }
+
+    /// Like [`Self::connect_with`], but allows events not related to connection establishment.
+    ///
+    /// Extra events are accumulated and returned.
+    pub(super) fn lax_connect_with(
+        &mut self,
+        config: ClientConfig,
+    ) -> (ConnectionHandle, Vec<Event>, ConnectionHandle, Vec<Event>) {
+        info!("connecting");
+        let client_ch = self.begin_connect(config);
+        self.drive();
+        let server_ch = self.server.assert_accept();
+        let (client_events, server_events) = self.lax_finish_connect(client_ch, server_ch);
+        (client_ch, client_events, server_ch, server_events)
     }
 
     /// Just start connecting the client
@@ -311,6 +332,63 @@ impl Pair {
             .unwrap();
         self.client.connections.insert(client_ch, client_conn);
         client_ch
+    }
+
+    /// Asserts that client and server events lead to connection, allowing and accumulating
+    /// unrelated events.
+    ///
+    /// The return type contains the client events and server events that were not related to
+    /// connection establishment.
+    fn lax_finish_connect(
+        &mut self,
+        client_ch: ConnectionHandle,
+        server_ch: ConnectionHandle,
+    ) -> (Vec<Event>, Vec<Event>) {
+        let client = self.client.connections.get_mut(&client_ch).unwrap();
+        let server = self.server.connections.get_mut(&server_ch).unwrap();
+
+        let mut client_events = Vec::default();
+        let mut server_events = Vec::default();
+
+        client.poll_until(
+            |e| matches!(e, Event::HandshakeDataReady),
+            "client HandshakeDataReady",
+            &mut client_events,
+        );
+
+        client.poll_until(
+            |e| matches!(e, Event::HandshakeDataReady),
+            "client Event::HandshakeDataReady",
+            &mut client_events,
+        );
+        client.poll_until(
+            |e| matches!(e, Event::Connected),
+            "client Event::Connected",
+            &mut client_events,
+        );
+        server.poll_until(
+            |e| matches!(e, Event::HandshakeDataReady),
+            "server Event::HandshakeDataReady",
+            &mut server_events,
+        );
+        server.poll_until(
+            |e| matches!(e, Event::HandshakeConfirmed),
+            "server Event::HandshakeConfirmed",
+            &mut server_events,
+        );
+        server.poll_until(
+            |e| matches!(e, Event::Connected),
+            "server Event::Connected",
+            &mut server_events,
+        );
+        client.poll_until(
+            |e| matches!(e, Event::HandshakeConfirmed),
+            "client Event::HandshakeConfirmed",
+            &mut client_events,
+        );
+        info!("connected");
+
+        (client_events, server_events)
     }
 
     fn finish_connect(&mut self, client_ch: ConnectionHandle, server_ch: ConnectionHandle) {
@@ -379,6 +457,28 @@ impl Pair {
 
     pub(super) fn server_datagrams(&mut self, ch: ConnectionHandle) -> Datagrams<'_> {
         self.server_conn_mut(ch).datagrams()
+    }
+}
+
+impl Connection {
+    /// Polls events until the pattern is matched.
+    ///
+    /// Returns all events found before a match is found. If no event matches `pattern` it panics.
+    fn poll_until(
+        &mut self,
+        pattern: impl Fn(&Event) -> bool,
+        label: &'static str,
+        non_matching: &mut Vec<Event>,
+    ) {
+        while let Some(event) = self.poll() {
+            if pattern(&event) {
+                return;
+            } else {
+                non_matching.push(event);
+            }
+        }
+
+        panic!("{label} not found");
     }
 }
 
@@ -536,6 +636,13 @@ impl ConnPairBuilder {
         let (pair, client_cfg) = self.build_pair();
         ConnPair::connect_with(pair, client_cfg)
     }
+
+    /// Builds the [`connpair`] and connects the two endpoints, accumulating events emitted by both
+    /// enpoints that are not related to connection establishment.
+    pub(super) fn lax_connect(self) -> ConnPair {
+        let (pair, client_cfg) = self.build_pair();
+        ConnPair::lax_connect_with(pair, client_cfg)
+    }
 }
 
 /// Wrapper to a [`Pair`] which keeps handles to the client and server connections.
@@ -571,6 +678,26 @@ impl ConnPair {
             client_ch,
             server_ch,
         }
+    }
+
+    /// Creates the [`ConnPair`] allowing events not related to connection establishment.
+    ///
+    /// These events are returned along the [`ConnPair`].
+    fn lax_connect_with(
+        mut pair: Pair,
+        client_cfg: ClientConfig,
+    ) -> (Self, Vec<Event>, Vec<Event>) {
+        let (client_ch, client_events, server_ch, server_events) =
+            pair.lax_connect_with(client_cfg);
+        (
+            Self {
+                pair,
+                client_ch,
+                server_ch,
+            },
+            client_events,
+            server_events,
+        )
     }
 
     pub(super) fn conn(&self, side: Side) -> &Connection {
