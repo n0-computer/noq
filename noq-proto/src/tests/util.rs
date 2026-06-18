@@ -355,12 +355,6 @@ impl Pair {
             "client HandshakeDataReady",
             &mut client_events,
         );
-
-        client.poll_until(
-            |e| matches!(e, Event::HandshakeDataReady),
-            "client Event::HandshakeDataReady",
-            &mut client_events,
-        );
         client.poll_until(
             |e| matches!(e, Event::Connected),
             "client Event::Connected",
@@ -464,7 +458,7 @@ impl Connection {
     /// Polls events until the pattern is matched.
     ///
     /// Returns all events found before a match is found. If no event matches `pattern` it panics.
-    fn poll_until(
+    pub(super) fn poll_until(
         &mut self,
         pattern: impl Fn(&Event) -> bool,
         label: &'static str,
@@ -637,9 +631,9 @@ impl ConnPairBuilder {
         ConnPair::connect_with(pair, client_cfg)
     }
 
-    /// Builds the [`connpair`] and connects the two endpoints, accumulating events emitted by both
-    /// enpoints that are not related to connection establishment.
-    pub(super) fn lax_connect(self) -> ConnPair {
+    /// Builds the [`ConnPair`] and connects the two endpoints, accumulating events emitted by both
+    /// endpoints that are not related to connection establishment.
+    pub(super) fn lax_connect(self) -> (ConnPair, Vec<Event>, Vec<Event>) {
         let (pair, client_cfg) = self.build_pair();
         ConnPair::lax_connect_with(pair, client_cfg)
     }
