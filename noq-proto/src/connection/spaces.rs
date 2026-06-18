@@ -558,8 +558,12 @@ pub struct Retransmits {
     pub(super) max_path_id: bool,
     /// Whether we should inform the peer that their max [`PathId`] is blocking our attempt to open
     /// new paths.
-    // TODO(@divma): we need logic to prevent sending this more than once after being ack-d once
-    pub(super) paths_blocked: bool,
+    ///
+    /// Stores the remote_max_path_id at the time this was generated.
+    /// This frame is entirely informational, so when it's retransmitted, the remote_max_path_id is
+    /// intentionally not updated to preserve the fact that this was the state of the client at some
+    /// point.
+    pub(super) paths_blocked: Option<PathId>,
     /// For each enqueued NEW_TOKEN frame, a copy of the path's remote address
     ///
     /// There are 2 reasons this is unusual:
@@ -581,8 +585,12 @@ pub struct Retransmits {
     pub(super) path_abandon: BTreeMap<PathId, TransportErrorCode>,
     /// If a [`frame::PathStatusAvailable`] and [`frame::PathStatusBackup`] need to be sent for a path
     pub(super) path_status: BTreeSet<PathId>,
-    /// If a PATH_CIDS_BLOCKED frame needs to be sent for a path
-    pub(super) path_cids_blocked: BTreeSet<PathId>,
+    /// Whether a PATH_CIDS_BLOCKED frame needs to be sent for a path.
+    ///
+    /// Stores the next_seq number for the blocked path. This number can be "outdated" at the time of
+    /// sending when this is a retransmission. This is intentional, as this frame is purely
+    /// informational, and this would preserve this information.
+    pub(super) path_cids_blocked: BTreeMap<PathId, VarInt>,
 
     // Nat traversal data
     /// Addresses to report in `ADD_ADDRESS` frames
@@ -633,7 +641,7 @@ impl Retransmits {
             && !handshake_done
             && !observed_addr
             && !max_path_id
-            && !paths_blocked
+            && paths_blocked.is_none()
             && new_tokens.is_empty()
             && path_abandon.is_empty()
             && path_status.is_empty()
@@ -689,7 +697,7 @@ impl ::std::ops::BitOrAssign for Retransmits {
         self.handshake_done |= handshake_done;
         self.observed_addr |= observed_addr;
         self.max_path_id |= max_path_id;
-        self.paths_blocked |= paths_blocked;
+        self.paths_blocked = cmp::max(self.paths_blocked, paths_blocked);
         self.new_tokens.extend_from_slice(&new_tokens);
         self.path_abandon.append(&mut path_abandon);
         self.path_status.append(&mut path_status);
