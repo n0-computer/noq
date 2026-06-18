@@ -5481,13 +5481,12 @@ impl Connection {
                                 "PATH_CIDS_BLOCKED path identifier was larger than local maximum",
                             ));
                         }
-                        if !self.abandoned_paths.contains(&path_id)
-                            && next_seq.0
-                                > self
-                                    .local_cid_state
-                                    .get(&path_id)
-                                    .map(|cid_state| cid_state.active_seq().1 + 1)
-                                    .unwrap_or_default()
+                        if self
+                            .local_cid_state
+                            .get(&path_id)
+                            // The PATH_CIDS_BLOCKED frame may arrive after we've discarded the path state.
+                            // In that case, we can't check for the protocol violation.
+                            .is_some_and(|cid_state| next_seq.0 > cid_state.active_seq().1 + 1)
                         {
                             return Err(TransportError::PROTOCOL_VIOLATION(
                                 "PATH_CIDS_BLOCKED next sequence number larger than in local state",
