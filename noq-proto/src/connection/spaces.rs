@@ -10,7 +10,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use sorted_index_buffer::SortedIndexBuffer;
 use tracing::trace;
 
-use super::PathId;
+use super::{PathId, paths::PathResponses};
 use crate::{
     Dir, Duration, FourTuple, Instant, StreamId, TransportError, TransportErrorCode, VarInt,
     connection::StreamsState,
@@ -103,7 +103,7 @@ impl PacketSpace {
         if request_immediate_ack {
             // The probe should be ACKed without delay (should only be used in the Data space and
             // when the peer supports the acknowledgement frequency extension)
-            self.for_path(path_id).immediate_ack_pending = true;
+            self.for_path(path_id).pending_immediate_ack = true;
         }
 
         // We prefer to send new data to make most efficient use of bandwidth.
@@ -129,8 +129,8 @@ impl PacketSpace {
         // Nothing new to send and nothing to retransmit, so fall back on a ping. This should only
         // happen in rare cases during the handshake when the server becomes blocked by
         // anti-amplification.
-        if !self.for_path(path_id).immediate_ack_pending {
-            self.for_path(path_id).ping_pending = true;
+        if !self.for_path(path_id).pending_immediate_ack {
+            self.for_path(path_id).pending_ping = true;
         }
     }
 
@@ -146,10 +146,9 @@ impl PacketSpace {
             .number_spaces
             .values()
             .any(|pns| pns.pending_acks.can_send());
-        let space_specific = self
-            .number_spaces
-            .get(&path_id)
-            .is_some_and(|s| s.ping_pending || s.immediate_ack_pending);
+        let space_specific = self.number_spaces.get(&path_id).is_some_and(|s| {
+            s.pending_ping || s.pending_immediate_ack || !s.pending_path_responses.is_empty()
+        });
         let other = !self.pending.is_empty(streams);
         SendableFrames {
             acks,
@@ -228,6 +227,18 @@ impl IndexMut<SpaceKind> for [PacketSpace; 3] {
 ///
 /// [`PathData`]: super::paths::PathData
 pub(super) struct PacketNumberSpace {
+    /// Whether the path has already been considered opened from an application perspective.
+    ///
+    /// This means, for paths other than the original [`PathId::ZERO`], a first path
+    /// challenge has been responded to, regardless of the initial validation status of the
+    /// path. This state is irreversible, since it's not affected by the path being closed.
+    ///
+    /// Sending a PATH_CHALLENGE and receiving a valid response before the application is
+    /// informed of the path, is a way to ensure the path is usable before it is
+    /// reported. This is not required by the spec, and in the future might be changed for
+    /// simply requiring a first ack'd packet.
+    pub(super) open_status: OpenStatus,
+
     /// Highest received packet number, if any
     pub(super) largest_received_packet_number: Option<u64>,
     /// The packet number of the next packet that will be sent, if any. In the Data space, the
@@ -255,14 +266,20 @@ pub(super) struct PacketNumberSpace {
     /// distinguishing between ECN bleaching and counts having been updated by a near-simultaneous
     /// ACK already processed in another space.
     pub(super) ecn_feedback: frame::EcnCounts,
-    /// A PING frame needs to be sent on this path
-    pub(super) ping_pending: bool,
-    /// An IMMEDIATE_ACK (draft-ietf-quic-ack-frequency) frame needs to be sent on this path
-    pub(super) immediate_ack_pending: bool,
+    /// A PING frame needs to be sent on this path.
+    pub(super) pending_ping: bool,
+    /// Packet numbers to acknowledge.
+    pub(super) pending_acks: PendingAcks,
+    /// An IMMEDIATE_ACK (draft-ietf-quic-ack-frequency) frame needs to be sent on this path.
+    pub(super) pending_immediate_ack: bool,
+    /// Responses to path challenges that need to be sent, on and off-path.
+    ///
+    /// Responses are only tied to the 4-tuple they were received on, not to a specific path
+    /// generation. Whether the response is on or off-path only depends on the path's
+    /// 4-tuple at sending time.
+    pub(super) pending_path_responses: PathResponses,
     /// Packet deduplicator
     pub(super) dedup: Dedup,
-    /// Packet numbers to acknowledge
-    pub(super) pending_acks: PendingAcks,
 
     //
     // Loss Detection
@@ -289,6 +306,7 @@ impl PacketNumberSpace {
             SpaceId::Data => Some(PacketNumberFilter::new(rng)),
         };
         Self {
+            open_status: OpenStatus::default(),
             largest_received_packet_number: None,
             next_packet_number: 0,
             largest_acked_packet_pn: None,
@@ -299,10 +317,11 @@ impl PacketNumberSpace {
             lost_packets: SortedIndexBuffer::new(),
             ecn_counters: frame::EcnCounts::ZERO,
             ecn_feedback: frame::EcnCounts::ZERO,
-            ping_pending: false,
-            immediate_ack_pending: false,
-            dedup: Default::default(),
+            pending_ping: false,
             pending_acks: PendingAcks::new(),
+            pending_immediate_ack: false,
+            pending_path_responses: PathResponses::default(),
+            dedup: Default::default(),
             time_of_last_ack_eliciting_packet: None,
             loss_time: None,
             loss_probes: 0,
@@ -317,6 +336,7 @@ impl PacketNumberSpace {
             SpaceId::Data => Some(PacketNumberFilter::disabled()),
         };
         Self {
+            open_status: OpenStatus::default(),
             largest_received_packet_number: None,
             next_packet_number: 0,
             largest_acked_packet_pn: None,
@@ -327,10 +347,11 @@ impl PacketNumberSpace {
             lost_packets: SortedIndexBuffer::new(),
             ecn_counters: frame::EcnCounts::ZERO,
             ecn_feedback: frame::EcnCounts::ZERO,
-            ping_pending: false,
-            immediate_ack_pending: false,
-            dedup: Default::default(),
+            pending_ping: false,
             pending_acks: PendingAcks::new(),
+            pending_immediate_ack: false,
+            pending_path_responses: PathResponses::default(),
+            dedup: Default::default(),
             time_of_last_ack_eliciting_packet: None,
             loss_time: None,
             loss_probes: 0,
@@ -471,6 +492,18 @@ impl PacketNumberSpace {
         // this shouldn't need to visit many packets before finishing one way or another.
         self.sent_packets.values().any(|x| x.size != 0)
     }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(super) enum OpenStatus {
+    /// A first packet has not been sent using this [`PathId`].
+    #[default]
+    Pending,
+    /// The first packet has been sent using this [`PathId`]. However, it is not yet deemed good
+    /// enough to be reported to the application.
+    Sent,
+    /// The application has been informed of this path.
+    Informed,
 }
 
 /// Represents one or more packets subject to retransmission
