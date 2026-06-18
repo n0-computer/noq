@@ -5246,6 +5246,20 @@ impl Connection {
                         }
                     };
 
+                    // No need to send/resend PATH_CIDS_BLOCKED anymore
+                    self.spaces[SpaceId::Data]
+                        .pending
+                        .path_cids_blocked
+                        .retain(|&id| id != path_id);
+
+                    for space in self.spaces[SpaceId::Data].iter_paths_mut() {
+                        for sent_packet in space.sent_packets.values_mut() {
+                            if let Some(retransmits) = sent_packet.retransmits.get_mut() {
+                                retransmits.path_cids_blocked.retain(|&id| id != path_id);
+                            }
+                        }
+                    }
+
                     if self.side.is_server()
                         && path_id == PathId::ZERO
                         && self
