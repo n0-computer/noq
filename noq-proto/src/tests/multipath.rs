@@ -2123,3 +2123,32 @@ fn on_path_challenge_lost_backoff() {
     let duration = pair.time.duration_since(last_challenge_send);
     assert_eq!(duration, Duration::from_millis(1));
 }
+
+#[test]
+fn paths_blocked_retransmission() -> TestResult {
+    let _guard = subscribe();
+    let mut pair = ConnPair::builder().enable_multipath().connect();
+
+    let server_addr = pair.routes.public_server_addr();
+    for _ in 1..MAX_PATHS {
+        pair.open_path(
+            Client,
+            FourTuple::from_remote(server_addr),
+            PathStatus::Available,
+        )?;
+    }
+    pair.drive_client(); // Open all the paths we are allowed to open
+    pair.drive_server(); // Let the server process all these newly opened paths
+    pair.open_path(
+        Client,
+        FourTuple::from_remote(server_addr),
+        PathStatus::Available,
+    )
+    .expect_err("expected PathError::MaxPathIdReached");
+    pair.drive_client(); // Let the client produce the PATHS_BLOCKED frame
+    assert_eq!(pair.stats(Client).frame_tx.paths_blocked, 1);
+    pair.server.inbound.clear(); // We drop the PATHS_BLOCKED frame
+    pair.drive();
+    assert_eq!(pair.stats(Client).frame_tx.paths_blocked, 2);
+    Ok(())
+}
