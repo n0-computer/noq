@@ -3732,8 +3732,8 @@ fn address_discovery() {
     let conn = pair.client_conn_mut(conn_handle);
     assert_matches!(conn.poll(), Some(Event::HandshakeDataReady));
     assert_matches!(conn.poll(), Some(Event::Connected));
-    assert_matches!(conn.poll(), Some(Event::HandshakeConfirmed));
     assert_matches!(conn.poll(), Some(Event::Path(PathEvent::ObservedAddr{id: PathId::ZERO, addr})) if addr == expected_addr);
+    assert_matches!(conn.poll(), Some(Event::HandshakeConfirmed));
     assert_matches!(conn.poll(), None);
 
     // check that the server received the correct address
