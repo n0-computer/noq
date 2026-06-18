@@ -5459,6 +5459,16 @@ impl Connection {
                     // frames that do not increase the path id are ignored
                     if path_id > self.remote_max_path_id {
                         self.remote_max_path_id = path_id;
+                        // Avoid retransmitting PATHS_BLOCKED in case it got lost and we got the MAX_PATH_ID frame in the mean time.
+                        self.spaces[SpaceId::Data].pending.paths_blocked = false;
+                        for space in self.spaces[SpaceId::Data].iter_paths_mut() {
+                            for sent_packet in space.sent_packets.values_mut() {
+                                if let Some(retransmits) = sent_packet.retransmits.get_mut() {
+                                    retransmits.paths_blocked = false;
+                                }
+                            }
+                        }
+
                         self.issue_first_path_cids(now);
                         self.open_nat_traversed_paths(now);
                     }
