@@ -563,9 +563,9 @@ impl Connection {
         initial_status: PathStatus,
         now: Instant,
     ) -> Result<PathId, PathError> {
-        if !self.is_multipath_negotiated() {
+        let Some(max_path_id) = self.max_path_id() else {
             return Err(PathError::MultipathNotNegotiated);
-        }
+        };
         if self.side().is_server() {
             return Err(PathError::ServerSideNotAllowed);
         }
@@ -577,10 +577,7 @@ impl Connection {
             .unwrap_or(PathId::ZERO)
             .saturating_add(1u8);
 
-        if Some(path_id) > self.max_path_id() {
-            return Err(PathError::MaxPathIdReached);
-        }
-        if path_id > self.remote_max_path_id {
+        if path_id > max_path_id {
             self.spaces[SpaceId::Data].pending.paths_blocked = Some(self.remote_max_path_id);
             return Err(PathError::MaxPathIdReached);
         }
