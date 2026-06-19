@@ -216,7 +216,7 @@ pub struct Connection {
     // Queued non-retransmittable 1-RTT data
     //
     /// If the CONNECTION_CLOSE frame needs to be sent
-    connection_close_pending: bool,
+    pending_connection_close: bool,
 
     //
     // ACK frequency
@@ -398,7 +398,7 @@ impl Connection {
             },
             timers: TimerTable::default(),
             authentication_failures: 0,
-            connection_close_pending: false,
+            pending_connection_close: false,
 
             ack_frequency: AckFrequencyState::new(get_max_ack_delay(
                 &TransportParameters::default(),
@@ -1046,7 +1046,7 @@ impl Connection {
             StateType::Draining | StateType::Closed => {
                 // self.connection_close_pending is only reset once the associated packet
                 // had been encoded successfully
-                if !self.connection_close_pending {
+                if !self.pending_connection_close {
                     for path in self.paths.values_mut() {
                         path.data.app_limited = true;
                     }
@@ -1668,7 +1668,7 @@ impl Connection {
                 if space_id.kind() == self.highest_space {
                     // Don't send another close packet. Even with multipath we only send
                     // CONNECTION_CLOSE on a single path since we expect our paths to work.
-                    self.connection_close_pending = false;
+                    self.pending_connection_close = false;
                 }
                 // Send a close frame in every possible space for robustness, per
                 // RFC9000 "Immediate Close during the Handshake". Don't bother trying
@@ -2469,7 +2469,7 @@ impl Connection {
                             );
                             self.close_common();
                             self.set_close_timer(now);
-                            self.connection_close_pending = true;
+                            self.pending_connection_close = true;
                             self.state.move_to_closed(err);
                         }
                     }
@@ -2620,7 +2620,7 @@ impl Connection {
         if !was_closed {
             self.close_common();
             self.set_close_timer(now);
-            self.connection_close_pending = true;
+            self.pending_connection_close = true;
             self.state.move_to_closed_local(reason);
         }
     }
@@ -4463,7 +4463,7 @@ impl Connection {
                 .map(|p| p.data.validated && p.data.network_path == network_path)
                 .unwrap_or(false)
             {
-                self.connection_close_pending = true;
+                self.pending_connection_close = true;
             }
         }
     }
@@ -4859,7 +4859,7 @@ impl Connection {
                 Frame::Close(reason) => {
                     self.state.move_to_draining(Some(reason.into()));
                     self.endpoint_events.push_back(EndpointEventInner::Draining);
-                    self.connection_close_pending = true;
+                    self.pending_connection_close = true;
                     return Ok(());
                 }
                 _ => {
@@ -5550,7 +5550,7 @@ impl Connection {
         if let Some(reason) = close {
             self.state.move_to_draining(Some(reason.into()));
             self.endpoint_events.push_back(EndpointEventInner::Draining);
-            self.connection_close_pending = true;
+            self.pending_connection_close = true;
         }
 
         // For Multipath any packet triggers migration. For RFC9000 or QNT (+ Multipath)
@@ -6964,7 +6964,7 @@ impl Connection {
             if !self.state.is_drained() {
                 self.set_close_timer(now);
             }
-            self.connection_close_pending = true;
+            self.pending_connection_close = true;
         }
     }
 
