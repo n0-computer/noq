@@ -2152,3 +2152,85 @@ fn paths_blocked_retransmission() -> TestResult {
     assert_eq!(pair.stats(Client).frame_tx.paths_blocked, 2);
     Ok(())
 }
+
+/// This test used to generate a PROTOCOL_VIOLATION error from just packet loss and delayed packets.
+///
+/// The problem was receiving a PATH_CIDS_BLOCKED frame with path_id=1 and next_seq=1 when the server
+/// side had already abandoned and discarded path 1.
+/// In that case, we assumed the other side would violate the protocol, whereas in reality it's just
+/// a (very) delayed packet.
+///
+/// The fix was to properly check if the path was already abandoned that the PATH_CIDS_BLOCKED frame
+/// referred to.
+#[test]
+fn regression_delayed_path_cids_blocked() -> TestResult {
+    let _guard = subscribe();
+
+    let (mut pair, client_cfg) = ConnPair::builder().enable_multipath().build_pair();
+    info!("connecting");
+    let client_ch = pair.begin_connect(client_cfg);
+    pair.drive_client(); // Client sends Initial
+    pair.drive_server(); // Server receives Initial, sends Handshake
+    pair.drive_client(); // Client receives Handshake, sends handshake confirmed
+    pair.drive_server(); // Server receives handshake confirmed, sends PATH_NEW_CONNECTION_ID and confirms handshake itself
+    // Capture the server's PATH_NEW_CONNECTION_ID frames so the client generates a PATH_CIDS_BLOCKED frame on the next open_path call.
+    // This only works, because the server's outbound packet is constructed inefficiently:
+    // The PATH_NEW_CONNECTION_ID frames should *actually* be coaleced together with the server's handshake response instead of
+    // being put into a separate datagram. See also <https://github.com/n0-computer/noq/issues/66>
+    let captured_server_cids = pair.client.inbound.pop_back().unwrap();
+    pair.drive_client(); // Client receives confirmed handshake, but not PATH_NEW_CONNECTION_ID frames
+    let server_ch = pair.server.assert_accept();
+    pair.finish_connect(client_ch, server_ch);
+
+    // Attempting to open a path on the client side will fail, because we're missing the CIDs for path 1 and more
+    let mut pair = ConnPair::new(pair, client_ch, server_ch);
+    let server_addr = pair.routes.public_server_addr();
+    pair.open_path(
+        Client,
+        FourTuple::from_remote(server_addr),
+        PathStatus::Available,
+    )
+    .expect_err("expected RemoteCidsExhausted error");
+
+    pair.drive_client(); // Client generates PATH_CIDS_BLOCKED
+    // We intentionally drop the client's PATH_CIDS_BLOCKED frame.
+    pair.server.inbound.pop_back().unwrap();
+    // After the client has sent the PATH_CIDS_BLOCKED frame, we give it all the server's CIDs.
+    pair.client.inbound.push_back(captured_server_cids);
+    pair.drive_client(); // Client processes the delayed server's PATH_NEW_CONNECTION_ID
+
+    info!("Skipping forward 80ms");
+    pair.time += Duration::from_millis(80); // Trigger the client's loss detection timer for the PATH_CIDS_BLOCKED frame
+    pair.drive_client(); // Client generates another PATH_CIDS_BLOCKED
+    // This is now an encrypted datagram containing a PATH_CIDS_BLOCKED path_id=1 next_seq=1 frame.
+    let captured_client_cids_blocked = pair.server.inbound.pop_back().unwrap();
+
+    let path_id = pair.open_path(
+        Client,
+        FourTuple::from_remote(server_addr),
+        PathStatus::Available,
+    )?;
+    pair.drive(); // Fully open the path on both ends
+    pair.close_path(Client, path_id, 42u32.into())?;
+    pair.drive(); // Fully process closing the path on both ends, including discarding path state
+
+    // Now we send the delayed PATH_CIDS_BLOCKED frame, and it'll trigger a protocol violation
+    pair.server.inbound.push_front(captured_client_cids_blocked);
+    pair.drive();
+
+    // The server must not close the connection over the stale frame.
+    while let Some(event) = pair.poll(Server) {
+        if let Event::ConnectionLost {
+            reason: crate::ConnectionError::TransportError(error),
+        } = event
+        {
+            assert_ne!(
+                error.code,
+                TransportErrorCode::PROTOCOL_VIOLATION,
+                "stale PATH_CIDS_BLOCKED should not trigger PROTOCOL_VIOLATION: {}",
+                error.reason
+            );
+        }
+    }
+    Ok(())
+}
