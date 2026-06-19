@@ -9,9 +9,10 @@ use tokio_stream::StreamExt;
 
 use std::{
     convert::TryInto,
+    future::Future,
     io,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket},
-    pin::pin,
+    pin::{Pin, pin},
     str,
     sync::{
         Arc,
@@ -20,7 +21,7 @@ use std::{
     task::{Context, Poll, RawWaker, RawWakerVTable, Waker},
 };
 
-use crate::runtime::TokioRuntime;
+use crate::runtime::{AsyncTimer, AsyncUdpSocket, TokioRuntime};
 use crate::{Duration, Instant};
 use bytes::Bytes;
 use proto::{
@@ -302,6 +303,15 @@ impl EndpointFactory {
         name: impl Into<String>,
         transport_config: TransportConfig,
     ) -> Endpoint {
+        self.endpoint_with_runtime(name, transport_config, Arc::new(TokioRuntime))
+    }
+
+    fn endpoint_with_runtime(
+        &self,
+        name: impl Into<String>,
+        transport_config: TransportConfig,
+        runtime: Arc<dyn crate::runtime::Runtime>,
+    ) -> Endpoint {
         let span = info_span!("dummy");
         span.record("otel.name", name.into());
         let _guard = span.entered();
@@ -317,7 +327,7 @@ impl EndpointFactory {
             self.endpoint_config.clone(),
             Some(server_config),
             UdpSocket::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)).unwrap(),
-            Arc::new(TokioRuntime),
+            runtime,
         )
         .unwrap();
         let mut client_config = ClientConfig::with_root_certificates(Arc::new(roots)).unwrap();
@@ -1711,6 +1721,43 @@ async fn recv_stream_cancel_stop_drop() {
     );
 }
 
+/// Regression test for an `active_connections` underflow panic in the endpoint driver.
+///
+/// `ConnectionSet::insert` used to only increment `active_connections` when the endpoint
+/// isn't already closed, but `State::handle_events` decremented it unconditionally when a
+/// connection reports that it started draining. Accepting an `Incoming` *after*
+/// `Endpoint::close` therefore inserted a connection that is never counted, yet still
+/// drains and emits a `Draining` endpoint event, causing `active_connections -= 1` to
+/// underflow.
+///
+/// This was fixed by removing the guard checking if the endpoint was closed in
+/// `Incoming::accept`.
+#[tokio::test(start_paused = true)]
+async fn regression_incoming_accept_after_endpoint_close_panic() -> TestResult {
+    let _guard = subscribe();
+
+    let factory = EndpointFactory::new();
+    let runtime = Arc::new(PanicPropagatingRuntime::new());
+
+    let endpoint = factory.endpoint_with_runtime("ep", TransportConfig::default(), runtime.clone());
+    let addr = endpoint.local_addr()?;
+
+    // self-connect, but immediately close the client side, to ensure it doesn't linger
+    drop(endpoint.connect(addr, "localhost")?);
+    let incoming = endpoint.accept().await.unwrap();
+
+    endpoint.close(0u32.into(), b"");
+
+    drop(incoming.accept()?);
+    drop(endpoint); // closes the endpoint
+
+    // advance the time to allow for draining connections (we can be generous due to simulated time)
+    tokio::time::sleep(Duration::from_secs(5)).await;
+
+    runtime.assert_tasks_ok().await;
+    Ok(())
+}
+
 #[derive(Default)]
 struct WakeCounter {
     wakes: AtomicUsize,
@@ -1761,4 +1808,54 @@ unsafe fn wake_by_ref_waker(data: *const ()) {
 
 unsafe fn drop_waker(data: *const ()) {
     drop(unsafe { Arc::<WakeCounter>::from_raw(data as *const WakeCounter) });
+}
+
+/// A [`Runtime`] that tracks spawned tasks in a [`tokio::task::JoinSet`].
+///
+/// Provides [`PanicPropagatingRuntime::assert_tasks_ok`] to assert all tasks ran to completion
+/// without errors.
+#[derive(Debug)]
+struct PanicPropagatingRuntime {
+    tasks: Arc<std::sync::Mutex<tokio::task::JoinSet<()>>>,
+}
+
+impl PanicPropagatingRuntime {
+    fn new() -> Self {
+        Self {
+            tasks: Arc::new(std::sync::Mutex::new(tokio::task::JoinSet::new())),
+        }
+    }
+
+    /// Awaits all tracked tasks, panicking if any of them were cancelled or panicked.
+    async fn assert_tasks_ok(&self) {
+        // Avoid holding a mutex across awaits:
+        let mut tasks = std::mem::replace(
+            &mut *self.tasks.lock().unwrap(),
+            tokio::task::JoinSet::new(),
+        );
+        while let Some(res) = tasks.join_next().await {
+            if let Err(e) = res {
+                panic!("spawned task panicked: {e}");
+            }
+        }
+        assert!(tasks.is_empty(), "there were tasks remaining");
+    }
+}
+
+impl crate::runtime::Runtime for PanicPropagatingRuntime {
+    fn new_timer(&self, t: Instant) -> Pin<Box<dyn AsyncTimer>> {
+        TokioRuntime.new_timer(t)
+    }
+
+    fn spawn(&self, future: Pin<Box<dyn Future<Output = ()> + Send>>) {
+        self.tasks.lock().unwrap().spawn(future);
+    }
+
+    fn wrap_udp_socket(&self, sock: std::net::UdpSocket) -> io::Result<Box<dyn AsyncUdpSocket>> {
+        TokioRuntime.wrap_udp_socket(sock)
+    }
+
+    fn now(&self) -> Instant {
+        TokioRuntime.now()
+    }
 }
