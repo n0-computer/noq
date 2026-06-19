@@ -5413,12 +5413,12 @@
 <a href=#5413 id=5413 data-nosnippet>5413</a>                                <span class="string">"PATH_CIDS_BLOCKED path identifier was larger than local maximum"</span>,
 <a href=#5414 id=5414 data-nosnippet>5414</a>                            ));
 <a href=#5415 id=5415 data-nosnippet>5415</a>                        }
-<a href=#5416 id=5416 data-nosnippet>5416</a>                        <span class="kw">if </span>next_seq.<span class="number">0
-<a href=#5417 id=5417 data-nosnippet>5417</a>                            </span>&gt; <span class="self">self
-<a href=#5418 id=5418 data-nosnippet>5418</a>                                </span>.local_cid_state
-<a href=#5419 id=5419 data-nosnippet>5419</a>                                .get(<span class="kw-2">&amp;</span>path_id)
-<a href=#5420 id=5420 data-nosnippet>5420</a>                                .map(|cid_state| cid_state.active_seq().<span class="number">1 </span>+ <span class="number">1</span>)
-<a href=#5421 id=5421 data-nosnippet>5421</a>                                .unwrap_or_default()
+<a href=#5416 id=5416 data-nosnippet>5416</a>                        <span class="kw">if </span><span class="self">self
+<a href=#5417 id=5417 data-nosnippet>5417</a>                            </span>.local_cid_state
+<a href=#5418 id=5418 data-nosnippet>5418</a>                            .get(<span class="kw-2">&amp;</span>path_id)
+<a href=#5419 id=5419 data-nosnippet>5419</a>                            <span class="comment">// The PATH_CIDS_BLOCKED frame may arrive after we've discarded the path state.
+<a href=#5420 id=5420 data-nosnippet>5420</a>                            // In that case, we can't check for the protocol violation.
+<a href=#5421 id=5421 data-nosnippet>5421</a>                            </span>.is_some_and(|cid_state| next_seq.<span class="number">0 </span>&gt; cid_state.active_seq().<span class="number">1 </span>+ <span class="number">1</span>)
 <a href=#5422 id=5422 data-nosnippet>5422</a>                        {
 <a href=#5423 id=5423 data-nosnippet>5423</a>                            <span class="kw">return </span><span class="prelude-val">Err</span>(TransportError::PROTOCOL_VIOLATION(
 <a href=#5424 id=5424 data-nosnippet>5424</a>                                <span class="string">"PATH_CIDS_BLOCKED next sequence number larger than in local state"</span>,
