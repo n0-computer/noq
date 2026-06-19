@@ -1711,6 +1711,63 @@ async fn recv_stream_cancel_stop_drop() {
     );
 }
 
+/// Smoke test for normal behaviour of `Incoming::accept` after `Endpoint::close`.
+#[tokio::test(start_paused = true)]
+async fn smoke_wait_all_draining_after_incoming_accept_on_closed() -> TestResult {
+    let _guard = subscribe();
+
+    /// Draining should happen really fast. This ensures it doesn't hang.
+    const WAIT_TIMEOUT: Duration = Duration::from_secs(1);
+
+    let factory = EndpointFactory::new();
+    let client = factory.endpoint("client");
+    let server = factory.endpoint("server");
+    let addr = server.local_addr()?;
+
+    let conn = client.connect(addr, "localhost")?;
+    let incoming = server.accept().await.unwrap();
+
+    server.close(0u32.into(), b"");
+
+    tokio::time::timeout(WAIT_TIMEOUT, server.wait_all_draining()).await?;
+
+    // This gives the endpoint another connection, but it should immediately be closed.
+    drop(incoming.accept()?);
+    conn.await.expect_err("closed during handshake");
+
+    tokio::time::timeout(WAIT_TIMEOUT, server.wait_all_draining()).await?;
+
+    Ok(())
+}
+
+/// Tests connection graceful connection close during handshaking.
+#[tokio::test(start_paused = true)]
+async fn graceful_close_during_handshake() -> TestResult {
+    let _guard = subscribe();
+
+    // Well above the expected fast draining time, but well below 3 * PTO ~ 3s.
+    const WAIT_TIMEOUT: Duration = Duration::from_secs(1);
+
+    let factory = EndpointFactory::new();
+    let client = factory.endpoint("client");
+    let server = factory.endpoint("server");
+    let addr = server.local_addr()?;
+
+    let conn = client.connect(addr, "localhost")?;
+    let _server_conn = server.accept().await.unwrap().accept()?;
+
+    // Let the server send a connection close on the handshaking `Connecting`
+    server.close(0u32.into(), b"");
+
+    // The client should respond with a CONNECTION_CLOSE, allowing
+    // the server to transition to draining immediately.
+    tokio::time::timeout(WAIT_TIMEOUT, server.wait_all_draining()).await?;
+
+    conn.await.expect_err("should be closed");
+
+    Ok(())
+}
+
 #[derive(Default)]
 struct WakeCounter {
     wakes: AtomicUsize,

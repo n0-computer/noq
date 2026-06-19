@@ -4859,6 +4859,7 @@ impl Connection {
                 Frame::Close(reason) => {
                     self.state.move_to_draining(Some(reason.into()));
                     self.endpoint_events.push_back(EndpointEventInner::Draining);
+                    self.connection_close_pending = true;
                     return Ok(());
                 }
                 _ => {
