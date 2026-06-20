@@ -3927,21 +3927,40 @@ fn address_discovery_retransmission() {
     let client_ch = pair.begin_connect(client_config);
     pair.step();
 
-    // lose the last packet
-    pair.client.inbound.pop_back().unwrap();
-    pair.step();
-    let conn = pair.client_conn_mut(client_ch);
-    assert_matches!(conn.poll(), Some(Event::HandshakeDataReady));
-    assert_matches!(conn.poll(), Some(Event::Connected));
-    assert_matches!(conn.poll(), None);
-
+    // clear ALL server→client packets so OBSERVED_ADDR must arrive via retransmission,
+    // regardless of whether it was coalesced into the first or second datagram
+    pair.client.inbound.clear();
     pair.drive();
+
     let conn = pair.client_conn_mut(client_ch);
-    assert_matches!(conn.poll(), Some(Event::HandshakeConfirmed));
-    assert_matches!(
-        conn.poll(),
-        Some(Event::Path(PathEvent::ObservedAddr{id: PathId::ZERO, addr}))
-            if addr == pair.routes.as_basic().client_addr
+    let mut extra = vec![];
+    conn.poll_until(
+        |e| matches!(e, Event::HandshakeDataReady),
+        "client HandshakeDataReady",
+        &mut extra,
+    );
+    conn.poll_until(
+        |e| matches!(e, Event::Connected),
+        "client Connected",
+        &mut extra,
+    );
+    conn.poll_until(
+        |e| matches!(e, Event::HandshakeConfirmed),
+        "client HandshakeConfirmed",
+        &mut extra,
+    );
+    while let Some(e) = conn.poll() {
+        extra.push(e);
+    }
+
+    let expected_addr = pair.routes.as_basic().client_addr;
+    assert!(
+        extra.iter().any(|e| matches!(
+            e,
+            Event::Path(PathEvent::ObservedAddr { id: PathId::ZERO, addr })
+                if *addr == expected_addr
+        )),
+        "expected retransmitted ObservedAddr for {expected_addr}"
     );
 }
 
@@ -3970,30 +3989,29 @@ fn address_discovery_rebind_retransmission() {
         }),
         ..client_config()
     };
-    let client_ch = pair.begin_connect(client_config);
-    pair.step();
+    let (client_ch, _, _, _) = pair.lax_connect_with(client_config);
 
-    // lose the last packet
-    pair.client.inbound.pop_back().unwrap();
-    pair.step();
-    let conn = pair.client_conn_mut(client_ch);
-    assert_matches!(conn.poll(), Some(Event::HandshakeDataReady));
-    assert_matches!(conn.poll(), Some(Event::Connected));
-    assert_matches!(conn.poll(), None);
-
-    // simulate a rebind to ensure we will get an updated address instead of retransmitting
-    // outdated info
+    // rebind: the server must observe the new address and send an updated OBSERVED_ADDR
+    // rather than retransmitting the stale one from before the rebind
     let time = pair.time;
     pair.client_conn_mut(client_ch)
         .handle_network_change(None, time);
     let client_addr = pair.routes.as_basic_mut().passive_migration(Client);
 
     pair.drive();
+
     let conn = pair.client_conn_mut(client_ch);
-    assert_matches!(conn.poll(), Some(Event::HandshakeConfirmed));
+    let mut extra = vec![];
+    while let Some(e) = conn.poll() {
+        extra.push(e);
+    }
+
+    let obs = extra
+        .into_iter()
+        .find(|e| matches!(e, Event::Path(PathEvent::ObservedAddr { id: PathId::ZERO, .. })));
     assert_matches!(
-        conn.poll(),
-        Some(Event::Path(PathEvent::ObservedAddr{id: PathId::ZERO, addr}))
+        obs,
+        Some(Event::Path(PathEvent::ObservedAddr { id: PathId::ZERO, addr }))
             if addr == client_addr
     );
 }

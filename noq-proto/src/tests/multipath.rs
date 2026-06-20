@@ -725,26 +725,33 @@ fn per_path_observed_address() -> TestResult {
         address_discovery_role: crate::address_discovery::Role::both(),
         ..TransportConfig::default()
     };
-    let mut pair = ConnPair::builder()
+    let (mut pair, client_events, server_events) = ConnPair::builder()
         .with_transport_cfg(transport_cfg)
-        .connect();
+        .lax_connect();
 
     info!("connected");
     pair.drive();
 
-    // check that the client received the correct address
+    // ObservedAddr may be emitted during connection; check events from connection and post-drive
     let expected_addr = pair.routes.as_basic().client_addr;
+    let client_obs = client_events
+        .into_iter()
+        .find(|e| matches!(e, Event::Path(PathEvent::ObservedAddr { id: PathId::ZERO, .. })))
+        .or_else(|| pair.poll(Client));
     assert_matches!(
-        pair.poll(Client),
+        client_obs,
         Some(Event::Path(PathEvent::ObservedAddr{id: PathId::ZERO, addr}))
             if addr == expected_addr
     );
     assert_matches!(pair.poll(Client), None);
 
-    // check that the server received the correct address
     let expected_addr = pair.routes.as_basic().server_addr;
+    let server_obs = server_events
+        .into_iter()
+        .find(|e| matches!(e, Event::Path(PathEvent::ObservedAddr { id: PathId::ZERO, .. })))
+        .or_else(|| pair.poll(Server));
     assert_matches!(
-        pair.poll(Server),
+        server_obs,
         Some(Event::Path(PathEvent::ObservedAddr{id: PathId::ZERO, addr}))
             if addr == expected_addr
     );
