@@ -2,7 +2,41 @@
 
 All notable changes to noq will be documented in this file.
 
-## [1.0.0-rc.1](https://github.com/n0-computer/noq/compare/noq-v1.0.0-rc.0..1.0.0-rc.1) - 2026-05-26
+## [1.0.0](https://github.com/n0-computer/noq/compare/noq-v1.0.0-rc.1..1.0.0) - 2026-06-15
+
+### ⛰️  Features
+
+- *(proto)* Implement backoff for on-path path challenges ([#676](https://github.com/n0-computer/noq/issues/676)) - ([ba24e6b](https://github.com/n0-computer/noq/commit/ba24e6be09ccd0c9c9998bba8993565dfa4009ae))
+
+### 🐛 Bug Fixes
+
+- *(bbr3)* Call on_packet_sent when ACK-eliciting data is sent ([#689](https://github.com/n0-computer/noq/issues/689)) - ([9eb1729](https://github.com/n0-computer/noq/commit/9eb172965d2e31fc51860119459c91cfae5ce555))
+- *(multipath)* Store abandoned paths in ArrayRangeSet ([#691](https://github.com/n0-computer/noq/issues/691)) - ([9764042](https://github.com/n0-computer/noq/commit/9764042f8f7a08149a59a659f80102927ecbfc23))
+- *(multipath)* Ignore PATH_RESPONSE once the path is abandoned ([#700](https://github.com/n0-computer/noq/issues/700)) - ([cc44e08](https://github.com/n0-computer/noq/commit/cc44e0849b4ac29d5d2355f365524b59b5739edd))
+- *(noq-proto)* Never emit `PathEvent::Established` after a path has been abandoned ([#695](https://github.com/n0-computer/noq/issues/695)) - ([000e1bb](https://github.com/n0-computer/noq/commit/000e1bb64941101970e91d8f6bcd03a66fd934fc))
+- *(proto)* Prevent PATH_CHALLENGE/RESPONSE from being sent in datagrams that can't be expanded ([#699](https://github.com/n0-computer/noq/issues/699)) - ([6c5e246](https://github.com/n0-computer/noq/commit/6c5e246864d2dc5824dc65f4f04e32bb620868c6))
+- *(qlog)* Avoid another panic for an invariant ([#702](https://github.com/n0-computer/noq/issues/702)) - ([8c712cd](https://github.com/n0-computer/noq/commit/8c712cd952476367beaae6a03435d0488efe4f71))
+- *(quic)* Tail-loss probes in Initial space must be padded ([#698](https://github.com/n0-computer/noq/issues/698)) - ([2a342d1](https://github.com/n0-computer/noq/commit/2a342d17035f1019897eb5ceedbda67302097711))
+
+### 🚜 Refactor
+
+- *(logging)* Improve Display of PATH_ABANDON frame ([#706](https://github.com/n0-computer/noq/issues/706)) - ([16805f8](https://github.com/n0-computer/noq/commit/16805f8ce5d3d6f1f31800e3afa2a9e1a0f5f688))
+- *(proto)* Simplify AddressDiscovery::Role ([#693](https://github.com/n0-computer/noq/issues/693)) - ([7ae29bd](https://github.com/n0-computer/noq/commit/7ae29bd2a7b95002d8221100e6f4f0e18159abe5))
+- *(tests)* Do not use so many star imports ([#677](https://github.com/n0-computer/noq/issues/677)) - ([c706ab2](https://github.com/n0-computer/noq/commit/c706ab2abe993761b3e9f2d49474bd9555d08e41))
+- *(tests)* Do not allow dead code by default ([#678](https://github.com/n0-computer/noq/issues/678)) - ([7d5f1ab](https://github.com/n0-computer/noq/commit/7d5f1abf9d11619124d209b47cbe025655a7653c))
+- *(tests)* Introduce ConnPairBuilder ([#680](https://github.com/n0-computer/noq/issues/680)) - ([33dba68](https://github.com/n0-computer/noq/commit/33dba68d36e006fd8151dd2bb376a905c580e3e0))
+
+### 🧪 Testing
+
+- *(proto)* Take `Transmit::src_ip` into account for `ManyToManyRouting` ([#673](https://github.com/n0-computer/noq/issues/673)) - ([616dc26](https://github.com/n0-computer/noq/commit/616dc264467e765dcec7a59a07c60043d3cd730c))
+- *(proto)* Add failing proptest seed from CI ([#609](https://github.com/n0-computer/noq/issues/609)) - ([cf013f8](https://github.com/n0-computer/noq/commit/cf013f8479f5db8acf7a8b0773a295a37214c2bf))
+- Add tests for easy-hard NAT combinations ([#685](https://github.com/n0-computer/noq/issues/685)) - ([cc8822e](https://github.com/n0-computer/noq/commit/cc8822e288bff3e3bb614d39801643f068f5a7bb))
+
+### Deps
+
+- Update n0-qlog ([#703](https://github.com/n0-computer/noq/issues/703)) - ([a8edb12](https://github.com/n0-computer/noq/commit/a8edb1218edf35abe87c2d0eb203ed44acaf369f))
+
+## [noq-v1.0.0-rc.1](https://github.com/n0-computer/noq/compare/noq-v1.0.0-rc.0..noq-v1.0.0-rc.1) - 2026-05-26
 
 ### ⛰️  Features
 
@@ -37,6 +71,7 @@ All notable changes to noq will be documented in this file.
 
 - *(ci)* Switch to force-installing wasm-bindgen-cli ([#665](https://github.com/n0-computer/noq/issues/665)) - ([e701214](https://github.com/n0-computer/noq/commit/e7012143a52c1ed0ef2972e5d9c4661627fef97a))
 - Check external types in CI ([#643](https://github.com/n0-computer/noq/issues/643)) - ([684c3e2](https://github.com/n0-computer/noq/commit/684c3e25317f210ab20e159a49b0c93661990556))
+- Release - ([c80da25](https://github.com/n0-computer/noq/commit/c80da2500637b9057710b06597ce6e215e41d50f))
 
 ## [noq-v1.0.0-rc.0](https://github.com/n0-computer/noq/compare/noq-v0.18.0..noq-v1.0.0-rc.0) - 2026-05-07
 

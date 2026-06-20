@@ -1844,7 +1844,7 @@ dependencies = [
 
 [[package]]
 name = "noq"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-executor",
@@ -1887,7 +1887,7 @@ dependencies = [
 
 [[package]]
 name = "noq-proto"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "aes-gcm",
  "arbitrary",
@@ -1927,7 +1927,7 @@ dependencies = [
 
 [[package]]
 name = "noq-udp"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "cfg_aliases",
  "criterion",
