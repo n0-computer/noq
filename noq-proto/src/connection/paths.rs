@@ -182,23 +182,23 @@ pub(super) struct PathData {
     /// I.e. when app_limited is true, the congestion controller doesn't increase the congestion window.
     pub(super) app_limited: bool,
 
-    /// Path challenges sent (on the wire, on-path) that we didn't receive a path response for yet
-    on_path_challenges_unconfirmed: IntMap<u64, SentChallengeInfo>,
     /// Whether to trigger sending another PATH_CHALLENGE in the next poll_transmit.
     ///
-    /// This is picked up by [`super::Connection::space_can_send`].
+    /// This is picked up by [`super::Connection::space_can_send`]. These are **not**
+    /// retransmittable, which is why they are not part of the `PathRetransmits`.
     ///
-    /// Only used for RFC9000-style path migration and multipath path validation (for opening).
+    /// Only used for **on-path** challenges, like RFC9000-style path migration and
+    /// multipath path validation (for opening).
     ///
-    /// This is **not used** for n0 nat traversal challenge sending.
-    pub(super) pending_on_path_challenge: bool,
+    /// This is **not used** for n0 nat traversal challenge sending, which is off-path.
+    pub(super) pending_challenge: bool,
+    /// On-path path challenges sent that we didn't receive a path response for yet.
+    unconfirmed_challenges: IntMap<u64, SentChallengeInfo>,
     /// How often we've deemed a path challenge to be lost.
     ///
     /// Similar to [`Self::pto_count`], but for on-path path challenges.
     /// Used to calculate exponential backoff for retrying path challenges.
-    pub(super) on_path_challenges_lost: u32,
-    /// Pending responses to PATH_CHALLENGE frames
-    pub(super) path_responses: PathResponses,
+    pub(super) lost_challenge_count: u32,
     /// Whether we're certain the peer can both send and receive on this address
     ///
     /// Initially equal to `use_stateless_retry` for servers, and becomes false again on every
@@ -323,10 +323,9 @@ impl PathData {
             ),
             congestion,
             app_limited: false,
-            on_path_challenges_unconfirmed: Default::default(),
-            on_path_challenges_lost: 0,
-            pending_on_path_challenge: false,
-            path_responses: PathResponses::default(),
+            unconfirmed_challenges: Default::default(),
+            lost_challenge_count: 0,
+            pending_challenge: false,
             validated: false,
             total_sent: 0,
             total_recvd: 0,
@@ -387,10 +386,9 @@ impl PathData {
             sending_ecn: true,
             congestion,
             app_limited: false,
-            on_path_challenges_unconfirmed: Default::default(),
-            on_path_challenges_lost: 0,
-            pending_on_path_challenge: false,
-            path_responses: PathResponses::default(),
+            unconfirmed_challenges: Default::default(),
+            lost_challenge_count: 0,
+            pending_challenge: false,
             validated: false,
             total_sent: 0,
             total_recvd: 0,
@@ -415,7 +413,7 @@ impl PathData {
 
     /// Whether we're in the process of validating this path with PATH_CHALLENGEs
     pub(super) fn is_validating_path(&self) -> bool {
-        !self.on_path_challenges_unconfirmed.is_empty() || self.pending_on_path_challenge
+        !self.unconfirmed_challenges.is_empty() || self.pending_challenge
     }
 
     /// Indicates whether we're a server that hasn't validated the peer's address and hasn't
@@ -451,7 +449,7 @@ impl PathData {
             network_path,
         };
         debug_assert_eq!(network_path, self.network_path);
-        self.on_path_challenges_unconfirmed.insert(token, info);
+        self.unconfirmed_challenges.insert(token, info);
     }
 
     /// Remove `packet` with number `pn` from this path's congestion control counters, or return
@@ -490,18 +488,18 @@ impl PathData {
 
     /// The earliest time at which an on-path challenge we sent is considered lost.
     pub(super) fn earliest_on_path_expiring_challenge(&self) -> Option<Instant> {
-        if self.on_path_challenges_unconfirmed.is_empty() {
+        if self.unconfirmed_challenges.is_empty() {
             return None;
         }
         let duration = self.on_path_challenge_expiry();
-        self.on_path_challenges_unconfirmed
+        self.unconfirmed_challenges
             .values()
             .map(|info| info.sent_instant + duration)
             .min()
     }
 
     pub(super) fn on_path_challenge_expiry(&self) -> Duration {
-        let backoff = 2u32.pow(self.on_path_challenges_lost.min(MAX_BACKOFF_EXPONENT));
+        let backoff = 2u32.pow(self.lost_challenge_count.min(MAX_BACKOFF_EXPONENT));
         let duration = self.rtt.pto_base() * backoff;
         duration.min(MAX_PTO_INTERVAL)
     }
@@ -525,7 +523,7 @@ impl PathData {
         // - network path over which the response arrived (`network_path`)
         //
         // As per the spec, this only validates the network path on which this was *sent*.
-        match self.on_path_challenges_unconfirmed.remove(&token) {
+        match self.unconfirmed_challenges.remove(&token) {
             // Response to an on-path PathChallenge that validates this path.
             // The sent path should match the current path. However, it's possible that the
             // challenge was sent when no local_ip was known. This case is allowed as well.
@@ -552,12 +550,12 @@ impl PathData {
             Some(info) => {
                 // This is a valid path response, but this validates a 4-tuple we no longer
                 // have in use. Keep only sent challenges for the current path.
-                self.on_path_challenges_unconfirmed
+                self.unconfirmed_challenges
                     .retain(|_token, i| i.network_path == self.network_path);
 
                 // If there are no challenges for the current path, schedule one
-                if !self.on_path_challenges_unconfirmed.is_empty() {
-                    self.pending_on_path_challenge = true;
+                if !self.unconfirmed_challenges.is_empty() {
+                    self.pending_challenge = true;
                 }
                 OnPathResponseReceived::Ignored {
                     sent_on: info.network_path,
@@ -573,9 +571,9 @@ impl PathData {
 
     /// Removes all on-path challenges we remember and cancels sending new on-path challenges.
     pub(super) fn reset_on_path_challenges(&mut self) {
-        self.on_path_challenges_unconfirmed.clear();
-        self.pending_on_path_challenge = false;
-        self.on_path_challenges_lost = 0;
+        self.unconfirmed_challenges.clear();
+        self.pending_challenge = false;
+        self.lost_challenge_count = 0;
     }
 
     #[cfg(feature = "qlog")]
@@ -914,7 +912,8 @@ impl PathResponses {
         let response = *self.pending.last()?;
         // We use an exact comparison here, because once we've received for the first time,
         // we really should either already have a local_ip, or we will never get one
-        // (because our OS doesn't support it).
+        // (because our OS doesn't support it). And even if we get it wrong we are only
+        // slightly less efficient and would not include other on-path data in the packet.
         if response.network_path == network_path {
             // We don't bother searching further because we expect that the on-path response will
             // get drained in the immediate future by a call to `pop_on_path`
@@ -934,6 +933,13 @@ impl PathResponses {
         }
         self.pending.pop();
         Some(response.token)
+    }
+
+    /// Whether the next [`Self::pop_on_path`] will return something to send.
+    pub(crate) fn has_pending_on_path(&self, network_path: FourTuple) -> bool {
+        self.pending
+            .last()
+            .is_some_and(|response| response.network_path == network_path)
     }
 
     pub(crate) fn is_empty(&self) -> bool {

@@ -10,7 +10,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use sorted_index_buffer::SortedIndexBuffer;
 use tracing::trace;
 
-use super::{PathId, paths::PathRetransmits};
+use super::{PathId, paths::PathResponses, paths::PathRetransmits};
 use crate::{
     Dir, Duration, FourTuple, Instant, StreamId, TransportError, TransportErrorCode, VarInt,
     connection::StreamsState,
@@ -103,7 +103,7 @@ impl PacketSpace {
         if request_immediate_ack {
             // The probe should be ACKed without delay (should only be used in the Data space and
             // when the peer supports the acknowledgement frequency extension)
-            self.for_path(path_id).immediate_ack_pending = true;
+            self.for_path(path_id).pending_immediate_ack = true;
         }
 
         // We prefer to send new data to make most efficient use of bandwidth.
@@ -129,8 +129,8 @@ impl PacketSpace {
         // Nothing new to send and nothing to retransmit, so fall back on a ping. This should only
         // happen in rare cases during the handshake when the server becomes blocked by
         // anti-amplification.
-        if !self.for_path(path_id).immediate_ack_pending {
-            self.for_path(path_id).ping_pending = true;
+        if !self.for_path(path_id).pending_immediate_ack {
+            self.for_path(path_id).pending_ping = true;
         }
     }
 
@@ -146,10 +146,9 @@ impl PacketSpace {
             .number_spaces
             .values()
             .any(|pns| pns.pending_acks.can_send());
-        let space_specific = self
-            .number_spaces
-            .get(&path_id)
-            .is_some_and(|s| s.ping_pending || s.immediate_ack_pending);
+        let space_specific = self.number_spaces.get(&path_id).is_some_and(|s| {
+            s.pending_ping || s.pending_immediate_ack || !s.pending_path_responses.is_empty()
+        });
         let other = !self.pending.is_empty(streams);
         SendableFrames {
             acks,
@@ -255,14 +254,20 @@ pub(super) struct PacketNumberSpace {
     /// distinguishing between ECN bleaching and counts having been updated by a near-simultaneous
     /// ACK already processed in another space.
     pub(super) ecn_feedback: frame::EcnCounts,
-    /// A PING frame needs to be sent on this path
-    pub(super) ping_pending: bool,
-    /// An IMMEDIATE_ACK (draft-ietf-quic-ack-frequency) frame needs to be sent on this path
-    pub(super) immediate_ack_pending: bool,
+    /// A PING frame needs to be sent on this path.
+    pub(super) pending_ping: bool,
+    /// Packet numbers to acknowledge.
+    pub(super) pending_acks: PendingAcks,
+    /// An IMMEDIATE_ACK (draft-ietf-quic-ack-frequency) frame needs to be sent on this path.
+    pub(super) pending_immediate_ack: bool,
+    /// Responses to path challenges that need to be sent, on and off-path.
+    ///
+    /// Responses are only tied to the 4-tuple they were received on, not to a specific path
+    /// generation. Whether the response is on or off-path only depends on the path's
+    /// 4-tuple at sending time.
+    pub(super) pending_path_responses: PathResponses,
     /// Packet deduplicator
     pub(super) dedup: Dedup,
-    /// Packet numbers to acknowledge
-    pub(super) pending_acks: PendingAcks,
 
     //
     // Loss Detection
@@ -299,10 +304,11 @@ impl PacketNumberSpace {
             lost_packets: SortedIndexBuffer::new(),
             ecn_counters: frame::EcnCounts::ZERO,
             ecn_feedback: frame::EcnCounts::ZERO,
-            ping_pending: false,
-            immediate_ack_pending: false,
-            dedup: Default::default(),
+            pending_ping: false,
             pending_acks: PendingAcks::new(),
+            pending_immediate_ack: false,
+            pending_path_responses: PathResponses::default(),
+            dedup: Default::default(),
             time_of_last_ack_eliciting_packet: None,
             loss_time: None,
             loss_probes: 0,
@@ -327,10 +333,11 @@ impl PacketNumberSpace {
             lost_packets: SortedIndexBuffer::new(),
             ecn_counters: frame::EcnCounts::ZERO,
             ecn_feedback: frame::EcnCounts::ZERO,
-            ping_pending: false,
-            immediate_ack_pending: false,
-            dedup: Default::default(),
+            pending_ping: false,
             pending_acks: PendingAcks::new(),
+            pending_immediate_ack: false,
+            pending_path_responses: PathResponses::default(),
+            dedup: Default::default(),
             time_of_last_ack_eliciting_packet: None,
             loss_time: None,
             loss_probes: 0,

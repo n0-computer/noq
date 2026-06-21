@@ -978,7 +978,7 @@ impl Connection {
 
         // To open a path locally we need to send a packet on the path. Sending a challenge
         // guarantees this.
-        data.pending_on_path_challenge = true;
+        data.pending_challenge = true;
         data.pending.observed_address = self
             .config
             .address_discovery_role
@@ -1957,10 +1957,10 @@ impl Connection {
         path_id: PathId,
     ) -> Option<Transmit> {
         let (prev_cid, prev_path) = self.paths.get_mut(&path_id)?.prev.as_mut()?;
-        if !prev_path.pending_on_path_challenge {
+        if !prev_path.pending_challenge {
             return None;
         };
-        prev_path.pending_on_path_challenge = false;
+        prev_path.pending_challenge = false;
         let token = self.rng.random();
         let network_path = prev_path.network_path;
         prev_path.record_path_challenge_sent(now, token, network_path);
@@ -2016,13 +2016,18 @@ impl Connection {
         buf: &mut Vec<u8>,
         path_id: PathId,
     ) -> Option<Transmit> {
-        let path = self.paths.get_mut(&path_id).map(|state| &mut state.data)?;
+        let network_path = self
+            .paths
+            .get_mut(&path_id)
+            .map(|state| state.data.network_path)?;
         let cid_queue = self.remote_cids.get_mut(&path_id)?;
-        let (token, network_path) = path.path_responses.pop_off_path(path.network_path)?;
+        let pns = self.spaces[SpaceKind::Data].for_path(path_id);
+        let (token, network_path) = pns.pending_path_responses.pop_off_path(network_path)?;
 
         // TODO: make off-path probes unlinkable.
         let cid = cid_queue.active();
 
+        // PATH_RESPONSE (off-path)
         let frame = frame::PathResponse(token);
 
         let buf = &mut TransmitBuf::new(buf, NonZeroUsize::MIN, MIN_INITIAL_SIZE.into());
@@ -2032,6 +2037,8 @@ impl Connection {
         let stats = &mut self.path_stats.for_path(path_id).frame_tx;
         builder.write_frame_with_log_msg(frame, stats, Some("(off-path)"));
 
+        // PATH_CHALLENGE (off-path)
+        //
         // If we are a client doing NAT traversal, always include a PATH_CHALLENGE with any
         // off-path PATH_RESPONSE. No need to schedule any retries for this, if NAT
         // traversal is taking place then this remote already is being probed with
@@ -2099,6 +2106,7 @@ impl Connection {
         };
         let token = self.rng.random();
 
+        // PATH_CHALLENGE (NAT probe)
         let frame = frame::PathChallenge(token);
 
         let mut buf = TransmitBuf::new(buf, NonZeroUsize::MIN, MIN_INITIAL_SIZE.into());
@@ -2522,9 +2530,9 @@ impl Connection {
                             let Some(path) = self.paths.get_mut(&path_id) else {
                                 continue;
                             };
-                            trace!(?path.data.on_path_challenges_lost, "path challenge deemed lost");
-                            path.data.pending_on_path_challenge = true;
-                            path.data.on_path_challenges_lost += 1;
+                            trace!(?path.data.lost_challenge_count, "path challenge deemed lost");
+                            path.data.pending_challenge = true;
+                            path.data.lost_challenge_count += 1;
                         }
                         PathTimer::AbandonFromValidation => {
                             let Some(path) = self.paths.get_mut(&path_id) else {
@@ -2655,7 +2663,7 @@ impl Connection {
         // TODO(flub): This is very brute-force: it pings *all* the paths.  Instead it would
         //    be nice if we could only send a single packet for this.
         for path_data in self.spaces[self.highest_space].number_spaces.values_mut() {
-            path_data.ping_pending = true;
+            path_data.pending_ping = true;
         }
     }
 
@@ -2667,7 +2675,7 @@ impl Connection {
             .number_spaces
             .get_mut(&path)
             .ok_or(ClosedPath { _private: () })?;
-        path_data.ping_pending = true;
+        path_data.pending_ping = true;
         Ok(())
     }
 
@@ -4981,13 +4989,16 @@ impl Connection {
                     close = Some(reason);
                 }
                 Frame::PathChallenge(challenge) => {
-                    let path = &mut self
-                        .path_mut(path_id)
-                        .expect("payload is processed only after the path becomes known");
-                    path.path_responses.push(number, challenge.0, network_path);
+                    self.spaces[SpaceKind::Data]
+                        .for_path(path_id)
+                        .pending_path_responses
+                        .push(number, challenge.0, network_path);
                     // If we were passively migrated (e.g. NAT rebinding), our local_ip will
                     // not match. Once we processed a non-probing packet the local_ip will
                     // finally be updated.
+                    let path = &mut self
+                        .path_mut(path_id)
+                        .expect("payload is processed only after the path becomes known");
                     if network_path.remote == path.network_path.remote {
                         // PATH_CHALLENGE on active path, possible off-path packet
                         // forwarding attack. Send a non-probing packet to recover the
@@ -5764,7 +5775,7 @@ impl Connection {
                 addr: updated,
             }));
         }
-        new_path_data.pending_on_path_challenge = true;
+        new_path_data.pending_challenge = true;
         new_path_data.pending.observed_address = self
             .config
             .address_discovery_role
@@ -5783,7 +5794,7 @@ impl Connection {
         if !prev_path_data.validated
             && let Some(cid) = self.remote_cids.get(&path_id).map(CidQueue::active)
         {
-            prev_path_data.pending_on_path_challenge = true;
+            prev_path_data.pending_challenge = true;
             // We haven't updated the remote CID yet, this captures the remote CID we were using on
             // the previous path.
             path.prev = Some((cid, prev_path_data));
@@ -5924,10 +5935,10 @@ impl Connection {
         for (path_id, remote) in recoverable_paths.into_iter() {
             // Schedule a Ping for a liveness check.
             if let Some(path_space) = self.spaces[SpaceId::Data].number_spaces.get_mut(&path_id) {
-                path_space.ping_pending = true;
+                path_space.pending_ping = true;
 
                 if immediate_ack_allowed {
-                    path_space.immediate_ack_pending = true;
+                    path_space.pending_immediate_ack = true;
                 }
             }
 
@@ -6081,14 +6092,14 @@ impl Connection {
 
         // PING
         if !scheduling_info.is_abandoned
-            && mem::replace(&mut space.for_path(path_id).ping_pending, false)
+            && mem::replace(&mut space.for_path(path_id).pending_ping, false)
         {
             builder.write_frame(frame::Ping, stats);
         }
 
         // IMMEDIATE_ACK
         if !scheduling_info.is_abandoned
-            && mem::replace(&mut space.for_path(path_id).immediate_ack_pending, false)
+            && mem::replace(&mut space.for_path(path_id).pending_immediate_ack, false)
         {
             debug_assert_eq!(
                 space_id,
@@ -6150,19 +6161,18 @@ impl Connection {
                 .ack_frequency_sent(path_id, builder.packet_number, max_ack_delay);
         }
 
-        // PATH_CHALLENGE
+        // PATH_CHALLENGE (on-path)
         if !scheduling_info.is_abandoned
             && space_id == SpaceId::Data
-            && path.pending_on_path_challenge
+            && path.pending_challenge
             // we don't want to send new challenges if we are already closing
             && !self.state.is_closed()
             && builder.frame_space_remaining() > frame::PathChallenge::SIZE_BOUND
-            // PATH_CHALLENGE must be part of datagrams expanded to the MIN_INITIAL_SIZE (1200
-            // bytes). A datagram can be expanded to this size if it's the first, as it defines the
-            // GSO segment size, or if the first datagram is larger than this.
-            && !(builder.buf.num_datagrams() > 1 && builder.buf.segment_size() < usize::from(MIN_INITIAL_SIZE))
+            // An on-path PATH_CHALLENGE must be part of datagrams expanded to the
+            // MIN_INITIAL_SIZE (1200 bytes).
+            && builder.buf.segment_size() >= usize::from(MIN_INITIAL_SIZE)
         {
-            path.pending_on_path_challenge = false;
+            path.pending_challenge = false;
 
             let token = self.rng.random();
             path.record_path_challenge_sent(now, token, path.network_path);
@@ -6189,7 +6199,7 @@ impl Connection {
                 self.qlog.with_time(now),
             );
 
-            if is_multipath_negotiated && !path.validated && path.pending_on_path_challenge {
+            if is_multipath_negotiated && !path.validated && path.pending_challenge {
                 // queue informing the path status along with the challenge
                 space.pending.path_status.insert(path_id);
             }
@@ -6216,15 +6226,14 @@ impl Connection {
             }
         }
 
-        // PATH_RESPONSE
+        // PATH_RESPONSE (on-path)
         if !scheduling_info.is_abandoned
             && space_id == SpaceId::Data
             && builder.frame_space_remaining() > frame::PathResponse::SIZE_BOUND
-            && let Some(token) = path.path_responses.pop_on_path(path.network_path)
-            // PATH_RESPONSE must be part of datagrams expanded to the MIN_INITIAL_SIZE (1200
-            // bytes). A datagram can be expanded to this size if it's the first, as it defines the
-            // GSO segment size, or if the first datagram is larger than this.
-            && !(builder.buf.num_datagrams() > 1 && builder.buf.segment_size() < usize::from(MIN_INITIAL_SIZE))
+            // An on-path PATH_RESPONSE must be part of datagrams expanded to the
+            // MIN_INITIAL_SIZE (1200 bytes).
+            && builder.buf.segment_size() >= usize::from(MIN_INITIAL_SIZE)
+            && let Some(token) = space.for_path(path_id).pending_path_responses.pop_on_path(path.network_path)
         {
             let response = frame::PathResponse(token);
             builder.write_frame(response, stats);
@@ -6802,7 +6811,7 @@ impl Connection {
         );
         self.spaces[SpaceId::Data]
             .for_path(path_id)
-            .immediate_ack_pending = true;
+            .pending_immediate_ack = true;
     }
 
     /// Decodes a packet, returning its decrypted payload, so it can be inspected in tests
@@ -6934,7 +6943,7 @@ impl Connection {
     #[cfg(test)]
     pub(crate) fn trigger_path_validation(&mut self) {
         for path in self.paths.values_mut() {
-            path.data.pending_on_path_challenge = true;
+            path.data.pending_challenge = true;
         }
     }
 
@@ -6952,7 +6961,7 @@ impl Connection {
         }
     }
 
-    /// Whether we have on-path 1-RTT data to send.
+    /// Whether we have **on-path** 1-RTT data to send.
     ///
     /// This checks for frames that can only be sent in the data space (1-RTT):
     /// - Pending PATH_CHALLENGE frames on the active and previous path if just migrated.
@@ -6963,11 +6972,15 @@ impl Connection {
     /// See also [`PacketSpace::can_send`] which keeps track of all other frame types that
     /// may need to be sent.
     fn can_send_1rtt(&self, path_id: PathId, max_size: usize) -> SendableFrames {
-        let space_specific = self.paths.get(&path_id).is_some_and(|path| {
-            path.data.pending_on_path_challenge
-                || !path.data.path_responses.is_empty()
-                || !path.data.pending.is_empty()
-        });
+        let network_path = self.path_data(path_id).network_path;
+        let space_specific = self
+            .paths
+            .get(&path_id)
+            .is_some_and(|path| path.data.pending_challenge || !path.data.pending.is_empty())
+            || self.spaces[SpaceKind::Data]
+                .number_spaces
+                .get(&path_id)
+                .is_some_and(|pns| pns.pending_path_responses.has_pending_on_path(network_path));
 
         // Stream control frames are checked in PacketSpace::can_send, only check data here.
         let other = self.streams.can_send_stream_data()
