@@ -50,6 +50,32 @@ impl UdpSocketState {
         );
 
         socket.0.set_nonblocking(true)?;
+
+        // Stop Windows from failing the next recv with WSAECONNRESET or WSAENETRESET when a
+        // prior send drew an ICMP error. WSAECONNRESET follows a port-unreachable (a send to a
+        // closed port) and WSAENETRESET follows a TTL-expired / net-unreachable; both are
+        // reported against the next recv on the same socket. We never want to fail the recv
+        // path due to a failed send. The SIO_UDP_CONNRESET and SIO_UDP_NETRESET ioctls with
+        // a FALSE argument switch these error reportings off completely.
+        for (control_code, name) in [
+            (WinSock::SIO_UDP_CONNRESET, "SIO_UDP_CONNRESET"),
+            (WinSock::SIO_UDP_NETRESET, "SIO_UDP_NETRESET"),
+        ] {
+            if let Err(error) = disable_udp_ioctl(&*socket.0, control_code) {
+                if is_unsupported_error(&error) {
+                    // SIO_UDP_NETRESET requires Windows 8+, and neither ioctl is implemented
+                    // under Wine.
+                    crate::log::debug!(
+                        "{name} not supported, recv may emit errors after a prior send drew an ICMP error"
+                    );
+                } else {
+                    crate::log::debug!(
+                        "disabling {name} failed: {error}, recv may emit errors after a prior send drew an ICMP error"
+                    );
+                }
+            }
+        }
+
         let addr = socket.0.local_addr()?;
         let is_ipv6 = addr.as_socket_ipv6().is_some();
         let is_ipv4 = if is_ipv6 {
@@ -524,6 +550,36 @@ fn send(state: &UdpSocketState, socket: UdpSockRef<'_>, transmit: &Transmit<'_>)
             }
             Err(err)
         }
+    }
+}
+
+/// Disables a boolean UDP `WSAIoctl` notification flag on `socket` by passing `FALSE`.
+///
+/// Used to turn off the ICMP-error notifications (`SIO_UDP_CONNRESET`,
+/// `SIO_UDP_NETRESET`) that Windows otherwise reports against the next recv. See
+/// [`UdpSocketState::new`] for why we suppress them.
+///
+/// See <https://learn.microsoft.com/en-us/windows/win32/api/winsock2/nf-winsock2-wsaioctl>.
+fn disable_udp_ioctl(socket: &impl AsRawSocket, control_code: u32) -> io::Result<()> {
+    let disabled: u32 = 0; // FALSE
+    let mut bytes_returned: u32 = 0;
+    let rc = unsafe {
+        WinSock::WSAIoctl(
+            socket.as_raw_socket() as usize,
+            control_code,
+            &disabled as *const _ as *const _,
+            mem::size_of_val(&disabled) as u32,
+            ptr::null_mut(),
+            0,
+            &mut bytes_returned,
+            ptr::null_mut(),
+            None,
+        )
+    };
+
+    match rc == 0 {
+        true => Ok(()),
+        false => Err(io::Error::last_os_error()),
     }
 }
 
