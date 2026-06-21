@@ -265,18 +265,6 @@ pub(super) struct PathData {
     /// <https://www.rfc-editor.org/rfc/rfc9000.html#section-10.1>.
     pub(super) permit_idle_reset: bool,
 
-    /// Whether the path has already been considered opened from an application perspective.
-    ///
-    /// This means, for paths other than the original [`PathId::ZERO`], a first path challenge has
-    /// been responded to, regardless of the initial validation status of the path. This state is
-    /// irreversible, since it's not affected by the path being closed.
-    ///
-    /// Sending a PATH_CHALLENGE and receiving a valid response before the application is informed
-    /// of the path, is a way to ensure the path is usable before it is reported. This is not
-    /// required by the spec, and in the future might be changed for simply requiring a first ack'd
-    /// packet.
-    pub(super) open_status: OpenStatus,
-
     /// Whether we're currently draining the path after having abandoned it.
     ///
     /// This should only be true when a path discard timer is armed, and after the path was
@@ -354,7 +342,6 @@ impl PathData {
             idle_timeout: config.default_path_max_idle_timeout,
             keep_alive: config.default_path_keep_alive_interval,
             permit_idle_reset: true,
-            open_status: OpenStatus::default(),
             draining: false,
             #[cfg(feature = "qlog")]
             recovery_metrics: RecoveryMetrics::default(),
@@ -403,7 +390,6 @@ impl PathData {
             idle_timeout: prev.idle_timeout,
             keep_alive: prev.keep_alive,
             permit_idle_reset: true,
-            open_status: OpenStatus::default(),
             draining: false,
             #[cfg(feature = "qlog")]
             recovery_metrics: prev.recovery_metrics.clone(),
@@ -541,10 +527,7 @@ impl PathData {
                 let rtt = now.saturating_duration_since(sent_instant);
                 self.rtt.reset_initial_rtt(rtt);
 
-                let prev_status = std::mem::replace(&mut self.open_status, OpenStatus::Informed);
-                OnPathResponseReceived::OnPath {
-                    was_open: matches!(prev_status, OpenStatus::Informed),
-                }
+                OnPathResponseReceived::OnPath
             }
             // Response to an on-path PathChallenge that does not validate this path.
             Some(info) => {
@@ -670,7 +653,7 @@ impl PathData {
 
 pub(super) enum OnPathResponseReceived {
     /// This response validates the path on its current remote address.
-    OnPath { was_open: bool },
+    OnPath,
     /// The received token is unknown.
     Unknown,
     /// The response is valid but it's not usable for path validation.
@@ -678,18 +661,6 @@ pub(super) enum OnPathResponseReceived {
         sent_on: FourTuple,
         current_path: FourTuple,
     },
-}
-
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub(super) enum OpenStatus {
-    /// A first packet has not been sent using this [`PathId`].
-    #[default]
-    Pending,
-    /// The first packet has been sent using this [`PathId`]. However, it is not yet deemed good
-    /// enough to be reported to the application.
-    Sent,
-    /// The application has been informed of this path.
-    Informed,
 }
 
 /// Congestion metrics as described in [`recovery_metrics_updated`].

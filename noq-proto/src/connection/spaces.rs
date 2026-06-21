@@ -227,6 +227,18 @@ impl IndexMut<SpaceKind> for [PacketSpace; 3] {
 ///
 /// [`PathData`]: super::paths::PathData
 pub(super) struct PacketNumberSpace {
+    /// Whether the path has already been considered opened from an application perspective.
+    ///
+    /// This means, for paths other than the original [`PathId::ZERO`], a first path
+    /// challenge has been responded to, regardless of the initial validation status of the
+    /// path. This state is irreversible, since it's not affected by the path being closed.
+    ///
+    /// Sending a PATH_CHALLENGE and receiving a valid response before the application is
+    /// informed of the path, is a way to ensure the path is usable before it is
+    /// reported. This is not required by the spec, and in the future might be changed for
+    /// simply requiring a first ack'd packet.
+    pub(super) open_status: OpenStatus,
+
     /// Highest received packet number, if any
     pub(super) largest_received_packet_number: Option<u64>,
     /// The packet number of the next packet that will be sent, if any. In the Data space, the
@@ -294,6 +306,7 @@ impl PacketNumberSpace {
             SpaceId::Data => Some(PacketNumberFilter::new(rng)),
         };
         Self {
+            open_status: OpenStatus::default(),
             largest_received_packet_number: None,
             next_packet_number: 0,
             largest_acked_packet_pn: None,
@@ -323,6 +336,7 @@ impl PacketNumberSpace {
             SpaceId::Data => Some(PacketNumberFilter::disabled()),
         };
         Self {
+            open_status: OpenStatus::default(),
             largest_received_packet_number: None,
             next_packet_number: 0,
             largest_acked_packet_pn: None,
@@ -478,6 +492,18 @@ impl PacketNumberSpace {
         // this shouldn't need to visit many packets before finishing one way or another.
         self.sent_packets.values().any(|x| x.size != 0)
     }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(super) enum OpenStatus {
+    /// A first packet has not been sent using this [`PathId`].
+    #[default]
+    Pending,
+    /// The first packet has been sent using this [`PathId`]. However, it is not yet deemed good
+    /// enough to be reported to the application.
+    Sent,
+    /// The application has been informed of this path.
+    Informed,
 }
 
 /// Represents one or more packets subject to retransmission
