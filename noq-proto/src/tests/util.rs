@@ -385,7 +385,12 @@ impl Pair {
         (client_events, server_events)
     }
 
-    fn finish_connect(&mut self, client_ch: ConnectionHandle, server_ch: ConnectionHandle) {
+    /// Asserts connection events expected for a finished connection are emitted.
+    pub(super) fn finish_connect(
+        &mut self,
+        client_ch: ConnectionHandle,
+        server_ch: ConnectionHandle,
+    ) {
         assert_matches!(
             self.client_conn_mut(client_ch).poll(),
             Some(Event::HandshakeDataReady)
@@ -663,6 +668,18 @@ impl Default for ConnPair {
 impl ConnPair {
     pub(super) fn builder() -> ConnPairBuilder {
         Default::default()
+    }
+
+    pub(super) fn new(
+        pair: Pair,
+        client_ch: ConnectionHandle,
+        server_ch: ConnectionHandle,
+    ) -> Self {
+        Self {
+            pair,
+            client_ch,
+            server_ch,
+        }
     }
 
     fn connect_with(mut pair: Pair, client_cfg: ClientConfig) -> Self {
