@@ -3950,58 +3950,52 @@ fn address_discovery_retransmission() {
 fn address_discovery_rebind_retransmission() {
     let _guard = subscribe();
 
-    let server = ServerConfig {
-        transport: Arc::new(TransportConfig {
+    let (mut pair, _client_events, _server_events) = ConnPair::builder()
+        .with_transport_cfg(TransportConfig {
             address_discovery_role: crate::address_discovery::Role::both(),
             // Assume a low-latency connection so pacing doesn't interfere with the test
             initial_rtt: Duration::from_millis(10),
-            mtu_discovery_config: None,
             ..TransportConfig::default()
-        }),
-        ..server_config()
-    };
-    let mut pair = Pair::new(Default::default(), server);
-    let client_config = ClientConfig {
-        transport: Arc::new(TransportConfig {
-            address_discovery_role: crate::address_discovery::Role::both(),
-            // Assume a low-latency connection so pacing doesn't interfere with the test
-            initial_rtt: Duration::from_millis(10),
-            mtu_discovery_config: None,
-            ..TransportConfig::default()
-        }),
-        ..client_config()
-    };
-    let (client_ch, _, _, _) = pair.lax_connect_with(client_config);
+        })
+        .disable_mtud_discovery()
+        .lax_connect();
+
+    let sent_before = pair.stats(Server).frame_tx.observed_addr;
+    let received_before = pair.stats(Client).frame_rx.observed_addr;
+    assert!(
+        sent_before > 0,
+        "server should have sent OBSERVED_ADDR before the rebind"
+    );
 
     // rebind: the server must observe the new address and send an updated OBSERVED_ADDR
     // rather than retransmitting the stale one from before the rebind
     let time = pair.time;
-    pair.client_conn_mut(client_ch)
-        .handle_network_change(None, time);
+    pair.conn_mut(Client).handle_network_change(None, time);
     let client_addr = pair.routes.as_basic_mut().passive_migration(Client);
 
     pair.drive();
 
-    let conn = pair.client_conn_mut(client_ch);
-    let mut extra = vec![];
-    while let Some(e) = conn.poll() {
-        extra.push(e);
-    }
+    // Exactly one fresh OBSERVED_ADDR for the new address, no stale retransmissions.
+    assert_eq!(pair.stats(Server).frame_tx.observed_addr, sent_before + 1);
+    assert_eq!(pair.stats(Client).frame_rx.observed_addr, received_before + 1);
 
-    let obs = extra.into_iter().find(|e| {
-        matches!(
-            e,
-            Event::Path(PathEvent::ObservedAddr {
-                id: PathId::ZERO,
-                ..
-            })
-        )
-    });
-    assert_matches!(
-        obs,
-        Some(Event::Path(PathEvent::ObservedAddr { id: PathId::ZERO, addr }))
-            if addr == client_addr
+    let mut reports = Vec::default();
+    pair.conn_mut(Client).poll_until_none(
+        |e| matches!(e, Event::Path(PathEvent::ObservedAddr { .. })),
+        &mut reports,
     );
+
+    let mut reports = reports.iter().filter_map(|e| match e {
+        Event::Path(PathEvent::ObservedAddr { id, addr }) => Some((*id, *addr)),
+        _ => None,
+    });
+
+    assert_eq!(
+        reports.next().unwrap(),
+        (PathId::ZERO, client_addr),
+        "expected updated ObservedAddr for new address {client_addr}"
+    );
+    assert!(reports.next().is_none());
 }
 
 /// Non-multipath: handle_network_change pings for liveness and rotates the CID
