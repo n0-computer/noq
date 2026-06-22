@@ -776,9 +776,7 @@ impl ConnectionSet {
             .unwrap();
         }
         self.senders.insert(handle, send);
-        if self.close.is_none() {
-            self.active_connections += 1;
-        }
+        self.active_connections += 1;
         Connecting::new(handle, conn, self.sender.clone(), recv, sender, runtime)
     }
 
