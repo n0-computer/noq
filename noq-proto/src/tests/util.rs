@@ -479,6 +479,19 @@ impl Connection {
 
         panic!("{label} not found");
     }
+
+    /// Polls events until None, accumulating those that match `pattern`.
+    pub(super) fn poll_until_none(
+        &mut self,
+        pattern: impl Fn(&Event) -> bool,
+        matching: &mut Vec<Event>,
+    ) {
+        while let Some(event) = self.poll() {
+            if pattern(&event) {
+                matching.push(event);
+            }
+        }
+    }
 }
 
 /// A builder for [`ConnPair`], because there are too many with_* methods.
@@ -1319,7 +1332,7 @@ pub(crate) fn subscribe() -> tracing::subscriber::DefaultGuard {
                 .with_default_directive(tracing::Level::TRACE.into())
                 .from_env_lossy(),
         )
-        .without_time()
+        // .without_time()
         .with_line_number(true)
         .with_writer(|| TestWriter);
     tracing::subscriber::set_default(builder.finish())
