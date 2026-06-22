@@ -564,9 +564,9 @@ impl Connection {
         initial_status: PathStatus,
         now: Instant,
     ) -> Result<PathId, PathError> {
-        if !self.is_multipath_negotiated() {
+        let Some(max_path_id) = self.max_path_id() else {
             return Err(PathError::MultipathNotNegotiated);
-        }
+        };
         if self.side().is_server() {
             return Err(PathError::ServerSideNotAllowed);
         }
@@ -578,23 +578,15 @@ impl Connection {
             .unwrap_or(PathId::ZERO)
             .saturating_add(1u8);
 
-        if Some(path_id) > self.max_path_id() {
+        if path_id > max_path_id {
+            self.spaces[SpaceId::Data].pending.paths_blocked = Some(self.remote_max_path_id);
             return Err(PathError::MaxPathIdReached);
         }
-        if path_id > self.remote_max_path_id {
-            self.spaces[SpaceId::Data].pending.paths_blocked = true;
-            return Err(PathError::MaxPathIdReached);
-        }
-        if self
-            .remote_cids
-            .get(&path_id)
-            .map(CidQueue::active)
-            .is_none()
-        {
+        if !self.remote_cids.contains_key(&path_id) {
             self.spaces[SpaceId::Data]
                 .pending
                 .path_cids_blocked
-                .insert(path_id);
+                .insert(path_id, VarInt(0));
             return Err(PathError::RemoteCidsExhausted);
         }
 
@@ -692,7 +684,6 @@ impl Connection {
 
         // Remove pending NEW CIDs for this path
         pending_space.new_cids.retain(|cid| cid.path_id != path_id);
-        pending_space.path_cids_blocked.retain(|&id| id != path_id);
         pending_space.path_status.retain(|&id| id != path_id);
 
         // Cleanup retransmits across ALL paths (CIDs for path_id may have been transmitted on other paths)
@@ -700,7 +691,6 @@ impl Connection {
             for sent_packet in space.sent_packets.values_mut() {
                 if let Some(retransmits) = sent_packet.retransmits.get_mut() {
                     retransmits.new_cids.retain(|cid| cid.path_id != path_id);
-                    retransmits.path_cids_blocked.retain(|&id| id != path_id);
                     retransmits.path_status.retain(|&id| id != path_id);
                 }
             }
@@ -1007,7 +997,7 @@ impl Connection {
             self.spaces[SpaceId::Data]
                 .pending
                 .path_cids_blocked
-                .insert(path_id);
+                .insert(path_id, VarInt(0));
             // Do not abandon this path right away. CIDs might be in-flight still and arrive
             // soon. It is up to the remote to handle this situation.
         }
@@ -5409,8 +5399,6 @@ impl Connection {
                                 "PATHS_BLOCKED maximum path identifier was larger than local maximum",
                             ));
                         }
-                        debug!("received PATHS_BLOCKED({:?})", max_path_id);
-                        // TODO(@divma): ensure max concurrent paths
                     } else {
                         return Err(TransportError::PROTOCOL_VIOLATION(
                             "received PATHS_BLOCKED frame when not multipath was not negotiated",
@@ -6445,12 +6433,11 @@ impl Connection {
         if space_id == SpaceId::Data
             && !scheduling_info.is_abandoned
             && scheduling_info.may_send_data
-            && space.pending.paths_blocked
             && frame::PathsBlocked::SIZE_BOUND <= builder.frame_space_remaining()
+            && let Some(remote_max_path_id) = space.pending.paths_blocked.take()
         {
-            let frame = frame::PathsBlocked(self.remote_max_path_id);
+            let frame = frame::PathsBlocked(remote_max_path_id);
             builder.write_frame(frame, stats);
-            space.pending.paths_blocked = false;
         }
 
         // PATH_CIDS_BLOCKED
@@ -6459,12 +6446,8 @@ impl Connection {
             && scheduling_info.may_send_data
             && frame::PathCidsBlocked::SIZE_BOUND <= builder.frame_space_remaining()
         {
-            let Some(path_id) = space.pending.path_cids_blocked.pop_first() else {
+            let Some((path_id, next_seq)) = space.pending.path_cids_blocked.pop_first() else {
                 break;
-            };
-            let next_seq = match self.remote_cids.get(&path_id) {
-                Some(cid_queue) => VarInt(cid_queue.active_seq() + 1),
-                None => VarInt(0),
             };
             let frame = frame::PathCidsBlocked { path_id, next_seq };
             builder.write_frame(frame, stats);
@@ -7721,11 +7704,18 @@ impl SentFrames {
                 self.retransmits_mut().path_status.insert(path_id);
             }
             MaxPathId(_) => self.retransmits_mut().max_path_id = true,
-            PathsBlocked(_) => self.retransmits_mut().paths_blocked = true,
+            PathsBlocked(frame::PathsBlocked(path_id)) => {
+                let paths_blocked = &mut self.retransmits_mut().paths_blocked;
+                *paths_blocked = cmp::max(*paths_blocked, Some(path_id));
+            }
             PathCidsBlocked(path_cids_blocked) => {
                 self.retransmits_mut()
                     .path_cids_blocked
-                    .insert(path_cids_blocked.path_id);
+                    .entry(path_cids_blocked.path_id)
+                    .and_modify(|next_seq| {
+                        *next_seq = cmp::max(*next_seq, path_cids_blocked.next_seq);
+                    })
+                    .or_insert(path_cids_blocked.next_seq);
             }
             ResetStream(reset) => self
                 .retransmits_mut()
