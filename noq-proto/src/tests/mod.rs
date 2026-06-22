@@ -3900,33 +3900,50 @@ fn address_discovery_zero_rtt_rejection() {
 fn address_discovery_retransmission() {
     let _guard = subscribe();
 
-    let server = ServerConfig {
-        transport: Arc::new(TransportConfig {
+    let (mut pair, client_cfg) = ConnPair::builder()
+        .with_transport_cfg(TransportConfig {
             address_discovery_role: crate::address_discovery::Role::both(),
             // Assume a low-latency connection so pacing doesn't interfere with the test
             initial_rtt: Duration::from_millis(10),
             ..TransportConfig::default()
-        }),
-        ..server_config()
-    };
-    let mut pair = Pair::new(Default::default(), server);
-    let client_config = ClientConfig {
-        transport: Arc::new(TransportConfig {
-            address_discovery_role: crate::address_discovery::Role::both(),
-            // Assume a low-latency connection so pacing doesn't interfere with the test
-            initial_rtt: Duration::from_millis(10),
-            ..TransportConfig::default()
-        }),
-        ..client_config()
-    };
-    let client_ch = pair.begin_connect(client_config);
-    pair.step();
+        })
+        .build_pair();
+    let client_ch = pair.begin_connect(client_cfg);
 
-    // clear ALL server→client packets so OBSERVED_ADDR must arrive via retransmission,
-    // regardless of whether it was coalesced into the first or second datagram
+    pair.step();
+    let server_ch = pair.server.assert_accept();
+
+    let sent_frames = pair
+        .server_conn_mut(server_ch)
+        .stats()
+        .frame_tx
+        .observed_addr;
+    assert_eq!(sent_frames, 1, "server should have sent OBSERVED_ADDR once");
+
+    // Drop the in-flight datagram(s) carrying the OBSERVED_ADDR frame so the client never sees
+    // them, forcing the server to retransmit it.
     pair.client.inbound.clear();
+
     pair.drive();
 
+    let resent_frames = pair
+        .server_conn_mut(server_ch)
+        .stats()
+        .frame_tx
+        .observed_addr;
+    assert_eq!(
+        resent_frames, 2,
+        "server should have retransmitted OBSERVED_ADDR once"
+    );
+    let received_frames = pair
+        .client_conn_mut(server_ch)
+        .stats()
+        .frame_rx
+        .observed_addr;
+
+    assert_eq!(received_frames, 1);
+
+    let expected_addr = pair.routes.as_basic().client_addr;
     let conn = pair.client_conn_mut(client_ch);
     let mut extra = vec![];
     conn.poll_until(
@@ -3948,15 +3965,16 @@ fn address_discovery_retransmission() {
         extra.push(e);
     }
 
-    let expected_addr = pair.routes.as_basic().client_addr;
-    assert!(
-        extra.iter().any(|e| matches!(
-            e,
-            Event::Path(PathEvent::ObservedAddr { id: PathId::ZERO, addr })
-                if *addr == expected_addr
-        )),
+    let mut extra = extra.iter().filter_map(|e| match e {
+        Event::Path(PathEvent::ObservedAddr { id, addr }) => Some((*id, *addr)),
+        _ => None,
+    });
+    assert_eq!(
+        extra.next().unwrap(),
+        (PathId::ZERO, expected_addr),
         "expected retransmitted ObservedAddr for {expected_addr}"
     );
+    assert!(extra.next().is_none());
 }
 
 #[test]
@@ -4001,9 +4019,15 @@ fn address_discovery_rebind_retransmission() {
         extra.push(e);
     }
 
-    let obs = extra
-        .into_iter()
-        .find(|e| matches!(e, Event::Path(PathEvent::ObservedAddr { id: PathId::ZERO, .. })));
+    let obs = extra.into_iter().find(|e| {
+        matches!(
+            e,
+            Event::Path(PathEvent::ObservedAddr {
+                id: PathId::ZERO,
+                ..
+            })
+        )
+    });
     assert_matches!(
         obs,
         Some(Event::Path(PathEvent::ObservedAddr { id: PathId::ZERO, addr }))
