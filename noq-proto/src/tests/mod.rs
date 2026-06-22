@@ -3918,10 +3918,9 @@ fn address_discovery_retransmission() {
         .stats()
         .frame_tx
         .observed_addr;
-    assert_eq!(sent_frames, 1, "server should have sent OBSERVED_ADDR once");
+    assert_eq!(sent_frames, 1);
 
-    // Drop the in-flight datagram(s) carrying the OBSERVED_ADDR frame so the client never sees
-    // them, forcing the server to retransmit it.
+    // Drop in-flight datagrams to force retransmission
     pair.client.inbound.clear();
 
     pair.drive();
@@ -3931,50 +3930,29 @@ fn address_discovery_retransmission() {
         .stats()
         .frame_tx
         .observed_addr;
-    assert_eq!(
-        resent_frames, 2,
-        "server should have retransmitted OBSERVED_ADDR once"
-    );
+    assert_eq!(resent_frames, 2,);
+
     let received_frames = pair
         .client_conn_mut(server_ch)
         .stats()
         .frame_rx
         .observed_addr;
-
     assert_eq!(received_frames, 1);
 
-    let expected_addr = pair.routes.as_basic().client_addr;
-    let conn = pair.client_conn_mut(client_ch);
-    let mut extra = vec![];
-    conn.poll_until(
-        |e| matches!(e, Event::HandshakeDataReady),
-        "client HandshakeDataReady",
-        &mut extra,
-    );
-    conn.poll_until(
-        |e| matches!(e, Event::Connected),
-        "client Connected",
-        &mut extra,
-    );
-    conn.poll_until(
-        |e| matches!(e, Event::HandshakeConfirmed),
-        "client HandshakeConfirmed",
-        &mut extra,
-    );
-    while let Some(e) = conn.poll() {
-        extra.push(e);
-    }
+    let (mut client_events, _server_events) = pair.lax_finish_connect(client_ch, server_ch);
+    pair.client_conn_mut(client_ch)
+        .poll_until_none(|_| true, &mut client_events);
 
-    let mut extra = extra.iter().filter_map(|e| match e {
+    let mut reports = client_events.iter().filter_map(|e| match e {
         Event::Path(PathEvent::ObservedAddr { id, addr }) => Some((*id, *addr)),
         _ => None,
     });
+
     assert_eq!(
-        extra.next().unwrap(),
-        (PathId::ZERO, expected_addr),
-        "expected retransmitted ObservedAddr for {expected_addr}"
+        reports.next().unwrap(),
+        (PathId::ZERO, pair.routes.as_basic().client_addr),
     );
-    assert!(extra.next().is_none());
+    assert!(reports.next().is_none());
 }
 
 #[test]

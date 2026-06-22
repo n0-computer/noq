@@ -339,7 +339,7 @@ impl Pair {
     ///
     /// The return type contains the client events and server events that were not related to
     /// connection establishment.
-    fn lax_finish_connect(
+    pub(super) fn lax_finish_connect(
         &mut self,
         client_ch: ConnectionHandle,
         server_ch: ConnectionHandle,
