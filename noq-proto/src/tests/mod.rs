@@ -3913,37 +3913,28 @@ fn address_discovery_retransmission() {
     pair.step();
     let server_ch = pair.server.assert_accept();
 
-    let sent_frames = pair
-        .server_conn_mut(server_ch)
-        .stats()
-        .frame_tx
-        .observed_addr;
-    assert_eq!(sent_frames, 1);
+    let mut pair = ConnPair::new(pair, client_ch, server_ch);
+
+    while pair.stats(Server).frame_tx.observed_addr == 0 {
+        pair.step();
+    }
 
     // Drop in-flight datagrams to force retransmission
     pair.client.inbound.clear();
 
     pair.drive();
 
-    let resent_frames = pair
-        .server_conn_mut(server_ch)
-        .stats()
-        .frame_tx
-        .observed_addr;
-    assert_eq!(resent_frames, 2,);
+    // Sent twice but received once.
+    assert_eq!(pair.stats(Server).frame_tx.observed_addr, 2);
+    assert_eq!(pair.stats(Client).frame_rx.observed_addr, 1);
 
-    let received_frames = pair
-        .client_conn_mut(server_ch)
-        .stats()
-        .frame_rx
-        .observed_addr;
-    assert_eq!(received_frames, 1);
+    let mut reports = Vec::default();
+    pair.conn_mut(Client).poll_until_none(
+        |e| matches!(e, Event::Path(PathEvent::ObservedAddr { .. })),
+        &mut reports,
+    );
 
-    let (mut client_events, _server_events) = pair.lax_finish_connect(client_ch, server_ch);
-    pair.client_conn_mut(client_ch)
-        .poll_until_none(|_| true, &mut client_events);
-
-    let mut reports = client_events.iter().filter_map(|e| match e {
+    let mut reports = reports.iter().filter_map(|e| match e {
         Event::Path(PathEvent::ObservedAddr { id, addr }) => Some((*id, *addr)),
         _ => None,
     });
