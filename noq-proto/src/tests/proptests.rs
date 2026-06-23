@@ -1344,3 +1344,60 @@ fn regression_challenge_resend_loop() {
         pair.server_conn_mut(server_ch)
     )));
 }
+
+#[test]
+fn regression_random_interaction_never_idle() {
+    let prefix = "regression_random_interaction_never_idle";
+    let setup = PairSetup {
+        seed: Seed::Zeroes,
+        extensions: Extensions::MultipathOnly,
+        routing_setup: RoutingSetup::SimpleSymmetric,
+    };
+    let interactions = vec![
+        TestOp::OpenPath {
+            side: Side::Client,
+            status: PathStatus::Available,
+            addr_idx: 2,
+        },
+        TestOp::OpenPath {
+            side: Side::Client,
+            status: PathStatus::Available,
+            addr_idx: 1,
+        },
+        TestOp::Drive { side: Side::Client },
+        TestOp::PassiveMigration {
+            side: Side::Server,
+            addr_idx: 1,
+        },
+        TestOp::AdvanceTime,
+        TestOp::Drive { side: Side::Server },
+        TestOp::OpenPath {
+            side: Side::Server,
+            status: PathStatus::Available,
+            addr_idx: 0,
+        },
+        TestOp::ClosePath {
+            side: Side::Server,
+            path_idx: 0,
+            error_code: 0,
+        },
+        TestOp::DropInbound { side: Side::Client },
+        TestOp::ClosePath {
+            side: Side::Server,
+            path_idx: 1,
+            error_code: 0,
+        },
+    ];
+
+    let _guard = subscribe();
+    let (mut pair, client_config) = setup.run(prefix);
+    let (client_ch, server_ch) = run_random_interaction(&mut pair, interactions, client_config);
+
+    assert!(!pair.drive_bounded(1000), "connection never became idle");
+    assert!(allowed_error(poll_to_close(
+        pair.client_conn_mut(client_ch)
+    )));
+    assert!(allowed_error(poll_to_close(
+        pair.server_conn_mut(server_ch)
+    )));
+}
