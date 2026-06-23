@@ -214,8 +214,12 @@ impl Pair {
                     src,
                     dst,
                     recv_time,
+                    congestion_experienced,
                 } => {
-                    let ecn = set_congestion_experienced(packet.ecn, self.congestion_experienced);
+                    let ecn = set_congestion_experienced(
+                        packet.ecn,
+                        self.congestion_experienced || congestion_experienced,
+                    );
                     self.server.inbound.push_back(Inbound {
                         recv_time,
                         ecn,
@@ -246,8 +250,12 @@ impl Pair {
                     src,
                     dst,
                     recv_time,
+                    congestion_experienced,
                 } => {
-                    let ecn = set_congestion_experienced(packet.ecn, self.congestion_experienced);
+                    let ecn = set_congestion_experienced(
+                        packet.ecn,
+                        self.congestion_experienced || congestion_experienced,
+                    );
                     self.client.inbound.push_back(Inbound {
                         recv_time,
                         ecn,
@@ -1599,7 +1607,10 @@ pub(super) enum RoutingDecision {
         ///
         /// In other words this becomes the [`FourTuple::local_ip`] for the receiver.
         dst: Option<IpAddr>,
+        /// The instant at which the packet should be received on the other end.
         recv_time: Instant,
+        /// Whether we want to mark that we have experienced congestion.
+        congestion_experienced: bool,
     },
     Drop,
 }
@@ -1636,6 +1647,7 @@ impl BasicRouting {
                 src: self.client_addr,
                 dst: Some(transmit.destination.ip()),
                 recv_time: time + self.latency,
+                congestion_experienced: false,
             }
         } else {
             RoutingDecision::Drop
@@ -1648,6 +1660,7 @@ impl BasicRouting {
                 src: self.server_addr,
                 dst: Some(transmit.destination.ip()),
                 recv_time: time + self.latency,
+                congestion_experienced: false,
             }
         } else {
             RoutingDecision::Drop
@@ -1733,6 +1746,7 @@ impl ManyToManyRouting {
                 src: client_addr,
                 dst: Some(transmit.destination.ip()),
                 recv_time: now + self.latency,
+                congestion_experienced: false,
             }
         } else {
             let Some((_, client_addr_idx)) = self
@@ -1749,6 +1763,7 @@ impl ManyToManyRouting {
                 src: *client_addr,
                 dst: Some(transmit.destination.ip()),
                 recv_time: now + self.latency,
+                congestion_experienced: false,
             }
         }
     }
@@ -1771,6 +1786,7 @@ impl ManyToManyRouting {
                 src: server_addr,
                 dst: Some(transmit.destination.ip()),
                 recv_time: now + self.latency,
+                congestion_experienced: false,
             }
         } else {
             let Some((_, server_addr_idx)) = self
@@ -1787,6 +1803,7 @@ impl ManyToManyRouting {
                 src: *server_addr,
                 dst: Some(transmit.destination.ip()),
                 recv_time: now + self.latency,
+                congestion_experienced: false,
             }
         }
     }
@@ -2017,6 +2034,7 @@ impl SimpleFirewallRouting {
             src: link_src,
             dst: Some(transmit.destination.ip()),
             recv_time: now + self.latency,
+            congestion_experienced: false,
         }
     }
 
@@ -2074,6 +2092,7 @@ impl SimpleFirewallRouting {
             src: link_src,
             dst: Some(transmit.destination.ip()),
             recv_time: now + self.latency,
+            congestion_experienced: false,
         }
     }
 }
@@ -2119,7 +2138,7 @@ impl BwLimitedRouting {
 
     fn route_client_to_server(&mut self, transmit: &Transmit, now: Instant) -> RoutingDecision {
         if transmit.destination == self.server_addr {
-            if let Some(sent_time) = self
+            if let Some((sent_time, congestion_experienced)) = self
                 .limiter_client_to_server
                 .time_of_send(now, transmit.size)
             {
@@ -2127,6 +2146,7 @@ impl BwLimitedRouting {
                     src: self.client_addr,
                     dst: Some(transmit.destination.ip()),
                     recv_time: sent_time + self.latency,
+                    congestion_experienced,
                 }
             } else {
                 info!("dropping queue tail");
@@ -2139,7 +2159,7 @@ impl BwLimitedRouting {
 
     fn route_server_to_client(&mut self, transmit: &Transmit, now: Instant) -> RoutingDecision {
         if transmit.destination == self.client_addr {
-            if let Some(sent_time) = self
+            if let Some((sent_time, congestion_experienced)) = self
                 .limiter_server_to_client
                 .time_of_send(now, transmit.size)
             {
@@ -2147,6 +2167,7 @@ impl BwLimitedRouting {
                     src: self.server_addr,
                     dst: Some(transmit.destination.ip()),
                     recv_time: sent_time + self.latency,
+                    congestion_experienced,
                 }
             } else {
                 info!("dropping queue tail");
@@ -2177,13 +2198,17 @@ impl Limiter {
         }
     }
 
-    fn time_of_send(&mut self, now: Instant, num_bytes: usize) -> Option<Instant> {
-        if now + self.max_queue < self.finished_sending_at {
+    fn time_of_send(&mut self, now: Instant, num_bytes: usize) -> Option<(Instant, bool)> {
+        if self.finished_sending_at > now + self.max_queue {
             return None;
         }
 
         self.finished_sending_at =
             cmp::max(now, self.finished_sending_at) + num_bytes as u32 * self.time_per_byte;
-        Some(self.finished_sending_at)
+
+        // We mark the CE bit once the queue is 50% full
+        let experienced_congestion = self.finished_sending_at > now + self.max_queue / 2;
+
+        Some((self.finished_sending_at, experienced_congestion))
     }
 }
