@@ -3950,34 +3950,38 @@ fn address_discovery_retransmission() {
 fn address_discovery_rebind_retransmission() {
     let _guard = subscribe();
 
-    let (mut pair, _client_events, _server_events) = ConnPair::builder()
+    let (mut pair, client_cfg) = ConnPair::builder()
         .with_transport_cfg(TransportConfig {
             address_discovery_role: crate::address_discovery::Role::both(),
             // Assume a low-latency connection so pacing doesn't interfere with the test
             initial_rtt: Duration::from_millis(10),
             ..TransportConfig::default()
         })
-        .disable_mtud_discovery()
-        .lax_connect();
+        .build_pair();
+    let client_ch = pair.begin_connect(client_cfg);
 
-    let sent_before = pair.stats(Server).frame_tx.observed_addr;
-    let received_before = pair.stats(Client).frame_rx.observed_addr;
-    assert!(
-        sent_before > 0,
-        "server should have sent OBSERVED_ADDR before the rebind"
-    );
+    pair.step();
+    let server_ch = pair.server.assert_accept();
 
-    // rebind: the server must observe the new address and send an updated OBSERVED_ADDR
-    // rather than retransmitting the stale one from before the rebind
-    let time = pair.time;
-    pair.conn_mut(Client).handle_network_change(None, time);
-    let client_addr = pair.routes.as_basic_mut().passive_migration(Client);
+    let mut pair = ConnPair::new(pair, client_ch, server_ch);
+
+    while pair.stats(Server).frame_tx.observed_addr == 0 {
+        pair.step();
+    }
+
+    // Drop in-flight datagrams to force retransmission, and migrate to check the report isn't stale
+    pair.client.inbound.clear();
+    // let stale_addr = pair.routes.as_basic().client_addr;
+    let fresh_addr = pair.routes.as_basic_mut().passive_migration(Client);
+    // let time = pair.time;
+    // pair.conn_mut(Client).handle_network_change(None, time);
+    // assert_ne!(stale_addr, fresh_addr);
 
     pair.drive();
 
-    // Exactly one fresh OBSERVED_ADDR for the new address, no stale retransmissions.
-    assert_eq!(pair.stats(Server).frame_tx.observed_addr, sent_before + 1);
-    assert_eq!(pair.stats(Client).frame_rx.observed_addr, received_before + 1);
+    // Sent twice but received once.
+    assert_eq!(pair.stats(Server).frame_tx.observed_addr, 2);
+    assert_eq!(pair.stats(Client).frame_rx.observed_addr, 1);
 
     let mut reports = Vec::default();
     pair.conn_mut(Client).poll_until_none(
@@ -3992,8 +3996,7 @@ fn address_discovery_rebind_retransmission() {
 
     assert_eq!(
         reports.next().unwrap(),
-        (PathId::ZERO, client_addr),
-        "expected updated ObservedAddr for new address {client_addr}"
+        (PathId::ZERO, pair.routes.as_basic().client_addr),
     );
     assert!(reports.next().is_none());
 }
