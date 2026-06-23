@@ -525,7 +525,7 @@ pub(super) struct SentPacket {
     ///
     /// These might be retransmitted over any available path in the same [`SpaceKind`].
     pub(super) retransmits: ThinRetransmits,
-    /// Path-specific data which needs to be retransmitted in case the packet is lost.
+    /// Retransmittable data specific to a [`Path::generation`].
     pub(super) path_retransmits: PathRetransmits,
     /// Metadata for stream frames in a packet
     ///

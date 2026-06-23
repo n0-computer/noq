@@ -1143,7 +1143,7 @@ pub struct ClosedPath {
     pub(super) _private: (),
 }
 
-/// Path-specific retransmittable data lost in a packet.
+/// Retransmittable data specific to a [`Path::generation`].
 #[derive(Debug, Default, Clone)]
 pub(super) struct PathRetransmits {
     /// Whether this path needs to report its remote address back to the peer.
