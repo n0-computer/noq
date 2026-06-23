@@ -3950,7 +3950,7 @@ fn address_discovery_retransmission() {
 fn address_discovery_rebind_retransmission() {
     // NOTE: unlike `address_discovery_retransmission`, in which we drop packets even if during the
     // handshake, `address_discovery_rebind_retransmission` needs to also migrate. Migrating and
-    // dropping packets causes any incoming packets from the client to the server to be dicarded,
+    // dropping packets causes any incoming packets from the client to the server to be discarded,
     // which ultimately prevents the connection from being established.
     //
     // Instead, for this test, we drop in-flight data and migrate after the handshake has been
