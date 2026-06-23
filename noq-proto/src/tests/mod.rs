@@ -3948,40 +3948,50 @@ fn address_discovery_retransmission() {
 
 #[test]
 fn address_discovery_rebind_retransmission() {
+    // NOTE: unlike `address_discovery_retransmission`, in which we drop packets even if during the
+    // handshake, `address_discovery_rebind_retransmission` needs to also migrate. Migrating and
+    // dropping packets causes any incoming packets from the client to the server to be dicarded,
+    // which ultimately prevents the connection from being established.
+    //
+    // Instead, for this test, we drop in-flight data and migrate after the handshake has been
+    // confirmed.
+
     let _guard = subscribe();
 
-    let (mut pair, client_cfg) = ConnPair::builder()
+    // we don't care about extra events, just that the connection is established.
+    let (mut pair, _, _) = ConnPair::builder()
         .with_transport_cfg(TransportConfig {
             address_discovery_role: crate::address_discovery::Role::both(),
             // Assume a low-latency connection so pacing doesn't interfere with the test
             initial_rtt: Duration::from_millis(10),
             ..TransportConfig::default()
         })
-        .build_pair();
-    let client_ch = pair.begin_connect(client_cfg);
+        .lax_connect();
 
+    // Drain any remaining events
+    while pair.poll(Client).is_some() {}
+
+    let prev_sent = pair.stats(Server).frame_tx.observed_addr;
+    // This implementation sends address discovery reports with path challenges, so start a path
+    // validation attempt that will produce the frame we will later drop
+    pair.conn_mut(Server).trigger_path_validation();
     pair.step();
-    let server_ch = pair.server.assert_accept();
+    assert_eq!(pair.stats(Server).frame_tx.observed_addr, prev_sent + 1);
 
-    let mut pair = ConnPair::new(pair, client_ch, server_ch);
-
-    while pair.stats(Server).frame_tx.observed_addr == 0 {
-        pair.step();
-    }
-
-    // Drop in-flight datagrams to force retransmission, and migrate to check the report isn't stale
     pair.client.inbound.clear();
-    // let stale_addr = pair.routes.as_basic().client_addr;
+
+    let stale_addr = pair.routes.as_basic().client_addr;
     let fresh_addr = pair.routes.as_basic_mut().passive_migration(Client);
-    // let time = pair.time;
-    // pair.conn_mut(Client).handle_network_change(None, time);
-    // assert_ne!(stale_addr, fresh_addr);
+    pair.handle_network_change(Client, None);
+    assert_ne!(stale_addr, fresh_addr);
 
     pair.drive();
 
-    // Sent twice but received once.
-    assert_eq!(pair.stats(Server).frame_tx.observed_addr, 2);
-    assert_eq!(pair.stats(Client).frame_rx.observed_addr, 1);
+    assert!(pair.stats(Server).frame_tx.observed_addr >= prev_sent + 2);
+    assert_eq!(
+        pair.stats(Client).frame_rx.observed_addr + 1, // + 1 for the lost frame
+        pair.stats(Server).frame_tx.observed_addr
+    );
 
     let mut reports = Vec::default();
     pair.conn_mut(Client).poll_until_none(

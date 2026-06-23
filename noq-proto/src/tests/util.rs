@@ -284,12 +284,6 @@ impl Pair {
         self.connect_with(client_config())
     }
 
-    pub(super) fn lax_connect(
-        &mut self,
-    ) -> (ConnectionHandle, Vec<Event>, ConnectionHandle, Vec<Event>) {
-        self.lax_connect_with(client_config())
-    }
-
     pub(super) fn connect_with(
         &mut self,
         config: ClientConfig,
