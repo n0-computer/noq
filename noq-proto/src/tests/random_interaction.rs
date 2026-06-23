@@ -143,6 +143,7 @@ impl TestOp {
                 Routing::ManyToMany(ref mut routes) => {
                     routes.sim_client_migration(addr_idx, inc_last_addr_octet);
                 }
+                Routing::BwLimited(_) => unimplemented!(),
             },
             Self::PassiveMigration {
                 side: Side::Server,
@@ -155,6 +156,7 @@ impl TestOp {
                 Routing::ManyToMany(ref mut routes) => {
                     routes.sim_server_migration(addr_idx, inc_last_addr_octet);
                 }
+                Routing::BwLimited(_) => unimplemented!(),
             },
             Self::OpenPath {
                 side,
@@ -171,6 +173,7 @@ impl TestOp {
                         Side::Client => routes.server_addr(addr_idx)?,
                         Side::Server => routes.client_addr(addr_idx)?,
                     },
+                    Routing::BwLimited(_) => unimplemented!(),
                 };
                 let state = match side {
                     Side::Client => client,
@@ -241,6 +244,7 @@ impl TestOp {
                         Side::Client => routes.client_addr(addr_idx)?,
                         Side::Server => routes.server_addr(addr_idx)?,
                     },
+                    Routing::BwLimited(_) => unimplemented!(),
                 };
                 let state = match side {
                     Side::Client => client,

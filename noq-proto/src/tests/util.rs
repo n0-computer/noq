@@ -1560,6 +1560,7 @@ impl Routing {
             Self::Basic(inner) => inner.route_client_to_server(transmit, now),
             Self::SimpleFirewall(inner) => inner.route_client_to_server(transmit, now),
             Self::ManyToMany(inner) => inner.route_client_to_server(transmit, now),
+            Self::BwLimited(inner) => inner.route_client_to_server(transmit, now),
         }
     }
     /// Routes a datagram from server to client.
@@ -1568,6 +1569,7 @@ impl Routing {
             Self::Basic(inner) => inner.route_server_to_client(transmit, now),
             Self::SimpleFirewall(inner) => inner.route_server_to_client(transmit, now),
             Self::ManyToMany(inner) => inner.route_server_to_client(transmit, now),
+            Self::BwLimited(inner) => inner.route_server_to_client(transmit, now),
         }
     }
 
@@ -2073,5 +2075,115 @@ impl SimpleFirewallRouting {
             dst: Some(transmit.destination.ip()),
             recv_time: now + self.latency,
         }
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct BwLimitedRouting {
+    client_addr: SocketAddr,
+    server_addr: SocketAddr,
+
+    limiter_client_to_server: Limiter,
+    limiter_server_to_client: Limiter,
+
+    latency: Duration,
+}
+
+impl From<BwLimitedRouting> for Routing {
+    fn from(value: BwLimitedRouting) -> Self {
+        Self::BwLimited(value)
+    }
+}
+
+impl BwLimitedRouting {
+    pub(super) fn new(
+        client_addr: SocketAddr,
+        server_addr: SocketAddr,
+        now: Instant,
+        bytes_per_second: u64,
+        buffer_size: u32,
+        latency: Duration,
+    ) -> Self {
+        Self {
+            client_addr,
+            server_addr,
+            limiter_client_to_server: Limiter::new(bytes_per_second, buffer_size, now),
+            limiter_server_to_client: Limiter::new(bytes_per_second, buffer_size, now),
+            latency,
+        }
+    }
+
+    fn public_server_addr(&self) -> SocketAddr {
+        self.server_addr
+    }
+
+    fn route_client_to_server(&mut self, transmit: &Transmit, now: Instant) -> RoutingDecision {
+        if transmit.destination == self.server_addr {
+            if let Some(sent_time) = self
+                .limiter_client_to_server
+                .time_of_send(now, transmit.size)
+            {
+                RoutingDecision::Deliver {
+                    src: self.client_addr,
+                    dst: Some(transmit.destination.ip()),
+                    recv_time: sent_time + self.latency,
+                }
+            } else {
+                info!("dropping queue tail");
+                RoutingDecision::Drop
+            }
+        } else {
+            RoutingDecision::Drop
+        }
+    }
+
+    fn route_server_to_client(&mut self, transmit: &Transmit, now: Instant) -> RoutingDecision {
+        if transmit.destination == self.client_addr {
+            if let Some(sent_time) = self
+                .limiter_server_to_client
+                .time_of_send(now, transmit.size)
+            {
+                RoutingDecision::Deliver {
+                    src: self.server_addr,
+                    dst: Some(transmit.destination.ip()),
+                    recv_time: sent_time + self.latency,
+                }
+            } else {
+                info!("dropping queue tail");
+                RoutingDecision::Drop
+            }
+        } else {
+            RoutingDecision::Drop
+        }
+    }
+}
+
+#[derive(Debug)]
+struct Limiter {
+    time_per_byte: Duration,
+    finished_sending_at: Instant,
+    max_queue: Duration,
+}
+
+impl Limiter {
+    fn new(bytes_per_second: u64, buffer_size: u32, now: Instant) -> Self {
+        const ONE_SEC_IN_NANOS: u64 = 1_000_000_000;
+        let time_per_byte = Duration::from_nanos(ONE_SEC_IN_NANOS / bytes_per_second);
+        let max_queue = buffer_size * time_per_byte;
+        Self {
+            time_per_byte,
+            max_queue,
+            finished_sending_at: now,
+        }
+    }
+
+    fn time_of_send(&mut self, now: Instant, num_bytes: usize) -> Option<Instant> {
+        if now + self.max_queue < self.finished_sending_at {
+            return None;
+        }
+
+        self.finished_sending_at =
+            cmp::max(now, self.finished_sending_at) + num_bytes as u32 * self.time_per_byte;
+        Some(self.finished_sending_at)
     }
 }
