@@ -1326,7 +1326,7 @@ pub(crate) fn subscribe() -> tracing::subscriber::DefaultGuard {
                 .with_default_directive(tracing::Level::TRACE.into())
                 .from_env_lossy(),
         )
-        // .without_time()
+        .without_time()
         .with_line_number(true)
         .with_writer(|| TestWriter);
     tracing::subscriber::set_default(builder.finish())
