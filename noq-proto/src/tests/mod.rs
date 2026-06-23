@@ -3707,44 +3707,39 @@ fn voluntary_ack_with_large_datagrams() {
 fn address_discovery() {
     let _guard = subscribe();
 
-    let server = ServerConfig {
-        transport: Arc::new(TransportConfig {
+    // Create the connections accumulating events not related to connection establishment.
+    let (mut pair, mut c_events, mut s_events) = ConnPair::builder()
+        .with_transport_cfg(TransportConfig {
             address_discovery_role: crate::address_discovery::Role::both(),
             ..TransportConfig::default()
-        }),
-        ..server_config()
-    };
-    let mut pair = Pair::new(Default::default(), server);
-    let client_config = ClientConfig {
-        transport: Arc::new(TransportConfig {
-            address_discovery_role: crate::address_discovery::Role::both(),
-            ..TransportConfig::default()
-        }),
-        ..client_config()
-    };
-    let conn_handle = pair.begin_connect(client_config);
+        })
+        .lax_connect();
 
     // wait for idle connections
     pair.drive();
 
-    // check that the client received the correct address
-    let expected_addr = pair.routes.as_basic().client_addr;
-    let conn = pair.client_conn_mut(conn_handle);
-    assert_matches!(conn.poll(), Some(Event::HandshakeDataReady));
-    assert_matches!(conn.poll(), Some(Event::Connected));
-    assert_matches!(conn.poll(), Some(Event::HandshakeConfirmed));
-    assert_matches!(conn.poll(), Some(Event::Path(PathEvent::ObservedAddr{id: PathId::ZERO, addr})) if addr == expected_addr);
-    assert_matches!(conn.poll(), None);
+    // Depending on handshake size, ObservedAddr reports might arrive before or after the handshake
+    // is confirmed. Gather all events to account for that.
+    let keep = |e: &Event| matches!(e, &Event::Path(PathEvent::ObservedAddr { .. }));
+    pair.conn_mut(Client).poll_until_none(keep, &mut c_events);
+    pair.conn_mut(Server).poll_until_none(keep, &mut s_events);
 
-    // check that the server received the correct address
-    let conn_handle = pair.server.assert_accept();
-    let expected_addr = pair.routes.as_basic().server_addr;
-    let conn = pair.server_conn_mut(conn_handle);
-    assert_matches!(conn.poll(), Some(Event::HandshakeDataReady));
-    assert_matches!(conn.poll(), Some(Event::HandshakeConfirmed));
-    assert_matches!(conn.poll(), Some(Event::Connected));
-    assert_matches!(conn.poll(), Some(Event::Path(PathEvent::ObservedAddr{id: PathId::ZERO, addr})) if addr == expected_addr);
-    assert_matches!(conn.poll(), None);
+    // Extract the report info from relevant events.
+    let get_report_info = |e: &Event| match e {
+        Event::Path(PathEvent::ObservedAddr { id, addr }) => Some((*id, *addr)),
+        _ => None,
+    };
+    let mut c_events = c_events.iter().filter_map(get_report_info);
+    let mut s_events = s_events.iter().filter_map(get_report_info);
+
+    let c_report = c_events.next().expect("client should have received report");
+    let s_report = s_events.next().expect("server should have received report");
+
+    assert_eq!(c_report, (PathId::ZERO, pair.routes.as_basic().client_addr));
+    assert_eq!(s_report, (PathId::ZERO, pair.routes.as_basic().server_addr));
+
+    assert!(c_events.next().is_none());
+    assert!(s_events.next().is_none());
 }
 
 /// Test that a different address discovery configuration on 0rtt used by the client is accepted by
@@ -3905,97 +3900,115 @@ fn address_discovery_zero_rtt_rejection() {
 fn address_discovery_retransmission() {
     let _guard = subscribe();
 
-    let server = ServerConfig {
-        transport: Arc::new(TransportConfig {
+    let (mut pair, client_cfg) = ConnPair::builder()
+        .with_transport_cfg(TransportConfig {
             address_discovery_role: crate::address_discovery::Role::both(),
             // Assume a low-latency connection so pacing doesn't interfere with the test
             initial_rtt: Duration::from_millis(10),
             ..TransportConfig::default()
-        }),
-        ..server_config()
-    };
-    let mut pair = Pair::new(Default::default(), server);
-    let client_config = ClientConfig {
-        transport: Arc::new(TransportConfig {
-            address_discovery_role: crate::address_discovery::Role::both(),
-            // Assume a low-latency connection so pacing doesn't interfere with the test
-            initial_rtt: Duration::from_millis(10),
-            ..TransportConfig::default()
-        }),
-        ..client_config()
-    };
-    let client_ch = pair.begin_connect(client_config);
-    pair.step();
+        })
+        .build_pair();
+    let client_ch = pair.begin_connect(client_cfg);
 
-    // lose the last packet
-    pair.client.inbound.pop_back().unwrap();
     pair.step();
-    let conn = pair.client_conn_mut(client_ch);
-    assert_matches!(conn.poll(), Some(Event::HandshakeDataReady));
-    assert_matches!(conn.poll(), Some(Event::Connected));
-    assert_matches!(conn.poll(), None);
+    let server_ch = pair.server.assert_accept();
+
+    let mut pair = ConnPair::new(pair, client_ch, server_ch);
+
+    while pair.stats(Server).frame_tx.observed_addr == 0 {
+        pair.step();
+    }
+
+    // Drop in-flight datagrams to force retransmission
+    pair.client.inbound.clear();
 
     pair.drive();
-    let conn = pair.client_conn_mut(client_ch);
-    assert_matches!(conn.poll(), Some(Event::HandshakeConfirmed));
-    assert_matches!(
-        conn.poll(),
-        Some(Event::Path(PathEvent::ObservedAddr{id: PathId::ZERO, addr}))
-            if addr == pair.routes.as_basic().client_addr
+
+    // Sent twice but received once.
+    assert_eq!(pair.stats(Server).frame_tx.observed_addr, 2);
+    assert_eq!(pair.stats(Client).frame_rx.observed_addr, 1);
+
+    let mut reports = Vec::default();
+    pair.conn_mut(Client).poll_until_none(
+        |e| matches!(e, Event::Path(PathEvent::ObservedAddr { .. })),
+        &mut reports,
     );
+
+    let mut reports = reports.iter().filter_map(|e| match e {
+        Event::Path(PathEvent::ObservedAddr { id, addr }) => Some((*id, *addr)),
+        _ => None,
+    });
+
+    assert_eq!(
+        reports.next().unwrap(),
+        (PathId::ZERO, pair.routes.as_basic().client_addr),
+    );
+    assert!(reports.next().is_none());
 }
 
 #[test]
 fn address_discovery_rebind_retransmission() {
+    // NOTE: unlike `address_discovery_retransmission`, in which we drop packets even if during the
+    // handshake, `address_discovery_rebind_retransmission` needs to also migrate. Migrating and
+    // dropping packets causes any incoming packets from the client to the server to be discarded,
+    // which ultimately prevents the connection from being established.
+    //
+    // Instead, for this test, we drop in-flight data and migrate after the handshake has been
+    // confirmed.
+
     let _guard = subscribe();
 
-    let server = ServerConfig {
-        transport: Arc::new(TransportConfig {
+    // we don't care about extra events, just that the connection is established.
+    let (mut pair, _, _) = ConnPair::builder()
+        .with_transport_cfg(TransportConfig {
             address_discovery_role: crate::address_discovery::Role::both(),
             // Assume a low-latency connection so pacing doesn't interfere with the test
             initial_rtt: Duration::from_millis(10),
-            mtu_discovery_config: None,
             ..TransportConfig::default()
-        }),
-        ..server_config()
-    };
-    let mut pair = Pair::new(Default::default(), server);
-    let client_config = ClientConfig {
-        transport: Arc::new(TransportConfig {
-            address_discovery_role: crate::address_discovery::Role::both(),
-            // Assume a low-latency connection so pacing doesn't interfere with the test
-            initial_rtt: Duration::from_millis(10),
-            mtu_discovery_config: None,
-            ..TransportConfig::default()
-        }),
-        ..client_config()
-    };
-    let client_ch = pair.begin_connect(client_config);
-    pair.step();
+        })
+        .lax_connect();
 
-    // lose the last packet
-    pair.client.inbound.pop_back().unwrap();
-    pair.step();
-    let conn = pair.client_conn_mut(client_ch);
-    assert_matches!(conn.poll(), Some(Event::HandshakeDataReady));
-    assert_matches!(conn.poll(), Some(Event::Connected));
-    assert_matches!(conn.poll(), None);
+    // Drain any remaining events
+    while pair.poll(Client).is_some() {}
 
-    // simulate a rebind to ensure we will get an updated address instead of retransmitting
-    // outdated info
-    let time = pair.time;
-    pair.client_conn_mut(client_ch)
-        .handle_network_change(None, time);
-    let client_addr = pair.routes.as_basic_mut().passive_migration(Client);
+    let prev_sent = pair.stats(Server).frame_tx.observed_addr;
+    // This implementation sends address discovery reports with path challenges, so start a path
+    // validation attempt that will produce the frame we will later drop
+    pair.conn_mut(Server).trigger_path_validation();
+    pair.step();
+    assert_eq!(pair.stats(Server).frame_tx.observed_addr, prev_sent + 1);
+
+    pair.client.inbound.clear();
+
+    let stale_addr = pair.routes.as_basic().client_addr;
+    let fresh_addr = pair.routes.as_basic_mut().passive_migration(Client);
+    pair.handle_network_change(Client, None);
+    assert_ne!(stale_addr, fresh_addr);
 
     pair.drive();
-    let conn = pair.client_conn_mut(client_ch);
-    assert_matches!(conn.poll(), Some(Event::HandshakeConfirmed));
-    assert_matches!(
-        conn.poll(),
-        Some(Event::Path(PathEvent::ObservedAddr{id: PathId::ZERO, addr}))
-            if addr == client_addr
+
+    assert!(pair.stats(Server).frame_tx.observed_addr >= prev_sent + 2);
+    assert_eq!(
+        pair.stats(Client).frame_rx.observed_addr + 1, // + 1 for the lost frame
+        pair.stats(Server).frame_tx.observed_addr
     );
+
+    let mut reports = Vec::default();
+    pair.conn_mut(Client).poll_until_none(
+        |e| matches!(e, Event::Path(PathEvent::ObservedAddr { .. })),
+        &mut reports,
+    );
+
+    let mut reports = reports.iter().filter_map(|e| match e {
+        Event::Path(PathEvent::ObservedAddr { id, addr }) => Some((*id, *addr)),
+        _ => None,
+    });
+
+    assert_eq!(
+        reports.next().unwrap(),
+        (PathId::ZERO, pair.routes.as_basic().client_addr),
+    );
+    assert!(reports.next().is_none());
 }
 
 /// Non-multipath: handle_network_change pings for liveness and rotates the CID

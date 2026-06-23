@@ -10,7 +10,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use sorted_index_buffer::SortedIndexBuffer;
 use tracing::trace;
 
-use super::{PathId, paths::PathResponses};
+use super::{PathId, paths::PathResponses, paths::PathRetransmits};
 use crate::{
     Dir, Duration, FourTuple, Instant, StreamId, TransportError, TransportErrorCode, VarInt,
     connection::StreamsState,
@@ -522,9 +522,11 @@ pub(super) struct SentPacket {
     /// The largest packet number acknowledged by this packet
     pub(super) largest_acked: FxHashMap<PathId, u64>,
     /// Data which needs to be retransmitted in case the packet is lost.
-    /// The data is boxed to minimize `SentPacket` size for the typical case of
-    /// packets only containing ACKs and STREAM frames.
+    ///
+    /// These might be retransmitted over any available path in the same [`SpaceKind`].
     pub(super) retransmits: ThinRetransmits,
+    /// Retransmittable data specific to a path generation.
+    pub(super) path_retransmits: PathRetransmits,
     /// Metadata for stream frames in a packet
     ///
     /// The actual application data is stored with the stream state.
@@ -538,7 +540,9 @@ pub(super) struct LostPacket {
     pub(super) time_sent: Instant,
 }
 
-/// Retransmittable data queue
+/// Retransmittable data queue.
+///
+/// Data in this queue must be retransmittable over any path in the same [`SpaceKind`].
 #[allow(unreachable_pub)] // fuzzing only
 #[derive(Debug, Default, Clone)]
 pub struct Retransmits {
@@ -553,7 +557,6 @@ pub struct Retransmits {
     pub(super) retire_cids: Vec<(PathId, u64)>,
     pub(super) ack_frequency: bool,
     pub(super) handshake_done: bool,
-    pub(super) observed_addr: bool,
     /// Whether we should inform the peer we will allow higher [`PathId`]s.
     pub(super) max_path_id: bool,
     /// Whether we should inform the peer that their max [`PathId`] is blocking our attempt to open
@@ -615,7 +618,6 @@ impl Retransmits {
             retire_cids,
             ack_frequency,
             handshake_done,
-            observed_addr,
             max_path_id,
             paths_blocked,
             new_tokens,
@@ -639,7 +641,6 @@ impl Retransmits {
             && retire_cids.is_empty()
             && !ack_frequency
             && !handshake_done
-            && !observed_addr
             && !max_path_id
             && paths_blocked.is_none()
             && new_tokens.is_empty()
@@ -666,7 +667,6 @@ impl ::std::ops::BitOrAssign for Retransmits {
             retire_cids,
             ack_frequency,
             handshake_done,
-            observed_addr,
             max_path_id,
             paths_blocked,
             new_tokens,
@@ -695,7 +695,6 @@ impl ::std::ops::BitOrAssign for Retransmits {
         self.retire_cids.extend(retire_cids);
         self.ack_frequency |= ack_frequency;
         self.handshake_done |= handshake_done;
-        self.observed_addr |= observed_addr;
         self.max_path_id |= max_path_id;
         self.paths_blocked = cmp::max(self.paths_blocked, paths_blocked);
         self.new_tokens.extend_from_slice(&new_tokens);

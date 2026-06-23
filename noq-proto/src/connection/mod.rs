@@ -25,6 +25,7 @@ use crate::{
     config::{ServerConfig, TransportConfig},
     congestion::Controller,
     connection::{
+        paths::PathRetransmits,
         qlog::{QlogRecvPacket, QlogSink},
         spaces::LostPacket,
         stats::PathStatsMap,
@@ -972,6 +973,10 @@ impl Connection {
         // To open a path locally we need to send a packet on the path. Sending a challenge
         // guarantees this.
         data.pending_challenge = true;
+        data.pending.observed_address = self
+            .config
+            .address_discovery_role
+            .should_report(&self.peer_params.address_discovery_role);
 
         let path = vacant_entry.insert(PathState { data, prev: None });
 
@@ -2124,7 +2129,7 @@ impl Connection {
         })
     }
 
-    /// Indicate what types of frames are ready to send for the given space.
+    /// Indicate what types of frames are ready to send for the given packet number space.
     ///
     /// Only for on-path data.
     ///
@@ -3448,6 +3453,7 @@ impl Connection {
                 }
                 self.spaces[pn_space].pending |= info.retransmits;
                 let path = self.path_data_mut(path_id);
+                path.pending |= info.path_retransmits;
                 path.mtud.on_non_probe_lost(packet, info.size);
                 path.congestion.on_packet_lost(info.size, packet, now);
 
@@ -5769,6 +5775,10 @@ impl Connection {
             }));
         }
         new_path_data.pending_challenge = true;
+        new_path_data.pending.observed_address = self
+            .config
+            .address_discovery_role
+            .should_report(&self.peer_params.address_discovery_role);
 
         let mut prev_path_data = mem::replace(&mut path.data, new_path_data);
 
@@ -6211,9 +6221,7 @@ impl Connection {
 
                     self.next_observed_addr_seq_no =
                         self.next_observed_addr_seq_no.saturating_add(1u8);
-                    path.observed_addr_sent = true;
-
-                    space.pending.observed_addr = false;
+                    path.pending.observed_address = false;
                 }
             }
         }
@@ -6249,9 +6257,7 @@ impl Connection {
 
                     self.next_observed_addr_seq_no =
                         self.next_observed_addr_seq_no.saturating_add(1u8);
-                    path.observed_addr_sent = true;
-
-                    space.pending.observed_addr = false;
+                    path.pending.observed_address = false;
                 }
             }
         }
@@ -6330,11 +6336,7 @@ impl Connection {
         if !scheduling_info.is_abandoned
             && scheduling_info.may_send_data
             && space_id == SpaceId::Data
-            && self
-                .config
-                .address_discovery_role
-                .should_report(&self.peer_params.address_discovery_role)
-            && (!path.observed_addr_sent || space.pending.observed_addr)
+            && path.pending.observed_address
         {
             let frame =
                 frame::ObservedAddr::new(path.network_path.remote, self.next_observed_addr_seq_no);
@@ -6342,9 +6344,7 @@ impl Connection {
                 builder.write_frame(frame, stats);
 
                 self.next_observed_addr_seq_no = self.next_observed_addr_seq_no.saturating_add(1u8);
-                path.observed_addr_sent = true;
-
-                space.pending.observed_addr = false;
+                path.pending.observed_address = false;
             }
         }
 
@@ -6747,8 +6747,14 @@ impl Connection {
         self.peer_params = params;
         let peer_max_udp_payload_size =
             u16::try_from(self.peer_params.max_udp_payload_size.into_inner()).unwrap_or(u16::MAX);
-        self.path_data_mut(PathId::ZERO)
-            .mtud
+        let address_discovery_negotiated = self
+            .config
+            .address_discovery_role
+            .should_report(&self.peer_params.address_discovery_role);
+
+        let path = self.path_data_mut(PathId::ZERO);
+        path.pending.observed_address = address_discovery_negotiated;
+        path.mtud
             .on_peer_max_udp_payload_size_received(peer_max_udp_payload_size);
     }
 
@@ -6965,7 +6971,7 @@ impl Connection {
         let space_specific = self
             .paths
             .get(&path_id)
-            .is_some_and(|path| path.data.pending_challenge)
+            .is_some_and(|path| path.data.pending_challenge || !path.data.pending.is_empty())
             || self.spaces[SpaceKind::Data]
                 .number_spaces
                 .get(&path_id)
@@ -7641,6 +7647,7 @@ const MAX_HANDSHAKE_OR_0RTT_HEADER_SIZE: usize =
 #[derive(Default)]
 struct SentFrames {
     retransmits: ThinRetransmits,
+    path_retransmits: PathRetransmits,
     /// The packet number of the largest acknowledged packet for each path
     largest_acked: FxHashMap<PathId, u64>,
     stream_frames: StreamMetaVec,
@@ -7680,7 +7687,7 @@ impl SentFrames {
             PathResponse(_) => self.non_retransmits = true,
             HandshakeDone(_) => self.retransmits_mut().handshake_done = true,
             ReachOut(frame) => self.retransmits_mut().reach_out.push(frame),
-            ObservedAddr(_) => self.retransmits_mut().observed_addr = true,
+            ObservedAddr(_) => self.path_retransmits.observed_address = true,
             Ping(_) => self.non_retransmits = true,
             ImmediateAck(_) => self.non_retransmits = true,
             AckFrequency(_) => self.retransmits_mut().ack_frequency = true,

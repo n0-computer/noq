@@ -725,52 +725,46 @@ fn per_path_observed_address() -> TestResult {
         address_discovery_role: crate::address_discovery::Role::both(),
         ..TransportConfig::default()
     };
-    let mut pair = ConnPair::builder()
+    let (mut pair, client_events, _server_events) = ConnPair::builder()
         .with_transport_cfg(transport_cfg)
-        .connect();
+        .lax_connect();
 
     info!("connected");
     pair.drive();
 
-    // check that the client received the correct address
-    let expected_addr = pair.routes.as_basic().client_addr;
-    assert_matches!(
-        pair.poll(Client),
-        Some(Event::Path(PathEvent::ObservedAddr{id: PathId::ZERO, addr}))
-            if addr == expected_addr
-    );
-    assert_matches!(pair.poll(Client), None);
+    let first_addr = pair.routes.as_basic().client_addr;
+    let first_server_addr = pair.routes.as_basic().server_addr;
+    let mut second_client_addr = first_addr;
+    let mut second_server_addr = first_server_addr;
+    second_client_addr.set_port(second_client_addr.port() + 1);
+    second_server_addr.set_port(second_server_addr.port() + 1);
+    pair.routes = ManyToManyRouting::simple_symmetric(
+        [first_addr, second_client_addr],
+        [first_server_addr, second_server_addr],
+    )
+    .into();
 
-    // check that the server received the correct address
-    let expected_addr = pair.routes.as_basic().server_addr;
-    assert_matches!(
-        pair.poll(Server),
-        Some(Event::Path(PathEvent::ObservedAddr{id: PathId::ZERO, addr}))
-            if addr == expected_addr
-    );
-    assert_matches!(pair.poll(Server), None);
-
-    // simulate a rebind on the client, this will close the current path and open a new one
-    let our_addr = pair.routes.as_basic_mut().passive_migration(Client);
-    pair.handle_network_change(Client, None);
-
+    let second_path = FourTuple {
+        local_ip: Some(second_client_addr.ip()),
+        remote: second_server_addr,
+    };
+    let path_id = pair.open_path(Client, second_path, PathStatus::Available)?;
     pair.drive();
 
-    assert_matches!(
-        pair.poll(Client),
-        Some(Event::Path(PathEvent::Abandoned {
-            id: PathId(0),
-            reason: PathAbandonReason::UnusableAfterNetworkChange
-        }))
-    );
-    assert_matches!(
-        pair.poll(Client),
-        Some(Event::Path(PathEvent::Established { id: PathId(1) }))
-    );
-    assert_matches!(
-        pair.poll(Client),
-        Some(Event::Path(PathEvent::ObservedAddr{ id: PathId(1), addr })) if addr == our_addr
-    );
+    let mut found_first = false;
+    let mut found_second = false;
+    let post_connect_events = std::iter::from_fn(|| pair.poll(Client));
+    for event in client_events.into_iter().chain(post_connect_events) {
+        if let Event::Path(PathEvent::ObservedAddr { id, addr }) = event {
+            if id == PathId::ZERO && addr == first_addr {
+                found_first = true;
+            } else if id == path_id && addr == second_client_addr {
+                found_second = true;
+            }
+        }
+    }
+    assert!(found_first);
+    assert!(found_second);
 
     Ok(())
 }
