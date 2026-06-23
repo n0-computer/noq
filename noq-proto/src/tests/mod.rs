@@ -543,7 +543,7 @@ fn congestion() {
 fn high_latency_handshake() {
     let _guard = subscribe();
     let mut pair = Pair::default();
-    pair.latency = Duration::from_micros(200 * 1000);
+    pair.routes.as_basic_mut().latency = Duration::from_micros(200 * 1000);
     let (client_ch, server_ch) = pair.connect();
     assert_eq!(pair.client_conn_mut(client_ch).bytes_in_flight(), 0);
     assert_eq!(pair.server_conn_mut(server_ch).bytes_in_flight(), 0);
@@ -3079,7 +3079,7 @@ fn setup_ack_frequency_test(max_ack_delay: Duration) -> (Pair, ConnectionHandle,
         .initial_rtt(Duration::from_millis(10)); // To avoid delays from pacing
 
     let mut pair = Pair::default_with_deterministic_pns();
-    pair.latency = Duration::from_millis(10); // Need latency to avoid an RTT = 0
+    pair.routes.as_basic_mut().latency = Duration::from_millis(10); // Need latency to avoid an RTT = 0
     let (client_ch, server_ch) = pair.connect_with(client_config);
     pair.drive();
 
@@ -3163,7 +3163,7 @@ fn ack_frequency_ack_sent_after_max_ack_delay() {
     pair.drive_client();
 
     // Server: receive the ping, send no ACK
-    pair.time += pair.latency;
+    pair.time += pair.routes.as_basic().latency;
     let server_stats_before = pair.server_conn_mut(server_ch).stats();
     pair.drive_server();
     let server_stats_after = pair.server_conn_mut(server_ch).stats();
@@ -3376,7 +3376,7 @@ fn ack_frequency_update_max_delay() {
 
     // RTT jumps, client sends another ping
     info!("delayed ping");
-    pair.latency *= 10;
+    pair.routes.as_basic_mut().latency *= 10;
     pair.client_conn_mut(client_ch).ping();
     pair.drive();
 

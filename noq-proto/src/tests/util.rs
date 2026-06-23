@@ -46,8 +46,6 @@ pub(super) struct Pair {
     pub(super) mtu: usize,
     /// Simulates explicit congestion notification
     pub(super) congestion_experienced: bool,
-    // One-way
-    pub(super) latency: Duration,
     /// Number of spin bit flips
     pub(super) spins: u64,
     /// The routing table used for resolving addresses observed for incoming packets
@@ -102,13 +100,13 @@ impl Pair {
             epoch: now,
             time: now,
             mtu: DEFAULT_MTU,
-            latency: Duration::from_millis(1),
             spins: 0,
             last_spin: false,
             congestion_experienced: false,
             routes: BasicRouting {
                 client_addr,
                 server_addr,
+                latency: Duration::from_millis(1),
             }
             .into(),
         }
@@ -137,13 +135,13 @@ impl Pair {
             epoch: now,
             time: now,
             mtu: DEFAULT_MTU,
-            latency: Duration::ZERO,
             spins: 0,
             last_spin: false,
             congestion_experienced: false,
             routes: BasicRouting {
                 client_addr: Self::CLIENT_ADDR,
                 server_addr: Self::SERVER_ADDR,
+                latency: Duration::ZERO,
             }
             .into(),
         }
@@ -211,11 +209,15 @@ impl Pair {
                 self.spins += (spin == self.last_spin) as u64;
                 self.last_spin = spin;
             }
-            match self.routes.route_client_to_server(&packet) {
-                RoutingDecision::Deliver { src, dst } => {
+            match self.routes.route_client_to_server(self.time, &packet) {
+                RoutingDecision::Deliver {
+                    src,
+                    dst,
+                    recv_time,
+                } => {
                     let ecn = set_congestion_experienced(packet.ecn, self.congestion_experienced);
                     self.server.inbound.push_back(Inbound {
-                        recv_time: self.time + self.latency,
+                        recv_time,
                         ecn,
                         packet: buffer.as_ref().into(),
                         remote: src,
@@ -239,11 +241,15 @@ impl Pair {
                 info!(packet_size, "dropping packet (max size exceeded)");
                 continue;
             }
-            match self.routes.route_server_to_client(&packet) {
-                RoutingDecision::Deliver { src, dst } => {
+            match self.routes.route_server_to_client(self.time, &packet) {
+                RoutingDecision::Deliver {
+                    src,
+                    dst,
+                    recv_time,
+                } => {
                     let ecn = set_congestion_experienced(packet.ecn, self.congestion_experienced);
                     self.client.inbound.push_back(Inbound {
-                        recv_time: self.time + self.latency,
+                        recv_time,
                         ecn,
                         packet: buffer.as_ref().into(),
                         remote: src,
@@ -625,7 +631,7 @@ impl ConnPairBuilder {
         let mut pair = Pair::new_from_endpoint(client, server);
 
         if let Some(latency) = latency {
-            pair.latency = latency;
+            pair.routes.as_basic_mut().latency = latency;
         }
         if let Some(mtu) = mtu {
             pair.mtu = mtu;
@@ -1532,6 +1538,7 @@ pub(super) enum Routing {
     Basic(BasicRouting),
     SimpleFirewall(SimpleFirewallRouting),
     ManyToMany(ManyToManyRouting),
+    BwLimited(BwLimitedRouting),
 }
 
 impl Routing {
@@ -1543,23 +1550,24 @@ impl Routing {
             Self::Basic(inner) => inner.public_server_addr(),
             Self::SimpleFirewall(inner) => inner.public_server_addr(),
             Self::ManyToMany(inner) => inner.public_server_addr(),
+            Self::BwLimited(inner) => inner.public_server_addr(),
         }
     }
 
     /// Routes a datagram from client to server.
-    fn route_client_to_server(&mut self, transmit: &Transmit) -> RoutingDecision {
+    fn route_client_to_server(&mut self, now: Instant, transmit: &Transmit) -> RoutingDecision {
         match self {
-            Self::Basic(inner) => inner.route_client_to_server(transmit),
-            Self::SimpleFirewall(inner) => inner.route_client_to_server(transmit),
-            Self::ManyToMany(inner) => inner.route_client_to_server(transmit),
+            Self::Basic(inner) => inner.route_client_to_server(transmit, now),
+            Self::SimpleFirewall(inner) => inner.route_client_to_server(transmit, now),
+            Self::ManyToMany(inner) => inner.route_client_to_server(transmit, now),
         }
     }
     /// Routes a datagram from server to client.
-    fn route_server_to_client(&mut self, transmit: &Transmit) -> RoutingDecision {
+    fn route_server_to_client(&mut self, now: Instant, transmit: &Transmit) -> RoutingDecision {
         match self {
-            Self::Basic(inner) => inner.route_server_to_client(transmit),
-            Self::SimpleFirewall(inner) => inner.route_server_to_client(transmit),
-            Self::ManyToMany(inner) => inner.route_server_to_client(transmit),
+            Self::Basic(inner) => inner.route_server_to_client(transmit, now),
+            Self::SimpleFirewall(inner) => inner.route_server_to_client(transmit, now),
+            Self::ManyToMany(inner) => inner.route_server_to_client(transmit, now),
         }
     }
 
@@ -1589,6 +1597,7 @@ pub(super) enum RoutingDecision {
         ///
         /// In other words this becomes the [`FourTuple::local_ip`] for the receiver.
         dst: Option<IpAddr>,
+        recv_time: Instant,
     },
     Drop,
 }
@@ -1604,6 +1613,8 @@ pub(super) enum RoutingDecision {
 pub(super) struct BasicRouting {
     pub(super) client_addr: SocketAddr,
     pub(super) server_addr: SocketAddr,
+    /// The one-way latency from client to server *and* server to client.
+    pub(super) latency: Duration,
 }
 
 impl From<BasicRouting> for Routing {
@@ -1617,22 +1628,24 @@ impl BasicRouting {
         self.server_addr
     }
 
-    fn route_client_to_server(&mut self, transmit: &Transmit) -> RoutingDecision {
+    fn route_client_to_server(&mut self, transmit: &Transmit, time: Instant) -> RoutingDecision {
         if transmit.destination == self.server_addr {
             RoutingDecision::Deliver {
                 src: self.client_addr,
                 dst: Some(transmit.destination.ip()),
+                recv_time: time + self.latency,
             }
         } else {
             RoutingDecision::Drop
         }
     }
 
-    fn route_server_to_client(&mut self, transmit: &Transmit) -> RoutingDecision {
+    fn route_server_to_client(&mut self, transmit: &Transmit, time: Instant) -> RoutingDecision {
         if transmit.destination == self.client_addr {
             RoutingDecision::Deliver {
                 src: self.server_addr,
                 dst: Some(transmit.destination.ip()),
+                recv_time: time + self.latency,
             }
         } else {
             RoutingDecision::Drop
@@ -1684,6 +1697,8 @@ impl BasicRouting {
 pub(super) struct ManyToManyRouting {
     client_routes: Vec<(SocketAddr, usize)>,
     server_routes: Vec<(SocketAddr, usize)>,
+    /// The one-way latency from client to server *and* server to client.
+    latency: Duration,
 }
 
 impl From<ManyToManyRouting> for Routing {
@@ -1698,7 +1713,7 @@ impl ManyToManyRouting {
         self.server_routes[0].0
     }
 
-    fn route_client_to_server(&mut self, transmit: &Transmit) -> RoutingDecision {
+    fn route_client_to_server(&mut self, transmit: &Transmit, now: Instant) -> RoutingDecision {
         if let Some(client_interface_ip) = transmit.src_ip {
             // If we have a client interface IP, then we use that to build the packet coming in on the other side.
             // But we need to check if that is even connected to the server.
@@ -1715,6 +1730,7 @@ impl ManyToManyRouting {
             RoutingDecision::Deliver {
                 src: client_addr,
                 dst: Some(transmit.destination.ip()),
+                recv_time: now + self.latency,
             }
         } else {
             let Some((_, client_addr_idx)) = self
@@ -1730,11 +1746,12 @@ impl ManyToManyRouting {
             RoutingDecision::Deliver {
                 src: *client_addr,
                 dst: Some(transmit.destination.ip()),
+                recv_time: now + self.latency,
             }
         }
     }
 
-    fn route_server_to_client(&mut self, transmit: &Transmit) -> RoutingDecision {
+    fn route_server_to_client(&mut self, transmit: &Transmit, now: Instant) -> RoutingDecision {
         if let Some(server_interface_ip) = transmit.src_ip {
             // If we have a server interface IP, then we use that to build the packet coming in on the other side.
             // But we need to check if that is even connected to the client.
@@ -1751,6 +1768,7 @@ impl ManyToManyRouting {
             RoutingDecision::Deliver {
                 src: server_addr,
                 dst: Some(transmit.destination.ip()),
+                recv_time: now + self.latency,
             }
         } else {
             let Some((_, server_addr_idx)) = self
@@ -1766,6 +1784,7 @@ impl ManyToManyRouting {
             RoutingDecision::Deliver {
                 src: *server_addr,
                 dst: Some(transmit.destination.ip()),
+                recv_time: now + self.latency,
             }
         }
     }
@@ -1783,6 +1802,7 @@ impl ManyToManyRouting {
         Self {
             client_routes,
             server_routes,
+            latency: Duration::from_millis(1),
         }
     }
 
@@ -1809,6 +1829,7 @@ impl ManyToManyRouting {
         Self {
             client_routes,
             server_routes,
+            latency: Duration::from_millis(1),
         }
     }
 
@@ -1890,6 +1911,8 @@ pub(super) struct SimpleFirewallRouting {
     pub(super) client_firewall_open: bool,
     /// Whether the server has sent a packet from `server_nat` to `client_nat`.
     pub(super) server_firewall_open: bool,
+    /// The one-way latency from client to server *and* server to client.
+    pub(super) latency: Duration,
 }
 
 impl From<SimpleFirewallRouting> for Routing {
@@ -1930,6 +1953,7 @@ impl SimpleFirewallRouting {
         Self {
             client_firewall_open: false,
             server_firewall_open: false,
+            latency: Duration::ZERO,
         }
     }
 
@@ -1945,7 +1969,7 @@ impl SimpleFirewallRouting {
     /// If there is no [`Transmit::src_ip`] then this routing table selects one based on the
     /// destination, if reachable. Otherwise if the `src_ip` does not match an open link the
     /// datagram is blocked.
-    fn route_client_to_server(&mut self, transmit: &Transmit) -> RoutingDecision {
+    fn route_client_to_server(&mut self, transmit: &Transmit, now: Instant) -> RoutingDecision {
         // Find the address this datagram SHOULD have been sent on to be able to reach the
         // destination.
         let link_src = if transmit.destination == Self::SERVER_DIRECT_ADDR {
@@ -1990,6 +2014,7 @@ impl SimpleFirewallRouting {
         RoutingDecision::Deliver {
             src: link_src,
             dst: Some(transmit.destination.ip()),
+            recv_time: now + self.latency,
         }
     }
 
@@ -2001,7 +2026,7 @@ impl SimpleFirewallRouting {
     /// If there is no [`Transmit::src_ip`] then this routing table selects one based on the
     /// destination, if reachable. Otherwise if the `src_ip` does not match an open link the
     /// datagram is blocked.
-    fn route_server_to_client(&mut self, transmit: &Transmit) -> RoutingDecision {
+    fn route_server_to_client(&mut self, transmit: &Transmit, now: Instant) -> RoutingDecision {
         // Find the address this datagram SHOULD have been sent on to be able to reach the
         // destination.
         let link_src = if transmit.destination == Self::CLIENT_DIRECT_ADDR {
@@ -2046,6 +2071,7 @@ impl SimpleFirewallRouting {
         RoutingDecision::Deliver {
             src: link_src,
             dst: Some(transmit.destination.ip()),
+            recv_time: now + self.latency,
         }
     }
 }
