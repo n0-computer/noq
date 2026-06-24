@@ -5581,6 +5581,13 @@ impl Connection {
             && (migrate_on_any_packet || !is_probing_packet)
             && is_largest_received_pn
             && network_path.remote != self.path_data(path_id).network_path.remote
+            // Don't migrate if the packet came from a previously validated path
+            && !self
+                .paths
+                .get(&path_id)
+                .and_then(|p| p.prev.as_ref())
+                .map(|(_, prev)| prev.validated && prev.network_path.remote == network_path.remote)
+                .unwrap_or(false)
         {
             self.migrate(path_id, now, network_path, migration_observed_addr);
             // Break linkability, if possible
@@ -5658,7 +5665,26 @@ impl Connection {
                 );
             }
             paths::OnPathResponseReceived::Unknown => {
-                debug!(%response, "ignoring invalid PATH_RESPONSE");
+                // The token wasn't found in the current path's challenges.
+                // Check if it was sent on the previous path (e.g., during migration
+                // the server sends a PATH_CHALLENGE to validate the previous path,
+                // but the client's PATH_RESPONSE arrives on the current path).
+                if let Some((_, ref mut prev)) = path.prev {
+                    if prev.remove_challenge_token(response.0) {
+                        debug!(
+                            %response,
+                            "PATH_RESPONSE validates previous path"
+                        );
+                        prev.reset_on_path_challenges();
+                        if !std::mem::replace(&mut prev.validated, true) {
+                            trace!("previous path validated via PATH_RESPONSE");
+                        }
+                    } else {
+                        debug!(%response, "ignoring invalid PATH_RESPONSE");
+                    }
+                } else {
+                    debug!(%response, "ignoring invalid PATH_RESPONSE");
+                }
             }
             paths::OnPathResponseReceived::Ignored {
                 sent_on,

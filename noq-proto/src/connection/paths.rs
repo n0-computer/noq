@@ -560,6 +560,12 @@ impl PathData {
         self.lost_challenge_count = 0;
     }
 
+    /// Tries to remove a challenge token from unconfirmed challenges.
+    /// Returns `true` if the token was found and removed.
+    pub(super) fn remove_challenge_token(&mut self, token: u64) -> bool {
+        self.unconfirmed_challenges.remove(&token).is_some()
+    }
+
     #[cfg(feature = "qlog")]
     pub(super) fn qlog_recovery_metrics(
         &mut self,
