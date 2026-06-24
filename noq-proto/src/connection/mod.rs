@@ -4303,7 +4303,14 @@ impl Connection {
                             prev = %self.path_data(path_id).network_path,
                             "server migrated to new remote",
                         );
-                        self.path_data_mut(path_id).network_path = network_path;
+                        let queue_observed_addr = self
+                            .config
+                            .address_discovery_role
+                            .should_report(&self.peer_params.address_discovery_role);
+
+                        let path = self.path_data_mut(path_id);
+                        path.network_path = network_path;
+                        path.pending.observed_address = queue_observed_addr;
                         self.qlog.emit_tuple_assigned(path_id, network_path, now);
                     } else {
                         debug!(
@@ -6206,24 +6213,10 @@ impl Connection {
 
             // Always include an OBSERVED_ADDR frame with a PATH_CHALLENGE, regardless
             // of whether one has already been sent on this path.
-            if space_id == SpaceId::Data
-                && self
-                    .config
-                    .address_discovery_role
-                    .should_report(&self.peer_params.address_discovery_role)
-            {
-                let frame = frame::ObservedAddr::new(
-                    path.network_path.remote,
-                    self.next_observed_addr_seq_no,
-                );
-                if builder.frame_space_remaining() > frame.size() {
-                    builder.write_frame(frame, stats);
-
-                    self.next_observed_addr_seq_no =
-                        self.next_observed_addr_seq_no.saturating_add(1u8);
-                    path.pending.observed_address = false;
-                }
-            }
+            path.pending.observed_address = self
+                .config
+                .address_discovery_role
+                .should_report(&self.peer_params.address_discovery_role);
         }
 
         // PATH_RESPONSE (on-path)
@@ -6242,24 +6235,10 @@ impl Connection {
             // NOTE: this is technically not required but might be useful to ride the
             // request/response nature of path challenges to refresh an observation
             // Since PATH_RESPONSE is a probing frame, this is allowed by the spec.
-            if space_id == SpaceId::Data
-                && self
-                    .config
-                    .address_discovery_role
-                    .should_report(&self.peer_params.address_discovery_role)
-            {
-                let frame = frame::ObservedAddr::new(
-                    path.network_path.remote,
-                    self.next_observed_addr_seq_no,
-                );
-                if builder.frame_space_remaining() > frame.size() {
-                    builder.write_frame(frame, stats);
-
-                    self.next_observed_addr_seq_no =
-                        self.next_observed_addr_seq_no.saturating_add(1u8);
-                    path.pending.observed_address = false;
-                }
-            }
+            path.pending.observed_address = self
+                .config
+                .address_discovery_role
+                .should_report(&self.peer_params.address_discovery_role);
         }
 
         // ADD_ADDRESS
@@ -6334,7 +6313,6 @@ impl Connection {
 
         // OBSERVED_ADDR
         if !scheduling_info.is_abandoned
-            && scheduling_info.may_send_data
             && space_id == SpaceId::Data
             && path.pending.observed_address
         {
