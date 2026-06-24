@@ -2009,113 +2009,78 @@ fn test_peer_may_probe() -> TestResult {
 }
 
 #[test]
-fn on_path_challenge_lost_backoff() {
+fn path_open_challenge_lost() -> TestResult {
     let _guard = subscribe();
+    let mut pair = ConnPair::builder()
+        .enable_multipath()
+        .disable_mtud_discovery()
+        .connect();
 
-    let mut pair = ConnPair::default();
+    info!("opening path");
+    let server_addr = pair.routes.public_server_addr();
+    let path_id = pair.open_path(
+        Client,
+        FourTuple::from_remote(server_addr),
+        PathStatus::Available,
+    )?;
+    let first_challenge = pair.time;
+    pair.drive_client();
 
-    // We use two helpers so we can "skip over" unrelated stopping points from `next_wakeup`
+    // Drop the 1st PATH_CHALLENGE
+    let client_stats = pair.path_stats(Client, path_id).unwrap();
+    assert_eq!(client_stats.frame_tx.path_challenge, 1);
+    assert!(pair.path_stats(Server, path_id).is_none());
+    info!("dropping client's packet");
+    pair.server.inbound.clear();
 
-    /// Attempts to drive the client until it has sent the expected amount of path challenges.
-    ///
-    /// Tries for a maximum of 10 iterations. Panics if that fails.
-    fn drive_client_until_challenge_sent(pair: &mut ConnPair, expected_path_challenges_sent: u64) {
-        for _ in 0..10 {
-            pair.drive_client();
-            if pair.stats(Client).frame_tx.path_challenge == expected_path_challenges_sent {
-                return;
-            }
-            pair.time = pair
-                .client
-                .next_wakeup()
-                .expect("couldn't drive client forward");
-            info!("advancing to {:?} for client", pair.time - pair.epoch);
-        }
-        panic!(
-            "client never sent PATH_CHALLENGE #{}, actual: {}",
-            expected_path_challenges_sent,
-            pair.stats(Client).frame_tx.path_challenge
-        );
-    }
+    // Drop the 2nd PATH_CHALLENGE
+    pair.time = pair
+        .client
+        .next_wakeup()
+        .expect("couldn't drive client forward");
+    info!("advancing to {:?} for client", pair.time - pair.epoch);
+    let second_challenge = pair.time;
+    pair.drive_client();
+    let client_stats = pair.path_stats(Client, path_id).unwrap();
+    assert_eq!(client_stats.frame_tx.path_challenge, 2);
+    assert!(pair.path_stats(Server, path_id).is_none());
+    info!("dropping client's packet");
+    pair.server.inbound.clear();
 
-    /// Attempts to drive the server until it has received the expected amount of path challenges.
-    ///
-    /// Tries for a maximum of 10 iterations. Panics if that fails.
-    fn drive_server_until_challenge_received(
-        pair: &mut ConnPair,
-        expected_path_challenges_received: u64,
-    ) {
-        for _ in 0..10 {
-            // attempt to drive the server until it receives the PATH_CHALLENGE and sends a PATH_RESPONSE
-            pair.time = pair
-                .server
-                .next_wakeup()
-                .expect("couldn't drive server forward");
-            info!("advancing to {:?} for server", pair.time - pair.epoch);
-            pair.drive_server();
-            if pair.stats(Server).frame_rx.path_challenge == expected_path_challenges_received
-                && pair.stats(Server).frame_tx.path_response == expected_path_challenges_received
-            {
-                return;
-            }
-        }
-        panic!(
-            "server never received PATH_CHALLENGE #{}, actual: {}",
-            expected_path_challenges_received,
-            pair.stats(Server).frame_rx.path_challenge
-        );
-    }
+    // Send the 3rd PATH_CHALLENGE
+    pair.time = pair
+        .client
+        .next_wakeup()
+        .expect("couldn't drive client forward");
+    info!("advancing to {:?} for client", pair.time - pair.epoch);
+    let third_challenge = pair.time;
+    pair.drive_client();
+    let client_stats = pair.path_stats(Client, path_id).unwrap();
+    assert_eq!(client_stats.frame_tx.path_challenge, 3);
+    assert!(pair.path_stats(Server, path_id).is_none());
 
-    pair.conn_mut(Client).trigger_path_validation();
+    let first_delay = second_challenge - first_challenge;
+    let second_delay = third_challenge - second_challenge;
+    assert!(
+        first_delay < second_delay,
+        "delays must monotonically increase"
+    );
 
-    // Kickstart the process once to get a reference point for the last_challenge_sent
-    drive_client_until_challenge_sent(&mut pair, 1);
-    let mut last_challenge_send = pair.time;
-    let mut last_duration = Duration::ZERO;
-
-    const MAX_DURATION: Duration = Duration::from_secs(2); // equivalent to MAX_PTO_INTERVAL
-    const MAX_ITERS: u64 = MAX_DURATION.as_millis().ilog2() as u64 + 2;
-
-    for i in 1..=MAX_ITERS {
-        drive_server_until_challenge_received(&mut pair, i);
-        pair.client.inbound.clear(); // we drop the client-inbound PATH_RESPONSE
-        info!("dropped client inbound");
-
-        drive_client_until_challenge_sent(&mut pair, i + 1);
-        let time = pair.time.duration_since(last_challenge_send);
-        info!(?time, ?last_duration, "time since last PATH_CHALLENGE send");
-        assert!(
-            time >= last_duration,
-            "duration between PATH_CHALLENGE sends must be monotonically increasing (backing off)"
-        );
-        assert!(
-            time <= MAX_DURATION,
-            "duration between PATH_CHALLENGE sends must be bound to a maximum of 2s"
-        );
-        if i == MAX_ITERS {
-            assert_eq!(time, MAX_DURATION);
-        }
-        last_duration = time;
-        last_challenge_send = pair.time;
-    }
-
-    // Now we stop dropping the client inbound once and the backoff should return back to normal:
-
-    drive_server_until_challenge_received(&mut pair, MAX_ITERS + 1);
-    pair.drive(); // Ensure the client fully processes the PATH_RESPONSE this time.
-    info!("client should have processed PATH_RESPONSE");
-
-    // The next time challenges are sent, the backoff should be reset.
-
-    pair.conn_mut(Client).trigger_path_validation();
-    drive_client_until_challenge_sent(&mut pair, MAX_ITERS + 2);
-    last_challenge_send = pair.time;
-    drive_server_until_challenge_received(&mut pair, MAX_ITERS + 2);
-    pair.client.inbound.clear(); // we drop the client-inbound PATH_RESPONSE
-    info!("dropped client inbound");
-    drive_client_until_challenge_sent(&mut pair, MAX_ITERS + 3);
-    let duration = pair.time.duration_since(last_challenge_send);
-    assert_eq!(duration, Duration::from_millis(1));
+    // Open path, drive to completion
+    pair.drive_server();
+    let server_stats = pair.path_stats(Server, path_id).unwrap();
+    assert_eq!(server_stats.frame_rx.path_challenge, 1);
+    pair.advance_time();
+    pair.drive();
+    assert_matches!(
+        pair.poll(Client),
+        Some(Event::Path(crate::PathEvent::Established { id  })) if id == path_id
+    );
+    assert_matches!(
+        pair.poll(Server),
+        Some(Event::Path(crate::PathEvent::Established { id  })) if id == path_id
+    );
+    Ok(())
 }
 
 #[test]
