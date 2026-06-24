@@ -508,9 +508,13 @@ impl PathData {
         // - network path used to send the path challenge (`SentChallengeInfo::network_path`)
         // - network path over which the response arrived (not needed)
         //
-        // As per the spec, this only validates the network path on which this was *sent*,
-        // regardless of the path on which it was received in order to protect against
-        // off-path packet forwarding attacks.
+        // As per https://www.rfc-editor.org/rfc/rfc9000.html#section-8.2.3-1, this only
+        // validates the network path on which this was *sent*, regardless of the path on
+        // which it was received in order to protect against off-path packet forwarding
+        // attacks:
+        //
+        // > A PATH_RESPONSE frame received on any network path validates the path on which
+        // > the PATH_CHALLENGE was sent.
         match self.unconfirmed_challenges.remove(&token) {
             // Response to an on-path PathChallenge that validates this path.
             // The sent path should match the current path. However, it's possible that the
