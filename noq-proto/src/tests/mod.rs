@@ -2202,7 +2202,7 @@ fn tail_loss_respect_max_datagrams() {
 }
 
 #[test]
-fn udp_rx_ios_overcounts_coalesced_packets() {
+fn udp_rx_ios_overcounts_batches_udp_datagrams() {
     // this is a regression test
     let _guard = subscribe();
     let mut pair = ConnPair::default();
