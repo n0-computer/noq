@@ -508,22 +508,18 @@ impl PathData {
         // - network path used to send the path challenge (`SentChallengeInfo::network_path`)
         // - network path over which the response arrived (not needed)
         //
-        // As per https://www.rfc-editor.org/rfc/rfc9000.html#section-8.2.3-1, this only
-        // validates the network path on which this was *sent*, regardless of the path on
-        // which it was received in order to protect against off-path packet forwarding
-        // attacks:
-        //
-        // > A PATH_RESPONSE frame received on any network path validates the path on which
-        // > the PATH_CHALLENGE was sent.
+        // As per above spec quote, this only validates the network path on which this was
+        // *sent*, regardless of the path on which it was received in order to protect
+        // against off-path packet forwarding attacks.
         match self.unconfirmed_challenges.remove(&token) {
             // Response to an on-path PathChallenge that validates this path.
             // The sent path should match the current path. However, it's possible that the
             // challenge was sent when no local_ip was known. This case is allowed as well.
             Some(info) if info.network_path.is_probably_same_path(&self.network_path) => {
                 // Do not update or set the self.network_path.local_ip:
-                // Connection::process_payload does this the correct way for non-probing
-                // packets. We can mark the path as validated though, because for a change
-                // in local_ip only we do not need to re-validate the path.
+                // Connection::process_payload handles this later when required. We can mark
+                // the path as validated though, because for a change in local_ip only we do
+                // not need to re-validate the path.
                 let sent_instant = info.sent_instant;
                 if !std::mem::replace(&mut self.validated, true) {
                     trace!("new path validated");
