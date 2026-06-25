@@ -2209,6 +2209,7 @@ impl Connection {
                 let rx = &mut self.path_stats.for_path(path_id).udp_rx;
                 rx.datagrams += 1;
                 rx.bytes += first_decode.len() as u64;
+                rx.ios += 1;
                 let data_len = first_decode.len();
 
                 self.handle_decode(now, network_path, path_id, ecn, first_decode);
@@ -4227,8 +4228,6 @@ impl Connection {
         stateless_reset: bool,
         mut qlog: QlogRecvPacket,
     ) {
-        self.path_stats.for_path(path_id).udp_rx.ios += 1;
-
         if let Some(ref packet) = packet {
             trace!(
                 "got {:?} packet ({} bytes) from {} using id {}",
