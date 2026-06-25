@@ -978,15 +978,6 @@ impl Connection {
             .address_discovery_role
             .should_report(&self.peer_params.address_discovery_role);
 
-        // Challenges are ack-eliciting but not retransmittable, so set a timer
-        // manually. This timer interval keeps increasing with lost challenges. At some
-        // point the interval will exceed the path idle timeout and that is when this path
-        // will be closed.
-        self.timers.set(
-            Timer::PerPath(path_id, PathTimer::PathChallengeLost),
-            now + data.on_path_challenge_expiry(),
-            self.qlog.with_time(now),
-        );
         if !data.validated {
             // Hard cap on how long to try validation for.
             // TODO(flub): 3 * PTO is way too short, it makes opening paths very susceptible
@@ -2550,7 +2541,7 @@ impl Connection {
                             path.data.lost_challenge_count += 1;
                             self.timers.set(
                                 Timer::PerPath(path_id, PathTimer::PathChallengeLost),
-                                now + path.data.on_path_challenge_expiry(),
+                                now + path.data.on_path_challenge_pto(),
                                 self.qlog.with_time(now),
                             );
                         }
@@ -6205,6 +6196,16 @@ impl Connection {
             let challenge = frame::PathChallenge(token);
             builder.write_frame(challenge, stats);
             builder.require_padding();
+
+            // On-path challenges need a PATH_RESPONSE and not only an ACK which can be
+            // received on any path. So set a timer manually instead of relying on the usual
+            // LossDetection/PTO timer. This timer interval keeps exponentially increasing
+            // with missing responses like the normal PTO interval.
+            self.timers.set(
+                Timer::PerPath(path_id, PathTimer::PathChallengeLost),
+                now + path.on_path_challenge_pto(),
+                self.qlog.with_time(now),
+            );
 
             if is_multipath_negotiated && !path.validated && path.pending_challenge {
                 // queue informing the path status along with the challenge

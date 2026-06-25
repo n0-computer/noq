@@ -477,14 +477,22 @@ impl PathData {
         if self.unconfirmed_challenges.is_empty() {
             return None;
         }
-        let duration = self.on_path_challenge_expiry();
+        let duration = self.on_path_challenge_pto();
         self.unconfirmed_challenges
             .values()
             .map(|info| info.sent_instant + duration)
             .min()
     }
 
-    pub(super) fn on_path_challenge_expiry(&self) -> Duration {
+    /// The duration after which a PTO expires for an on-path challenge, if sent now.
+    ///
+    /// Since challenges need an on-path response rather than just an ACK that can be sent
+    /// on any path they need a different timer from the
+    /// [`PathTimer::LossDetection`]. Functionally this behaves as the probe timeout
+    /// however.
+    ///
+    /// [`PathTimer::LossDetection`]: super::timer::PathTimer::LossDetection
+    pub(super) fn on_path_challenge_pto(&self) -> Duration {
         let backoff = 2u32.pow(self.lost_challenge_count.min(MAX_BACKOFF_EXPONENT));
         let duration = self.rtt.pto_base() * backoff;
         duration.min(MAX_PTO_INTERVAL)
