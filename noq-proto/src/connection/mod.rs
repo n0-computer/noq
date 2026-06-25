@@ -4303,14 +4303,7 @@ impl Connection {
                             prev = %self.path_data(path_id).network_path,
                             "server migrated to new remote",
                         );
-                        let queue_observed_addr = self
-                            .config
-                            .address_discovery_role
-                            .should_report(&self.peer_params.address_discovery_role);
-
-                        let path = self.path_data_mut(path_id);
-                        path.network_path = network_path;
-                        path.pending.observed_address = queue_observed_addr;
+                        self.path_data_mut(path_id).network_path = network_path;
                         self.qlog.emit_tuple_assigned(path_id, network_path, now);
                     } else {
                         debug!(
