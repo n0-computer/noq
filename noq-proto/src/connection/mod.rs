@@ -5017,7 +5017,7 @@ impl Connection {
                         self.open_nat_traversed_paths(now);
                     } else {
                         // Try to see if this is a response to an on-path PATH_CHALLENGE.
-                        self.handle_path_response_on_path(now, response, path_id, network_path);
+                        self.handle_path_response_on_path(now, response, path_id);
                     }
                 }
                 Frame::MaxData(frame::MaxData(bytes)) => {
@@ -5605,17 +5605,13 @@ impl Connection {
         now: Instant,
         response: frame::PathResponse,
         path_id: PathId,
-        network_path: FourTuple,
     ) {
         let is_multipath_negotiated = self.is_multipath_negotiated();
         let path = self
             .paths
             .get_mut(&path_id)
             .expect("payload is processed only after the path becomes known");
-        match path
-            .data
-            .on_path_response_received(now, response.0, network_path)
-        {
+        match path.data.on_path_response_received(now, response.0) {
             paths::OnPathResponseReceived::OnPath if !self.abandoned_paths.contains(&path_id) => {
                 let qlog = self.qlog.with_time(now);
                 self.timers.stop(

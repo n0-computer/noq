@@ -435,23 +435,6 @@ impl FourTuple {
     pub(crate) fn is_probably_same_path(&self, other: &Self) -> bool {
         self.remote == other.remote && (self.local_ip.is_none() || self.local_ip == other.local_ip)
     }
-
-    /// Updates this tuple's local address iff
-    /// - it was unset before,
-    /// - the other tuple has the same remote, and
-    /// - the other tuple has a local address set.
-    ///
-    /// Returns whether this and the other remote are now fully equal.
-    pub(crate) fn update_local_if_same_remote(&mut self, other: &Self) -> bool {
-        if self.remote != other.remote {
-            return false;
-        }
-        if self.local_ip.is_some() && self.local_ip != other.local_ip {
-            return false;
-        }
-        self.local_ip = other.local_ip;
-        true
-    }
 }
 
 impl fmt::Display for FourTuple {
