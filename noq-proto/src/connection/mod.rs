@@ -1002,7 +1002,6 @@ impl Connection {
         let path = vacant_entry.insert(PathState { data, prev: None });
 
         let mut pn_space = spaces::PacketNumberSpace::new(now, SpaceId::Data, &mut self.rng);
-        pn_space.open_status = OpenStatus::Sent;
         if let Some(pn) = pn {
             pn_space.dedup.insert(pn);
         }
