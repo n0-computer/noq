@@ -2238,6 +2238,9 @@ fn regression_delayed_path_cids_blocked() -> TestResult {
 
 #[test]
 fn throughput() -> TestResult {
+    const TOTAL_BYTES: usize = 10_000_000;
+    const BPS_LIMIT: u64 = 1_000_000;
+
     let _guard = subscribe();
     let mut pair = ConnPair::builder()
         .with_routes(
@@ -2246,7 +2249,7 @@ fn throughput() -> TestResult {
                 Pair::SERVER_ADDR,
                 crate::Instant::now(),
                 BwLimitConfig {
-                    bytes_per_second: 1_000_000,
+                    bytes_per_second: BPS_LIMIT,
                     buffer_size: 50 * 1500, // buffer that fits ~50 full packets
                     latency: Duration::from_millis(3),
                 },
@@ -2255,8 +2258,6 @@ fn throughput() -> TestResult {
         )
         .enable_multipath()
         .connect();
-
-    const TOTAL_BYTES: usize = 10_000_000;
 
     let mut bytes_to_send = TOTAL_BYTES;
     let mut bytes_received = 0;
@@ -2296,7 +2297,14 @@ fn throughput() -> TestResult {
 
     let time = pair.time.saturating_duration_since(start);
     let bytes_per_second = TOTAL_BYTES as f64 / time.as_secs_f64();
-    println!("{bytes_per_second} bytes per second");
+    info!(bytes_received, ?time, bytes_per_second);
+
+    let expected_bps = BPS_LIMIT as f64;
+    // Less than 2% deviation from the BPS limit
+    assert!(
+        (bytes_per_second - expected_bps).abs() / expected_bps < 0.05,
+        "deviated too far from expected throughput limit"
+    );
 
     Ok(())
 }
