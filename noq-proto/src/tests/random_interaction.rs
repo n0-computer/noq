@@ -122,14 +122,8 @@ impl TestOp {
                 debug!(len = pair.server.inbound.len(), "dropping inbound");
                 pair.server.inbound.clear();
             }
-            Self::ReorderInbound { side: Side::Client } => {
-                let item = pair.client.inbound.pop_front()?;
-                pair.client.inbound.push_back(item);
-            }
-            Self::ReorderInbound { side: Side::Server } => {
-                let item = pair.server.inbound.pop_front()?;
-                pair.server.inbound.push_back(item);
-            }
+            Self::ReorderInbound { side: Side::Client } => pair.client.inbound.reorder(),
+            Self::ReorderInbound { side: Side::Server } => pair.server.inbound.reorder(),
             Self::ForceKeyUpdate { side: Side::Client } => client.conn(pair)?.force_key_update(),
             Self::ForceKeyUpdate { side: Side::Server } => server.conn(pair)?.force_key_update(),
             Self::PassiveMigration {

@@ -1,6 +1,6 @@
 use std::{
     cmp,
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
     io::{self, Write},
     mem,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
@@ -220,13 +220,15 @@ impl Pair {
                         packet.ecn,
                         self.congestion_experienced || congestion_experienced,
                     );
-                    self.server.inbound.push_back(Inbound {
+                    self.server.inbound.push(
                         recv_time,
-                        ecn,
-                        packet: buffer.as_ref().into(),
-                        remote: src,
-                        dst_ip: dst,
-                    });
+                        Inbound {
+                            ecn,
+                            packet: buffer.as_ref().into(),
+                            remote: src,
+                            dst_ip: dst,
+                        },
+                    );
                 }
                 RoutingDecision::Drop => {
                     debug!(?packet.destination, "no route from client to server for packet");
@@ -256,13 +258,15 @@ impl Pair {
                         packet.ecn,
                         self.congestion_experienced || congestion_experienced,
                     );
-                    self.client.inbound.push_back(Inbound {
+                    self.client.inbound.push(
                         recv_time,
-                        ecn,
-                        packet: buffer.as_ref().into(),
-                        remote: src,
-                        dst_ip: dst,
-                    });
+                        Inbound {
+                            ecn,
+                            packet: buffer.as_ref().into(),
+                            remote: src,
+                            dst_ip: dst,
+                        },
+                    );
                 }
                 RoutingDecision::Drop => {
                     debug!(?packet.destination, "no route from server to client for packet");
@@ -1010,8 +1014,7 @@ impl ConnPair {
             Side::Client => &mut self.pair.client.inbound,
             Side::Server => &mut self.pair.server.inbound,
         };
-        let p = inbound.pop_front().unwrap();
-        inbound.push_back(p);
+        inbound.reorder();
     }
 
     pub(super) fn is_multipath_negotiated(&self, side: Side) -> bool {
@@ -1089,7 +1092,8 @@ pub(super) struct TestEndpoint {
     timeout: Option<Instant>,
     pub(super) outbound: VecDeque<(Transmit, Bytes)>,
     delayed: VecDeque<(Transmit, Bytes)>,
-    pub(super) inbound: VecDeque<Inbound>,
+    /// Inbound packets, ordered by the time at which they become receivable.
+    pub(super) inbound: InboundQueue,
     pub(super) accepted: Option<Result<ConnectionHandle, ConnectionError>>,
     pub(super) connections: HashMap<ConnectionHandle, Connection>,
     pub(super) draining_connections: HashSet<ConnectionHandle>,
@@ -1103,11 +1107,111 @@ pub(super) struct TestEndpoint {
 
 #[derive(Debug)]
 pub(super) struct Inbound {
-    pub(super) recv_time: Instant,
     pub(super) ecn: Option<EcnCodepoint>,
     pub(super) packet: BytesMut,
     pub(super) remote: SocketAddr,
     pub(super) dst_ip: Option<IpAddr>,
+}
+
+/// A queue of inbound packets ordered by their `recv_time`.
+///
+/// We use a sequence number to turn the BTreeMap into essentially a
+/// multimap.
+#[derive(Debug)]
+pub(super) struct InboundQueue {
+    inner: BTreeMap<(Instant, u64), Inbound>,
+    next_seq: u64,
+}
+
+impl InboundQueue {
+    pub(super) fn new() -> Self {
+        Self {
+            inner: BTreeMap::new(),
+            next_seq: 0,
+        }
+    }
+
+    pub(super) fn push(&mut self, recv_time: Instant, inbound: Inbound) {
+        let key = (recv_time, self.next_seq);
+        self.next_seq += 1;
+        self.inner.insert(key, inbound);
+    }
+
+    pub(super) fn pop_first(&mut self) -> Option<(Instant, Inbound)> {
+        self.inner.pop_first().map(|((t, _), v)| (t, v))
+    }
+
+    pub(super) fn pop_last(&mut self) -> Option<(Instant, Inbound)> {
+        self.inner.pop_last().map(|((t, _), v)| (t, v))
+    }
+
+    /// Returns the first packet that's due to be received.
+    pub(super) fn pop_due(&mut self, now: Instant) -> Option<(Instant, Inbound)> {
+        if self
+            .inner
+            .first_key_value()
+            .is_some_and(|(&(t, _), _)| t <= now)
+        {
+            let ((t, _), v) = self.inner.pop_first()?;
+            Some((t, v))
+        } else {
+            None
+        }
+    }
+
+    pub(super) fn next_recv_time(&self) -> Option<Instant> {
+        self.inner.first_key_value().map(|(&(t, _), _)| t)
+    }
+
+    pub(super) fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    pub(super) fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.inner.clear()
+    }
+
+    /// Drains all packets, yielding each with its `recv_time`.
+    pub(super) fn drain(&mut self) -> impl Iterator<Item = (Instant, Inbound)> {
+        std::mem::take(&mut self.inner)
+            .into_iter()
+            .map(|((t, _), v)| (t, v))
+    }
+
+    /// Swaps the `recv_time` of the earlierst and latest packets.
+    ///
+    /// Helps to simulate packet reordering.
+    pub(super) fn reorder(&mut self) {
+        let Some((first_t, first)) = self.pop_first() else {
+            return;
+        };
+        let Some((last_t, last)) = self.pop_last() else {
+            self.push(first_t, first);
+            return;
+        };
+        self.push(last_t, first);
+        self.push(first_t, last);
+    }
+}
+
+impl std::ops::Index<usize> for InboundQueue {
+    type Output = Inbound;
+    fn index(&self, index: usize) -> &Inbound {
+        self.inner
+            .values()
+            .nth(index)
+            .expect("inbound index out of bounds")
+    }
+}
+
+impl Default for InboundQueue {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -1133,7 +1237,7 @@ impl TestEndpoint {
             timeout: None,
             outbound: VecDeque::new(),
             delayed: VecDeque::new(),
-            inbound: VecDeque::new(),
+            inbound: InboundQueue::new(),
             accepted: None,
             connections: HashMap::default(),
             draining_connections: HashSet::default(),
@@ -1154,14 +1258,13 @@ impl TestEndpoint {
         let buffer_size = self.endpoint.config().get_max_udp_payload_size() as usize;
         let mut buf = Vec::with_capacity(buffer_size);
 
-        while self.inbound.front().is_some_and(|x| x.recv_time <= now) {
+        while let Some((recv_time, inbound)) = self.inbound.pop_due(now) {
             let Inbound {
-                recv_time,
                 ecn,
                 packet,
                 remote,
                 dst_ip,
-            } = self.inbound.pop_front().unwrap();
+            } = inbound;
             let network_path = FourTuple {
                 remote,
                 local_ip: dst_ip,
@@ -1252,7 +1355,7 @@ impl TestEndpoint {
     }
 
     pub(super) fn next_wakeup(&self) -> Option<Instant> {
-        let next_inbound = self.inbound.front().map(|x| x.recv_time);
+        let next_inbound = self.inbound.next_recv_time();
         min_opt(self.timeout, next_inbound)
     }
 
@@ -2108,6 +2211,19 @@ pub(super) struct BwLimitedRouting {
     latency: Duration,
 }
 
+/// Tunable parameters for [`BwLimitedRouting`].
+#[derive(Debug)]
+pub(super) struct BwLimitConfig {
+    /// The maximum throughput of the simulated link, in each direction.
+    pub(super) bytes_per_second: u64,
+    /// The send buffer size in bytes.
+    ///
+    /// Once the queue exceeds this, packets are tail-dropped.
+    pub(super) buffer_size: u32,
+    /// The one-way latency of the simulated link, applied to both directions.
+    pub(super) latency: Duration,
+}
+
 impl From<BwLimitedRouting> for Routing {
     fn from(value: BwLimitedRouting) -> Self {
         Self::BwLimited(value)
@@ -2119,10 +2235,13 @@ impl BwLimitedRouting {
         client_addr: SocketAddr,
         server_addr: SocketAddr,
         now: Instant,
-        bytes_per_second: u64,
-        buffer_size: u32,
-        latency: Duration,
+        config: BwLimitConfig,
     ) -> Self {
+        let BwLimitConfig {
+            bytes_per_second,
+            buffer_size,
+            latency,
+        } = config;
         Self {
             client_addr,
             server_addr,

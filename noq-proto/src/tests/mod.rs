@@ -3655,7 +3655,7 @@ fn large_datagram_with_acks() {
     for _ in 0..10 {
         pair.server_conn_mut(server_ch).ping();
         pair.drive_server();
-        pair.client.inbound.pop_back();
+        pair.client.inbound.pop_last();
         pair.server_conn_mut(server_ch).ping();
         pair.drive_server();
     }
