@@ -74,6 +74,8 @@ struct PairSetup {
     seed: Seed,
     extensions: Extensions,
     mtud_enabled: bool,
+    client_enable_gso: bool,
+    server_enable_gso: bool,
     routing_setup: RoutingSetup,
 }
 
@@ -151,7 +153,9 @@ impl PairSetup {
         // Initialize the server config
 
         let mut server_cfg = server_config();
-        server_cfg.transport = Arc::new(transport.clone());
+        let mut server_transport = transport.clone();
+        server_transport.enable_segmentation_offload(self.server_enable_gso);
+        server_cfg.transport = Arc::new(server_transport);
         pair.server
             .endpoint
             .set_server_config(Some(Arc::new(server_cfg)));
@@ -159,6 +163,7 @@ impl PairSetup {
         // Initialize the client config
 
         let mut client_cfg = client_config();
+        transport.enable_segmentation_offload(self.client_enable_gso);
         client_cfg.transport = Arc::new(transport);
 
         // Add routing, if enabled
@@ -313,6 +318,8 @@ fn regression_unset_packet_acked() {
         ]),
         extensions: Extensions::MultipathOnly,
         mtud_enabled: true,
+        client_enable_gso: true,
+        server_enable_gso: true,
         routing_setup: RoutingSetup::Complex(old_routing_table()),
     };
     let interactions = vec![
@@ -358,6 +365,8 @@ fn regression_invalid_key() {
         ]),
         extensions: Extensions::MultipathOnly,
         mtud_enabled: true,
+        client_enable_gso: true,
+        server_enable_gso: true,
         routing_setup: RoutingSetup::Complex(old_routing_table()),
     };
     let interactions = vec![
@@ -409,6 +418,8 @@ fn regression_invalid_key2() {
         seed: Seed::Zeroes,
         extensions: Extensions::MultipathOnly,
         mtud_enabled: true,
+        client_enable_gso: true,
+        server_enable_gso: true,
         routing_setup: RoutingSetup::SimpleSymmetric,
     };
     let interactions = vec![
@@ -456,6 +467,8 @@ fn regression_key_update_error() {
         ]),
         extensions: Extensions::MultipathOnly,
         mtud_enabled: true,
+        client_enable_gso: true,
+        server_enable_gso: true,
         routing_setup: RoutingSetup::Complex(old_routing_table()),
     };
     let interactions = vec![
@@ -491,6 +504,8 @@ fn regression_never_idle() {
         seed: Seed::Zeroes,
         extensions: Extensions::MultipathOnly,
         mtud_enabled: true,
+        client_enable_gso: true,
+        server_enable_gso: true,
         routing_setup: RoutingSetup::Complex(old_routing_table()),
     };
     let interactions = vec![
@@ -534,6 +549,8 @@ fn regression_never_idle2() {
         seed: Seed::Zeroes,
         extensions: Extensions::MultipathOnly,
         mtud_enabled: true,
+        client_enable_gso: true,
+        server_enable_gso: true,
         routing_setup: RoutingSetup::Complex(old_routing_table()),
     };
     let interactions = vec![
@@ -580,6 +597,8 @@ fn regression_packet_number_space_missing() {
         seed: Seed::Zeroes,
         extensions: Extensions::MultipathOnly,
         mtud_enabled: true,
+        client_enable_gso: true,
+        server_enable_gso: true,
         routing_setup: RoutingSetup::SimpleSymmetric,
     };
     let interactions = vec![
@@ -625,6 +644,8 @@ fn regression_peer_failed_to_respond_with_path_abandon() {
         seed: Seed::Zeroes,
         extensions: Extensions::MultipathOnly,
         mtud_enabled: true,
+        client_enable_gso: true,
+        server_enable_gso: true,
         routing_setup: RoutingSetup::Complex(old_routing_table()),
     };
     let interactions = vec![
@@ -663,6 +684,8 @@ fn regression_peer_failed_to_respond_with_path_abandon2() {
         seed: Seed::Zeroes,
         extensions: Extensions::MultipathOnly,
         mtud_enabled: true,
+        client_enable_gso: true,
+        server_enable_gso: true,
         routing_setup: RoutingSetup::SimpleSymmetric,
     };
     let interactions = vec![
@@ -742,6 +765,8 @@ fn regression_path_validation() {
         seed: Seed::Zeroes,
         extensions: Extensions::MultipathOnly,
         mtud_enabled: true,
+        client_enable_gso: true,
+        server_enable_gso: true,
         routing_setup: RoutingSetup::Complex(ManyToManyRouting::from_routes(
             vec![("[::ffff:1.1.1.0]:44433".parse().unwrap(), 0)],
             vec![
@@ -810,6 +835,8 @@ fn regression_never_idle3() {
         seed: Seed::Zeroes,
         extensions: Extensions::MultipathOnly,
         mtud_enabled: true,
+        client_enable_gso: true,
+        server_enable_gso: true,
         routing_setup: RoutingSetup::SimpleSymmetric,
     };
     let interactions = vec![
@@ -855,6 +882,8 @@ fn regression_frame_encoding_error() {
         seed: Seed::Zeroes,
         extensions: Extensions::MultipathOnly,
         mtud_enabled: true,
+        client_enable_gso: true,
+        server_enable_gso: true,
         routing_setup: RoutingSetup::SimpleSymmetric,
     };
     let interactions = vec![
@@ -898,6 +927,8 @@ fn regression_there_should_be_at_least_one_path() {
         seed: Seed::Zeroes,
         extensions: Extensions::MultipathOnly,
         mtud_enabled: true,
+        client_enable_gso: true,
+        server_enable_gso: true,
         routing_setup: RoutingSetup::SimpleSymmetric,
     };
     let interactions = vec![
@@ -953,6 +984,8 @@ fn regression_conn_never_idle5() {
         seed: Seed::Zeroes,
         extensions: Extensions::MultipathOnly,
         mtud_enabled: true,
+        client_enable_gso: true,
+        server_enable_gso: true,
         routing_setup: RoutingSetup::SimpleSymmetric,
     };
     let interactions = vec![
@@ -1012,6 +1045,8 @@ fn regression_peer_ignored_path_abandon() {
         seed: Seed::Zeroes,
         extensions: Extensions::MultipathOnly,
         mtud_enabled: true,
+        client_enable_gso: true,
+        server_enable_gso: true,
         routing_setup: RoutingSetup::SimpleSymmetric,
     };
     let interactions = vec![
@@ -1085,6 +1120,8 @@ fn regression_never_idle4() {
         seed: Seed::Zeroes,
         extensions: Extensions::MultipathOnly,
         mtud_enabled: true,
+        client_enable_gso: true,
+        server_enable_gso: true,
         routing_setup: RoutingSetup::Complex(ManyToManyRouting::from_routes(
             vec![
                 ("[::ffff:1.1.1.0]:44433".parse().unwrap(), 0),
@@ -1179,6 +1216,8 @@ fn regression_infinite_loop() {
         seed: Seed::Zeroes,
         extensions: Extensions::MultipathOnly,
         mtud_enabled: true,
+        client_enable_gso: true,
+        server_enable_gso: true,
         routing_setup: RoutingSetup::SimpleSymmetric,
     };
     let interactions = vec![
@@ -1242,6 +1281,8 @@ fn regression_qnt_revalidating_path_forever() {
         seed: Seed::Zeroes,
         extensions: Extensions::QntAndMultipath,
         mtud_enabled: true,
+        client_enable_gso: true,
+        server_enable_gso: true,
         routing_setup: RoutingSetup::SimpleSymmetric,
     };
     let interactions = vec![
@@ -1286,6 +1327,8 @@ fn regression_1() {
         seed: Seed::Zeroes,
         extensions: Extensions::MultipathOnly,
         mtud_enabled: true,
+        client_enable_gso: true,
+        server_enable_gso: true,
         routing_setup: RoutingSetup::SimpleSymmetric,
     };
     let establishment = Establishment::Full;
@@ -1330,6 +1373,8 @@ fn regression_2() {
         seed: Seed::Zeroes,
         extensions: Extensions::MultipathOnly,
         mtud_enabled: true,
+        client_enable_gso: true,
+        server_enable_gso: true,
         routing_setup: RoutingSetup::SimpleSymmetric,
     };
     let interactions = vec![
@@ -1375,6 +1420,8 @@ fn regression_3() {
         seed: Seed::Zeroes,
         extensions: Extensions::MultipathOnly,
         mtud_enabled: true,
+        client_enable_gso: true,
+        server_enable_gso: true,
         routing_setup: RoutingSetup::SimpleSymmetric,
     };
     let establishment = Establishment::BeforeHandshake;
@@ -1437,6 +1484,8 @@ fn regression_migration_probing_loop() {
         seed: Seed::Zeroes,
         extensions: Extensions::QntAndMultipath,
         mtud_enabled: true,
+        client_enable_gso: true,
+        server_enable_gso: true,
         routing_setup: RoutingSetup::SimpleSymmetric,
     };
     let establishment = Establishment::Full;
@@ -1509,6 +1558,8 @@ fn regression_challenge_resend_loop() {
         seed: Seed::Zeroes,
         extensions: Extensions::MultipathOnly,
         mtud_enabled: true,
+        client_enable_gso: true,
+        server_enable_gso: true,
         routing_setup: RoutingSetup::Complex(ManyToManyRouting::from_routes(
             vec![("[::ffff:1.1.1.0]:44433".parse().unwrap(), 0)],
             vec![
