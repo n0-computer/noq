@@ -3388,8 +3388,9 @@ impl Connection {
             );
         }
         // Before removing the path, we fetch the final path stats via `Self::path_stats`.
-        // This updates some values for the last time.
-        let path_stats = self.path_stats.discard(&path_id);
+        // This ensures snapshot values (like rtt) are properly updated.
+        let path_stats = self.path_stats(path_id).unwrap_or_default();
+        self.path_stats.discard(&path_id);
         self.partial_stats += path_stats;
         self.paths.remove(&path_id);
         self.spaces[SpaceId::Data].number_spaces.remove(&path_id);

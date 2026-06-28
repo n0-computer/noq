@@ -361,7 +361,7 @@ impl PathStatsMap {
     /// Removes the stats for a given path.
     ///
     /// Only do this once you are discarding the path.
-    pub(super) fn discard(&mut self, path_id: &PathId) -> PathStats {
-        self.0.remove(path_id).unwrap_or_default()
+    pub(super) fn discard(&mut self, path_id: &PathId) {
+        self.0.remove(path_id);
     }
 }
