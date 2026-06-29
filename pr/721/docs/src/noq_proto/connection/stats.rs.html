@@ -361,7 +361,7 @@
 <a href=#361 id=361 data-nosnippet>361</a>    <span class="doccomment">/// Removes the stats for a given path.
 <a href=#362 id=362 data-nosnippet>362</a>    ///
 <a href=#363 id=363 data-nosnippet>363</a>    /// Only do this once you are discarding the path.
-<a href=#364 id=364 data-nosnippet>364</a>    </span><span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">fn </span>discard(<span class="kw-2">&amp;mut </span><span class="self">self</span>, path_id: <span class="kw-2">&amp;</span>PathId) -&gt; PathStats {
-<a href=#365 id=365 data-nosnippet>365</a>        <span class="self">self</span>.<span class="number">0</span>.remove(path_id).unwrap_or_default()
+<a href=#364 id=364 data-nosnippet>364</a>    </span><span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">fn </span>discard(<span class="kw-2">&amp;mut </span><span class="self">self</span>, path_id: <span class="kw-2">&amp;</span>PathId) {
+<a href=#365 id=365 data-nosnippet>365</a>        <span class="self">self</span>.<span class="number">0</span>.remove(path_id);
 <a href=#366 id=366 data-nosnippet>366</a>    }
 <a href=#367 id=367 data-nosnippet>367</a>}</code></pre></div></section></main></body></html>
