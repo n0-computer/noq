@@ -717,9 +717,7 @@ impl Connection {
                 // These timers deal with sending and receiving PATH_CHALLENGE and
                 // PATH_RESPONSE, but now that the path is abandoned, we no longer care about
                 // these frames or their timing
-                PathTimer::PathValidationFailed
-                | PathTimer::PathChallengeLost
-                | PathTimer::AbandonFromValidation => false,
+                PathTimer::PathValidationFailed | PathTimer::PathChallengeLost => false,
                 // These timers deal with the lifetime of the path. Now that the path is abandoned,
                 // these are not relevant.
                 PathTimer::PathKeepAlive | PathTimer::PathIdle => false,
@@ -978,17 +976,17 @@ impl Connection {
             .address_discovery_role
             .should_report(&self.peer_params.address_discovery_role);
 
-        if !data.validated {
-            // Hard cap on how long to try validation for.
-            // TODO(flub): 3 * PTO is way too short, it makes opening paths very susceptible
-            //    to packet loss. I prefer using the path idle timeout probably.
-            let pto = self.ack_frequency.max_ack_delay_for_pto() + data.rtt.pto_base();
-            self.timers.set(
-                Timer::PerPath(path_id, PathTimer::AbandonFromValidation),
-                now + 3 * pto,
-                self.qlog.with_time(now),
-            );
-        }
+        // if !data.validated {
+        //     // Hard cap on how long to try validation for.
+        //     // TODO(flub): 3 * PTO is way too short, it makes opening paths very susceptible
+        //     //    to packet loss. I prefer using the path idle timeout probably.
+        //     let pto = self.ack_frequency.max_ack_delay_for_pto() + data.rtt.pto_base();
+        //     self.timers.set(
+        //         Timer::PerPath(path_id, PathTimer::AbandonFromValidation),
+        //         now + 3 * pto,
+        //         self.qlog.with_time(now),
+        //     );
+        // }
 
         let path = vacant_entry.insert(PathState { data, prev: None });
 
@@ -2544,24 +2542,6 @@ impl Connection {
                                 now + path.data.on_path_challenge_pto(),
                                 self.qlog.with_time(now),
                             );
-                        }
-                        PathTimer::AbandonFromValidation => {
-                            let Some(path) = self.paths.get_mut(&path_id) else {
-                                continue;
-                            };
-                            path.data.reset_on_path_challenges();
-                            self.timers.stop(
-                                Timer::PerPath(path_id, PathTimer::PathChallengeLost),
-                                self.qlog.with_time(now),
-                            );
-                            debug!("new path validation failed");
-                            if let Err(err) = self.close_path_inner(
-                                now,
-                                path_id,
-                                PathAbandonReason::ValidationFailed,
-                            ) {
-                                warn!(?err, "failed closing path");
-                            }
                         }
                         PathTimer::Pacing => {}
                         PathTimer::MaxAckDelay => {
@@ -5637,10 +5617,6 @@ impl Connection {
                 let qlog = self.qlog.with_time(now);
                 self.timers.stop(
                     Timer::PerPath(path_id, PathTimer::PathValidationFailed),
-                    qlog.clone(),
-                );
-                self.timers.stop(
-                    Timer::PerPath(path_id, PathTimer::AbandonFromValidation),
                     qlog.clone(),
                 );
                 let next_challenge = path

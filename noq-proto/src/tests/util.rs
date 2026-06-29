@@ -569,8 +569,8 @@ impl ConnPairBuilder {
     }
 
     /// Sets the [`Routing`] to use.
-    pub(super) fn with_routes(mut self, routes: Routing) -> Self {
-        self.routes = Some(routes);
+    pub(super) fn with_routes(mut self, routes: impl Into<Routing>) -> Self {
+        self.routes = Some(routes.into());
         self
     }
 

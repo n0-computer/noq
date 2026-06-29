@@ -1103,6 +1103,10 @@ pub enum PathAbandonReason {
         error_code: VarInt,
     },
     /// We didn't receive a path response in time after opening this path.
+    ///
+    /// This event is no longer emitted, when validation fails a path is only abandoned once
+    /// there's a path timeout and the [`Self::TimedOut`] event would be emitted instead.
+    // TODO(flub): should this be deprecated?
     ValidationFailed,
     /// We didn't receive any data from the remote within the path's idle timeout.
     TimedOut,
