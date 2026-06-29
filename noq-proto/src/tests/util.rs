@@ -1680,7 +1680,7 @@ impl BasicRouting {
 ///
 /// This implies an interface can only have one incoming link. It does allow creating links
 /// that are not functional in both directions however by using a dummy or mismatching
-/// inteface for the allowed incoming source addresses.
+/// interface for the allowed incoming source addresses.
 #[derive(Debug, Clone)]
 pub(super) struct ManyToManyRouting {
     client_routes: Vec<(SocketAddr, usize)>,
