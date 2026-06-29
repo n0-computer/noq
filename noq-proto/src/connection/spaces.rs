@@ -602,6 +602,8 @@ pub struct Retransmits {
     pub(super) remove_address: BTreeSet<RemoveAddress>,
     /// Round and local addresses to advertise in `REACH_OUT` frames
     pub(super) reach_out: PendingReachOutFrames,
+    /// Pending RESET_STREAM_AT frames: (StreamId, offset, error_code).
+    pub(super) reset_stream_at: Vec<(StreamId, VarInt, VarInt)>,
 }
 
 impl Retransmits {
@@ -627,6 +629,7 @@ impl Retransmits {
             add_address,
             remove_address,
             reach_out,
+            reset_stream_at,
         } = &self;
         !max_data
             && !max_stream_id.iter().any(|x| *x)
@@ -650,6 +653,7 @@ impl Retransmits {
             && add_address.is_empty()
             && remove_address.is_empty()
             && reach_out.is_empty()
+            && reset_stream_at.is_empty()
     }
 }
 
@@ -676,6 +680,7 @@ impl ::std::ops::BitOrAssign for Retransmits {
             add_address,
             remove_address,
             mut reach_out,
+            reset_stream_at,
         } = rhs;
 
         // We reduce in-stream head-of-line blocking by queueing retransmits before other data for
@@ -704,6 +709,7 @@ impl ::std::ops::BitOrAssign for Retransmits {
         self.add_address.extend(add_address.iter().copied());
         self.remove_address.extend(remove_address.iter().copied());
         self.reach_out.append(&mut reach_out);
+        self.reset_stream_at.extend_from_slice(&reset_stream_at);
     }
 }
 
