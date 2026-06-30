@@ -272,7 +272,7 @@ pub struct ConnectionStats {
 
     /// Number of [`super::Transmit`] produced by this connection.
     #[cfg(test)]
-    pub(crate) transmit_count: u64,
+    pub(crate) transmit_tx: u64,
 }
 
 impl std::ops::Add<PathStats> for ConnectionStats {
@@ -305,7 +305,7 @@ impl std::ops::Add<PathStats> for ConnectionStats {
             lost_packets: self.lost_packets + lost_packets,
             lost_bytes: self.lost_bytes + lost_bytes,
             #[cfg(test)]
-            transmit_count: self.transmit_count,
+            transmit_tx: self.transmit_tx,
         }
     }
 }
@@ -338,7 +338,7 @@ impl std::ops::AddAssign<PathStats> for ConnectionStats {
             lost_packets,
             lost_bytes,
             #[cfg(test)]
-                transmit_count: _,
+                transmit_tx: _,
         } = self;
         *udp_tx += path_udp_tx;
         *udp_rx += path_udp_rx;

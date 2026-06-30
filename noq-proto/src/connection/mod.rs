@@ -1074,7 +1074,7 @@ impl Connection {
             {
                 #[cfg(test)]
                 {
-                    self.partial_stats.transmit_count += 1;
+                    self.partial_stats.transmit_tx += 1;
                 }
                 return Some(transmit);
             }
@@ -1090,7 +1090,7 @@ impl Connection {
             ) {
                 #[cfg(test)]
                 {
-                    self.partial_stats.transmit_count += 1;
+                    self.partial_stats.transmit_tx += 1;
                 }
                 return Some(transmit);
             }
@@ -1118,7 +1118,7 @@ impl Connection {
                 if let Some(transmit) = self.poll_transmit_mtu_probe(now, buf, path_id) {
                     #[cfg(test)]
                     {
-                        self.partial_stats.transmit_count += 1;
+                        self.partial_stats.transmit_tx += 1;
                     }
                     return Some(transmit);
                 }

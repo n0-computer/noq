@@ -2198,7 +2198,7 @@ fn tail_loss_respect_max_datagrams() {
 
     // Finally checking the number of sent udp datagrams match the number of iops
     let client_stats = pair.client_conn_mut(client_ch).stats();
-    assert_eq!(client_stats.transmit_count, client_stats.udp_tx.datagrams);
+    assert_eq!(client_stats.transmit_tx, client_stats.udp_tx.datagrams);
 }
 
 #[test]
@@ -3501,7 +3501,7 @@ fn stream_gso() {
 
     let s = pair.client_streams(client_ch).open(Dir::Uni).unwrap();
 
-    let initial_transmit_count = pair.client_conn_mut(client_ch).stats().transmit_count;
+    let initial_transmit_count = pair.client_conn_mut(client_ch).stats().transmit_tx;
 
     // Send 20KiB of stream data, which comfortably fits inside two `tests::util::MAX_DATAGRAMS`
     // datagram batches
@@ -3511,7 +3511,7 @@ fn stream_gso() {
     }
     pair.client_send(client_ch, s).finish().unwrap();
     pair.drive();
-    let final_transmit_count = pair.client_conn_mut(client_ch).stats().transmit_count;
+    let final_transmit_count = pair.client_conn_mut(client_ch).stats().transmit_tx;
     assert_eq!(final_transmit_count - initial_transmit_count, 2);
 }
 
@@ -3521,7 +3521,7 @@ fn datagram_gso() {
     let mut pair = Pair::default();
     let (client_ch, _) = pair.connect();
 
-    let initial_transmit_count = pair.client_conn_mut(client_ch).stats().transmit_count;
+    let initial_transmit_count = pair.client_conn_mut(client_ch).stats().transmit_tx;
     let initial_bytes = pair.client_conn_mut(client_ch).stats().udp_tx.bytes;
 
     // Send 10 datagrams above half the MTU, which fits inside a `tests::util::MAX_DATAGRAMS`
@@ -3535,7 +3535,7 @@ fn datagram_gso() {
             .unwrap();
     }
     pair.drive();
-    let final_transmit_count = pair.client_conn_mut(client_ch).stats().transmit_count;
+    let final_transmit_count = pair.client_conn_mut(client_ch).stats().transmit_tx;
     let final_bytes = pair.client_conn_mut(client_ch).stats().udp_tx.bytes;
     assert_eq!(final_transmit_count - initial_transmit_count, 1);
     // Expected overhead: flags + CID + PN + tag + frame type + frame length = 1 + 8 + 1 + 16 + 1 + 2 = 29
@@ -3551,7 +3551,7 @@ fn gso_truncation() {
     let mut pair = Pair::default();
     let (client_ch, server_ch) = pair.connect();
 
-    let initial_transmit_count = pair.client_conn_mut(client_ch).stats().transmit_count;
+    let initial_transmit_count = pair.client_conn_mut(client_ch).stats().transmit_tx;
 
     // Send three application datagrams such that each is large to be combined with another in a
     // single MTU, and the second datagram would require an unreasonably large amount of padding to
@@ -3564,7 +3564,7 @@ fn gso_truncation() {
             .unwrap();
     }
     pair.drive();
-    let final_transmit_count = pair.client_conn_mut(client_ch).stats().transmit_count;
+    let final_transmit_count = pair.client_conn_mut(client_ch).stats().transmit_tx;
     assert_eq!(final_transmit_count - initial_transmit_count, 2);
     for len in SIZES {
         assert_eq!(
@@ -3596,7 +3596,7 @@ fn pad_to_mtu() {
     let mut pair = Pair::default();
     let (client_ch, server_ch) = pair.connect_with(client_config);
 
-    let initial_transmit_count = pair.client_conn_mut(client_ch).stats().transmit_count;
+    let initial_transmit_count = pair.client_conn_mut(client_ch).stats().transmit_tx;
     pair.server.capture_inbound_packets = true;
 
     info!("sending");
@@ -3624,7 +3624,7 @@ fn pad_to_mtu() {
     pair.drive();
 
     // Check that both datagrams ended up in the same GSO batch
-    let final_transmit_count = pair.client_conn_mut(client_ch).stats().transmit_count;
+    let final_transmit_count = pair.client_conn_mut(client_ch).stats().transmit_tx;
     assert_eq!(final_transmit_count - initial_transmit_count, 1);
 
     assert_eq!(
