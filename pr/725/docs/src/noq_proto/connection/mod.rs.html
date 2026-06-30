@@ -1074,7 +1074,7 @@
 <a href=#1074 id=1074 data-nosnippet>1074</a>            {
 <a href=#1075 id=1075 data-nosnippet>1075</a>                <span class="attr">#[cfg(test)]
 <a href=#1076 id=1076 data-nosnippet>1076</a>                </span>{
-<a href=#1077 id=1077 data-nosnippet>1077</a>                    <span class="self">self</span>.partial_stats.transmit_tx += <span class="number">1</span>;
+<a href=#1077 id=1077 data-nosnippet>1077</a>                    <span class="self">self</span>.partial_stats.transmits_tx += <span class="number">1</span>;
 <a href=#1078 id=1078 data-nosnippet>1078</a>                }
 <a href=#1079 id=1079 data-nosnippet>1079</a>                <span class="kw">return </span><span class="prelude-val">Some</span>(transmit);
 <a href=#1080 id=1080 data-nosnippet>1080</a>            }
@@ -1090,7 +1090,7 @@
 <a href=#1090 id=1090 data-nosnippet>1090</a>            ) {
 <a href=#1091 id=1091 data-nosnippet>1091</a>                <span class="attr">#[cfg(test)]
 <a href=#1092 id=1092 data-nosnippet>1092</a>                </span>{
-<a href=#1093 id=1093 data-nosnippet>1093</a>                    <span class="self">self</span>.partial_stats.transmit_tx += <span class="number">1</span>;
+<a href=#1093 id=1093 data-nosnippet>1093</a>                    <span class="self">self</span>.partial_stats.transmits_tx += <span class="number">1</span>;
 <a href=#1094 id=1094 data-nosnippet>1094</a>                }
 <a href=#1095 id=1095 data-nosnippet>1095</a>                <span class="kw">return </span><span class="prelude-val">Some</span>(transmit);
 <a href=#1096 id=1096 data-nosnippet>1096</a>            }
@@ -1118,7 +1118,7 @@
 <a href=#1118 id=1118 data-nosnippet>1118</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(transmit) = <span class="self">self</span>.poll_transmit_mtu_probe(now, buf, path_id) {
 <a href=#1119 id=1119 data-nosnippet>1119</a>                    <span class="attr">#[cfg(test)]
 <a href=#1120 id=1120 data-nosnippet>1120</a>                    </span>{
-<a href=#1121 id=1121 data-nosnippet>1121</a>                        <span class="self">self</span>.partial_stats.transmit_tx += <span class="number">1</span>;
+<a href=#1121 id=1121 data-nosnippet>1121</a>                        <span class="self">self</span>.partial_stats.transmits_tx += <span class="number">1</span>;
 <a href=#1122 id=1122 data-nosnippet>1122</a>                    }
 <a href=#1123 id=1123 data-nosnippet>1123</a>                    <span class="kw">return </span><span class="prelude-val">Some</span>(transmit);
 <a href=#1124 id=1124 data-nosnippet>1124</a>                }
