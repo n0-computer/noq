@@ -21,6 +21,9 @@ pub struct UdpStats {
     /// The number of I/O operations executed.
     ///
     /// Can be less than `datagrams` when GSO, GRO, and/or batched system calls are in use.
+    #[deprecated(
+        note = "IO counting can't be meaningfully measured from this crate. See <https://github.com/n0-computer/noq/issues/727>"
+    )]
     pub ios: u64,
 }
 
@@ -28,7 +31,6 @@ impl UdpStats {
     pub(crate) fn on_sent(&mut self, datagrams: u64, bytes: usize) {
         self.datagrams += datagrams;
         self.bytes += bytes as u64;
-        self.ios += 1;
     }
 }
 
@@ -266,6 +268,10 @@ pub struct ConnectionStats {
     pub lost_packets: u64,
     /// The number of bytes lost on the connection.
     pub lost_bytes: u64,
+
+    /// Batches produced by this connetion.
+    #[cfg(test)]
+    pub(crate) gso_batches: u64,
 }
 
 impl std::ops::Add<PathStats> for ConnectionStats {
@@ -297,6 +303,8 @@ impl std::ops::Add<PathStats> for ConnectionStats {
             frame_rx: self.frame_rx + frame_rx,
             lost_packets: self.lost_packets + lost_packets,
             lost_bytes: self.lost_bytes + lost_bytes,
+            #[cfg(test)]
+            gso_batches: self.gso_batches,
         }
     }
 }
@@ -328,6 +336,8 @@ impl std::ops::AddAssign<PathStats> for ConnectionStats {
             frame_rx,
             lost_packets,
             lost_bytes,
+            #[cfg(test)]
+                gso_batches: _,
         } = self;
         *udp_tx += path_udp_tx;
         *udp_rx += path_udp_rx;
