@@ -1072,6 +1072,10 @@ impl Connection {
             if !connection_close_pending
                 && let Some(transmit) = self.poll_transmit_off_path(now, buf, path_id)
             {
+                #[cfg(test)]
+                {
+                    self.partial_stats.gso_batches += 1;
+                }
                 return Some(transmit);
             }
 
@@ -1084,6 +1088,10 @@ impl Connection {
                 &info,
                 connection_close_pending,
             ) {
+                #[cfg(test)]
+                {
+                    self.partial_stats.gso_batches += 1;
+                }
                 return Some(transmit);
             }
 
@@ -1108,6 +1116,10 @@ impl Connection {
             let mut next_path_id = self.paths.first_entry().map(|e| *e.key());
             while let Some(path_id) = next_path_id {
                 if let Some(transmit) = self.poll_transmit_mtu_probe(now, buf, path_id) {
+                    #[cfg(test)]
+                    {
+                        self.partial_stats.gso_batches += 1;
+                    }
                     return Some(transmit);
                 }
                 next_path_id = self.paths.keys().find(|i| **i > path_id).copied();

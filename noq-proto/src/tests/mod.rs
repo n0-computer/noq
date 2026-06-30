@@ -3501,7 +3501,7 @@ fn stream_gso() {
 
     let s = pair.client_streams(client_ch).open(Dir::Uni).unwrap();
 
-    let initial_ios = pair.client_conn_mut(client_ch).stats().gso_batches;
+    let initial_gso_batches = pair.client_conn_mut(client_ch).stats().gso_batches;
 
     // Send 20KiB of stream data, which comfortably fits inside two `tests::util::MAX_DATAGRAMS`
     // datagram batches
@@ -3511,8 +3511,8 @@ fn stream_gso() {
     }
     pair.client_send(client_ch, s).finish().unwrap();
     pair.drive();
-    let final_ios = pair.client_conn_mut(client_ch).stats().gso_batches;
-    assert_eq!(final_ios - initial_ios, 2);
+    let final_gso_batches = pair.client_conn_mut(client_ch).stats().gso_batches;
+    assert_eq!(final_gso_batches - initial_gso_batches, 2);
 }
 
 #[test]
@@ -3521,7 +3521,7 @@ fn datagram_gso() {
     let mut pair = Pair::default();
     let (client_ch, _) = pair.connect();
 
-    let initial_ios = pair.client_conn_mut(client_ch).stats().gso_batches;
+    let initial_gso_batches = pair.client_conn_mut(client_ch).stats().gso_batches;
     let initial_bytes = pair.client_conn_mut(client_ch).stats().udp_tx.bytes;
 
     // Send 10 datagrams above half the MTU, which fits inside a `tests::util::MAX_DATAGRAMS`
@@ -3535,9 +3535,9 @@ fn datagram_gso() {
             .unwrap();
     }
     pair.drive();
-    let final_ios = pair.client_conn_mut(client_ch).stats().gso_batches;
+    let final_gso_batches = pair.client_conn_mut(client_ch).stats().gso_batches;
     let final_bytes = pair.client_conn_mut(client_ch).stats().udp_tx.bytes;
-    assert_eq!(final_ios - initial_ios, 1);
+    assert_eq!(final_gso_batches - initial_gso_batches, 1);
     // Expected overhead: flags + CID + PN + tag + frame type + frame length = 1 + 8 + 1 + 16 + 1 + 2 = 29
     assert_eq!(
         final_bytes - initial_bytes,
@@ -3551,7 +3551,7 @@ fn gso_truncation() {
     let mut pair = Pair::default();
     let (client_ch, server_ch) = pair.connect();
 
-    let initial_ios = pair.client_conn_mut(client_ch).stats().gso_batches;
+    let initial_gso_batches = pair.client_conn_mut(client_ch).stats().gso_batches;
 
     // Send three application datagrams such that each is large to be combined with another in a
     // single MTU, and the second datagram would require an unreasonably large amount of padding to
@@ -3564,8 +3564,8 @@ fn gso_truncation() {
             .unwrap();
     }
     pair.drive();
-    let final_ios = pair.client_conn_mut(client_ch).stats().gso_batches;
-    assert_eq!(final_ios - initial_ios, 2);
+    let final_gso_batches = pair.client_conn_mut(client_ch).stats().gso_batches;
+    assert_eq!(final_gso_batches - initial_gso_batches, 2);
     for len in SIZES {
         assert_eq!(
             pair.server_datagrams(server_ch)
@@ -3596,7 +3596,7 @@ fn pad_to_mtu() {
     let mut pair = Pair::default();
     let (client_ch, server_ch) = pair.connect_with(client_config);
 
-    let initial_ios = pair.client_conn_mut(client_ch).stats().gso_batches;
+    let initial_gso_batches = pair.client_conn_mut(client_ch).stats().gso_batches;
     pair.server.capture_inbound_packets = true;
 
     info!("sending");
@@ -3624,8 +3624,8 @@ fn pad_to_mtu() {
     pair.drive();
 
     // Check that both datagrams ended up in the same GSO batch
-    let final_ios = pair.client_conn_mut(client_ch).stats().gso_batches;
-    assert_eq!(final_ios - initial_ios, 1);
+    let final_gso_batches = pair.client_conn_mut(client_ch).stats().gso_batches;
+    assert_eq!(final_gso_batches - initial_gso_batches, 1);
 
     assert_eq!(
         pair.server_datagrams(server_ch)
