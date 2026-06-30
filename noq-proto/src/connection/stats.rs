@@ -22,6 +22,7 @@ pub struct UdpStats {
     ///
     /// Can be less than `datagrams` when GSO, GRO, and/or batched system calls are in use.
     #[deprecated(
+        since = "1.0.1",
         note = "IO counting can't be meaningfully measured from this crate. See <https://github.com/n0-computer/noq/issues/727>"
     )]
     pub ios: u64,
@@ -269,7 +270,7 @@ pub struct ConnectionStats {
     /// The number of bytes lost on the connection.
     pub lost_bytes: u64,
 
-    /// Batches produced by this connetion.
+    /// Batches produced by this connection.
     #[cfg(test)]
     pub(crate) gso_batches: u64,
 }
