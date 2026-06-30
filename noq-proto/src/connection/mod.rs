@@ -3400,8 +3400,9 @@ impl Connection {
             );
         }
         // Before removing the path, we fetch the final path stats via `Self::path_stats`.
-        // This updates some values for the last time.
-        let path_stats = self.path_stats.discard(&path_id);
+        // This ensures snapshot values (like rtt) are properly updated.
+        let path_stats = self.path_stats(path_id).unwrap_or_default();
+        self.path_stats.discard(&path_id);
         self.partial_stats += path_stats;
         self.paths.remove(&path_id);
         self.spaces[SpaceId::Data].number_spaces.remove(&path_id);
@@ -6212,24 +6213,10 @@ impl Connection {
 
             // Always include an OBSERVED_ADDR frame with a PATH_CHALLENGE, regardless
             // of whether one has already been sent on this path.
-            if space_id == SpaceId::Data
-                && self
-                    .config
-                    .address_discovery_role
-                    .should_report(&self.peer_params.address_discovery_role)
-            {
-                let frame = frame::ObservedAddr::new(
-                    path.network_path.remote,
-                    self.next_observed_addr_seq_no,
-                );
-                if builder.frame_space_remaining() > frame.size() {
-                    builder.write_frame(frame, stats);
-
-                    self.next_observed_addr_seq_no =
-                        self.next_observed_addr_seq_no.saturating_add(1u8);
-                    path.pending.observed_address = false;
-                }
-            }
+            path.pending.observed_address = self
+                .config
+                .address_discovery_role
+                .should_report(&self.peer_params.address_discovery_role);
         }
 
         // PATH_RESPONSE (on-path)
@@ -6248,24 +6235,10 @@ impl Connection {
             // NOTE: this is technically not required but might be useful to ride the
             // request/response nature of path challenges to refresh an observation
             // Since PATH_RESPONSE is a probing frame, this is allowed by the spec.
-            if space_id == SpaceId::Data
-                && self
-                    .config
-                    .address_discovery_role
-                    .should_report(&self.peer_params.address_discovery_role)
-            {
-                let frame = frame::ObservedAddr::new(
-                    path.network_path.remote,
-                    self.next_observed_addr_seq_no,
-                );
-                if builder.frame_space_remaining() > frame.size() {
-                    builder.write_frame(frame, stats);
-
-                    self.next_observed_addr_seq_no =
-                        self.next_observed_addr_seq_no.saturating_add(1u8);
-                    path.pending.observed_address = false;
-                }
-            }
+            path.pending.observed_address = self
+                .config
+                .address_discovery_role
+                .should_report(&self.peer_params.address_discovery_role);
         }
 
         // ADD_ADDRESS
@@ -6340,7 +6313,6 @@ impl Connection {
 
         // OBSERVED_ADDR
         if !scheduling_info.is_abandoned
-            && scheduling_info.may_send_data
             && space_id == SpaceId::Data
             && path.pending.observed_address
         {
