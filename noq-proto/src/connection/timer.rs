@@ -60,32 +60,22 @@ pub(crate) enum PathTimer {
     PathValidationFailed = 2,
     /// When to resend an on-path path challenge deemed lost
     PathChallengeLost = 3,
-    /// When to abandon a path due to failed validation.
-    ///
-    /// There are two situations in which we give up a path from validation.
-    /// 1. When opening a path we validate it according to RFC9000 §8.2 as required by the
-    ///    multipath spec. This timer is armed to time-bound that validation.
-    /// 2. When validating an already opened multipath path for various reasons in which we
-    ///    expect the path to either work or not work and want to respond correspondingly in
-    ///    a timely manner.
-    AbandonFromValidation = 4,
     /// When to send a `PING` frame to keep the path alive
-    PathKeepAlive = 5,
+    PathKeepAlive = 4,
     /// When pacing will allow us to send a packet
-    Pacing = 6,
+    Pacing = 5,
     /// When to send an immediate ACK if there are unacked ack-eliciting packets of the peer
-    MaxAckDelay = 7,
+    MaxAckDelay = 6,
     /// When to clean up state for an abandoned path
-    PathDrained = 8,
+    PathDrained = 7,
 }
 
 impl PathTimer {
-    pub(super) const VALUES: [Self; 9] = [
+    pub(super) const VALUES: [Self; 8] = [
         Self::LossDetection,
         Self::PathIdle,
         Self::PathValidationFailed,
         Self::PathChallengeLost,
-        Self::AbandonFromValidation,
         Self::PathKeepAlive,
         Self::Pacing,
         Self::MaxAckDelay,
