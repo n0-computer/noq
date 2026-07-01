@@ -2298,6 +2298,11 @@ impl Connection {
             return true;
         }
 
+        if !self.paths.contains_key(&path_id) && self.abandoned_paths.contains(&path_id) {
+            trace!(%path_id, "discarding packet for discarded path");
+            return true;
+        }
+
         let peer_may_probe = self.peer_may_probe();
         let local_ip_may_migrate = self.local_ip_may_migrate();
 
