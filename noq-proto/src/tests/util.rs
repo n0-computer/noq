@@ -1690,7 +1690,7 @@ impl BasicRouting {
 ///
 /// This would allow the client to open up a path from `::1:2` to `::2:2`, but because a
 /// path is on the 4-tuple the server would respond from `::2:2` which is not allowed to
-/// send to `::1:2` and the resonse path would drop all datagrams.
+/// send to `::1:2` and the response path would drop all datagrams.
 #[derive(Debug, Clone)]
 pub(super) struct ManyToManyRouting {
     client_routes: Vec<(SocketAddr, usize)>,
