@@ -1678,9 +1678,19 @@ impl BasicRouting {
 /// will be dropped. If the peer sent the packet using a different source address than the
 /// allowed interface the datagram will be dropped.
 ///
-/// This implies an interface can only have one incoming link. It does allow creating links
-/// that are not functional in both directions however by using a dummy or mismatching
-/// interface for the allowed incoming source addresses.
+/// This implies an interface can only have one incoming link. It does allow creating
+/// interface pairs that do not have bi-directional connectivity. E.g.:
+///
+/// ```rust
+/// ManyToManyRouting {
+///     client_routes: [("[::1:1]:1", 1), ("[::1:2]:1", 1)],
+///     server_routes: [("[::2:1]:1", 1), ("[::2:2]:1", 1)],
+/// }
+/// ```
+///
+/// This would allow the client to open up a path from `::1:2` to `::2:2`, but because a
+/// path is on the 4-tuple the server would respond from `::2:2` which is not allowed to
+/// send to `::1:2` and the resonse path would drop all datagrams.
 #[derive(Debug, Clone)]
 pub(super) struct ManyToManyRouting {
     client_routes: Vec<(SocketAddr, usize)>,
