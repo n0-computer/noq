@@ -18,6 +18,7 @@ use rustls::{
     pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
     server::WebPkiClientVerifier,
 };
+use testresult::TestResult;
 use tracing::info;
 
 use crate::{
@@ -32,6 +33,7 @@ use crate::{
     coding::{Decodable, Encodable},
     crypto::rustls::{QuicServerConfig, configured_provider},
     frame::{self, Frame, FrameStruct},
+    tests::util::{BwLimitConfig, BwLimitedRouting},
     transport_parameters::TransportParameters,
 };
 
@@ -543,7 +545,7 @@ fn congestion() {
 fn high_latency_handshake() {
     let _guard = subscribe();
     let mut pair = Pair::default();
-    pair.latency = Duration::from_micros(200 * 1000);
+    pair.routes.as_basic_mut().latency = Duration::from_micros(200 * 1000);
     let (client_ch, server_ch) = pair.connect();
     assert_eq!(pair.client_conn_mut(client_ch).bytes_in_flight(), 0);
     assert_eq!(pair.server_conn_mut(server_ch).bytes_in_flight(), 0);
@@ -3079,7 +3081,7 @@ fn setup_ack_frequency_test(max_ack_delay: Duration) -> (Pair, ConnectionHandle,
         .initial_rtt(Duration::from_millis(10)); // To avoid delays from pacing
 
     let mut pair = Pair::default_with_deterministic_pns();
-    pair.latency = Duration::from_millis(10); // Need latency to avoid an RTT = 0
+    pair.routes.as_basic_mut().latency = Duration::from_millis(10); // Need latency to avoid an RTT = 0
     let (client_ch, server_ch) = pair.connect_with(client_config);
     pair.drive();
 
@@ -3163,7 +3165,7 @@ fn ack_frequency_ack_sent_after_max_ack_delay() {
     pair.drive_client();
 
     // Server: receive the ping, send no ACK
-    pair.time += pair.latency;
+    pair.time += pair.routes.as_basic().latency;
     let server_stats_before = pair.server_conn_mut(server_ch).stats();
     pair.drive_server();
     let server_stats_after = pair.server_conn_mut(server_ch).stats();
@@ -3376,7 +3378,7 @@ fn ack_frequency_update_max_delay() {
 
     // RTT jumps, client sends another ping
     info!("delayed ping");
-    pair.latency *= 10;
+    pair.routes.as_basic_mut().latency *= 10;
     pair.client_conn_mut(client_ch).ping();
     pair.drive();
 
@@ -3655,7 +3657,7 @@ fn large_datagram_with_acks() {
     for _ in 0..10 {
         pair.server_conn_mut(server_ch).ping();
         pair.drive_server();
-        pair.client.inbound.pop_back();
+        pair.client.inbound.pop_last();
         pair.server_conn_mut(server_ch).ping();
         pair.drive_server();
     }
@@ -4437,4 +4439,113 @@ fn initial_tail_loss_probe() {
     info!("continue connection establishment");
     pair.drive();
     pair.server.assert_accept();
+}
+
+#[test]
+fn throughput() -> TestResult {
+    const TOTAL_BYTES: usize = 1_000_000;
+    const BPS_LIMIT: u64 = 100_000;
+
+    let _guard = subscribe();
+    let mut pair = ConnPair::builder()
+        .with_routes(
+            BwLimitedRouting::new(
+                Pair::CLIENT_ADDR,
+                Pair::SERVER_ADDR,
+                crate::Instant::now(),
+                BwLimitConfig {
+                    bytes_per_second: BPS_LIMIT,
+                    buffer_size: 50 * 1500, // buffer that fits ~50 full packets
+                    latency: Duration::from_millis(3),
+                },
+            )
+            .into(),
+        )
+        .connect();
+
+    let mut bytes_to_send = TOTAL_BYTES;
+    let mut bytes_received = 0;
+
+    let start = pair.time;
+    let client_stream = pair.conn_mut(Client).streams().open(Dir::Bi).unwrap();
+    // send the first batch to ensure the other side created the stream
+    bytes_to_send -= pair
+        .conn_mut(Client)
+        .send_stream(client_stream)
+        .write(&ZEROES)?;
+    let server_stream = loop {
+        pair.step();
+        if let Some(stream) = pair.conn_mut(Server).streams().accept(Dir::Bi) {
+            break stream;
+        }
+    };
+    loop {
+        if bytes_to_send > 0 {
+            send_bytes(
+                pair.conn_mut(Client).send_stream(client_stream),
+                &mut bytes_to_send,
+            )?;
+            if bytes_to_send == 0 {
+                pair.conn_mut(Client).send_stream(client_stream).finish()?;
+            }
+        }
+        recv_bytes(
+            pair.conn_mut(Server).recv_stream(server_stream),
+            &mut bytes_received,
+        );
+        if !pair.step() {
+            break;
+        }
+    }
+
+    assert_eq!(bytes_to_send, 0);
+    assert_eq!(bytes_received, TOTAL_BYTES);
+
+    let time = pair.time.saturating_duration_since(start);
+    let bytes_per_second = TOTAL_BYTES as f64 / time.as_secs_f64();
+    info!(bytes_received, ?time, bytes_per_second);
+
+    let expected_bps = BPS_LIMIT as f64;
+    // Less than 2% deviation from the BPS limit
+    assert!(
+        (bytes_per_second - expected_bps).abs() / expected_bps < 0.05,
+        "deviated too far from expected throughput limit"
+    );
+
+    Ok(())
+}
+
+const ZEROES: [u8; 10_000] = [0u8; 10_000];
+
+fn send_bytes(mut send_stream: crate::SendStream<'_>, bytes_to_send: &mut usize) -> TestResult {
+    while *bytes_to_send > 10_000 {
+        match send_stream.write(&ZEROES) {
+            Ok(written) => {
+                *bytes_to_send -= written;
+            }
+            Err(crate::WriteError::Blocked) => return Ok(()),
+            Err(e) => panic!("{e:?}"),
+        }
+    }
+    while *bytes_to_send > 0 {
+        match send_stream.write(&vec![0u8; *bytes_to_send]) {
+            Ok(written) => {
+                *bytes_to_send -= written;
+            }
+            Err(crate::WriteError::Blocked) => return Ok(()),
+            Err(e) => panic!("{e:?}"),
+        }
+    }
+    Ok(())
+}
+
+fn recv_bytes(mut recv_stream: crate::RecvStream<'_>, bytes_received: &mut usize) {
+    let Ok(mut chunks) = recv_stream.read(true) else {
+        return;
+    };
+    while let Ok(Some(chunk)) = chunks.next(10_000) {
+        *bytes_received += chunk.bytes.len();
+    }
+    // The callee needs to immediately pair.step()
+    let _ = chunks.finalize();
 }
