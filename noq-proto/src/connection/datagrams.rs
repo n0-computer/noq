@@ -58,6 +58,75 @@ impl Datagrams<'_> {
         Ok(())
     }
 
+    /// Queue many unreliable, unordered datagrams for transmission in a single call.
+    ///
+    /// This is the batch analogue of [`send`](Self::send) with `drop = true`: it
+    /// amortizes the per-datagram bookkeeping (size checks, buffer accounting) and
+    /// lets a caller that already has a batch of `Bytes` push them under one logical
+    /// operation. Semantics match calling `send(data, true)` for each element in
+    /// order, with two differences:
+    ///
+    /// - the peer-support / disabled / `max_size` checks are performed once, up
+    ///   front, using the current MTU (so a batch is rejected atomically if the
+    ///   *first* datagram is too large, rather than partially sent);
+    /// - drop-oldest-to-make-space is applied once after enqueueing the whole batch
+    ///   rather than per element, which is cheaper and avoids re-entering the drop
+    ///   loop N times.
+    ///
+    /// Returns `Ok(n)` where `n` is the number of datagrams actually queued (may be
+    /// less than the iterator yielded if an individual datagram exceeded `max_size`
+    /// and was skipped). Returns `Err` iff datagrams are unsupported/disabled, or
+    /// if *all* yielded datagrams are larger than the current max size.
+    pub fn send_many<I: IntoIterator<Item = Bytes>>(
+        &mut self,
+        datagrams: I,
+    ) -> Result<usize, SendDatagramError> {
+        if self.conn.config.datagram_receive_buffer_size.is_none() {
+            return Err(SendDatagramError::Disabled);
+        }
+        let max = self
+            .max_size()
+            .ok_or(SendDatagramError::UnsupportedByPeer)?;
+
+        let mut queued = 0usize;
+        let mut saw_any = false;
+        for data in datagrams {
+            saw_any = true;
+            if data.len() > max {
+                // Skip oversized datagrams individually rather than failing the
+                // whole batch: a caller streaming a mix of sizes shouldn't lose the
+                // small ones because one big one was malformed.
+                trace!(len = data.len(), max, "skipping oversized datagram in batch");
+                continue;
+            }
+            self.conn.datagrams.outgoing_total += data.len();
+            self.conn.datagrams.outgoing.push_back(Datagram { data });
+            queued += 1;
+        }
+
+        if queued == 0 && saw_any {
+            // Iterator was non-empty but every element was too large.
+            return Err(SendDatagramError::TooLarge);
+        }
+
+        // Drop oldest until we're back under the send buffer budget. Applied once
+        // for the whole batch.
+        while self.conn.datagrams.outgoing_total
+            > self.conn.config.datagram_send_buffer_size
+        {
+            let prev = self
+                .conn
+                .datagrams
+                .outgoing
+                .pop_front()
+                .expect("datagrams.outgoing_total desynchronized");
+            trace!(len = prev.data.len(), "dropping outgoing datagram (batch)");
+            self.conn.datagrams.outgoing_total -= prev.data.len();
+        }
+
+        Ok(queued)
+    }
+
     /// Compute the maximum size of datagrams that may be passed to `send_datagram`
     ///
     /// Returns `None` if datagrams are unsupported by the peer or disabled locally.
@@ -89,6 +158,20 @@ impl Datagrams<'_> {
     /// Receive an unreliable, unordered datagram
     pub fn recv(&mut self) -> Option<Bytes> {
         self.conn.datagrams.recv()
+    }
+
+    /// Drain up to `out.capacity()` buffered datagrams into `out`, in arrival order.
+    ///
+    /// This is the batch analogue of [`recv`](Self::recv): a single call drains
+    /// many datagrams, so a caller holding the connection lock once can forward a
+    /// batch without re-acquiring it per datagram. Returns the number of datagrams
+    /// appended.
+    ///
+    /// `out` is not cleared; datagrams are `extend`ed onto whatever is present.
+    /// Pass an empty `Vec` (with a reserved capacity matching your batch budget)
+    /// for the common case.
+    pub fn recv_many(&mut self, out: &mut Vec<Bytes>) -> usize {
+        self.conn.datagrams.recv_many(out)
     }
 
     /// Bytes available in the outgoing datagram buffer
@@ -197,6 +280,24 @@ impl DatagramState {
         let x = self.incoming.pop_front()?.data;
         self.recv_buffered -= x.len();
         Some(x)
+    }
+
+    /// Drain all currently-buffered incoming datagrams into `out`, in arrival order.
+    ///
+    /// Cheaper than calling [`recv`](Self::recv) in a loop: one `VecDeque` drain
+    /// instead of N `pop_front`s, and the caller amortizes the connection mutex.
+    /// Returns the number of datagrams appended.
+    pub(super) fn recv_many(&mut self, out: &mut Vec<Bytes>) -> usize {
+        let n = self.incoming.len();
+        if n == 0 {
+            return 0;
+        }
+        out.reserve(n);
+        while let Some(d) = self.incoming.pop_front() {
+            self.recv_buffered -= d.data.len();
+            out.push(d.data);
+        }
+        n
     }
 }
 

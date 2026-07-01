@@ -2223,6 +2223,91 @@ fn datagram_send_recv() {
 }
 
 #[test]
+fn datagram_batch_send_recv_many() {
+    let _guard = subscribe();
+    let mut pair = Pair::default();
+    let (client_ch, server_ch) = pair.connect();
+    assert_matches!(pair.server_conn_mut(server_ch).poll(), None);
+    assert_matches!(pair.client_datagrams(client_ch).max_size(), Some(x) if x > 0);
+
+    // Send a batch of 5 datagrams in one call.
+    const N: usize = 5;
+    let batch: Vec<Bytes> = (0..N)
+        .map(|i| Bytes::from(format!("pkt-{i}")))
+        .collect();
+    let queued = pair
+        .client_datagrams(client_ch)
+        .send_many(batch)
+        .unwrap();
+    assert_eq!(queued, N);
+
+    pair.drive();
+    assert_matches!(
+        pair.server_conn_mut(server_ch).poll(),
+        Some(Event::DatagramReceived)
+    );
+
+    // Drain them all in one recv_many call.
+    let mut out = Vec::new();
+    let got = pair.server_datagrams(server_ch).recv_many(&mut out);
+    assert_eq!(got, N);
+    assert_eq!(out.len(), N);
+    for (i, d) in out.iter().enumerate() {
+        assert_eq!(d.as_ref(), format!("pkt-{i}").as_bytes());
+    }
+    // Buffer is now empty.
+    let mut more = Vec::new();
+    assert_eq!(pair.server_datagrams(server_ch).recv_many(&mut more), 0);
+    assert!(more.is_empty());
+}
+
+#[test]
+fn datagram_batch_send_skips_oversized() {
+    let _guard = subscribe();
+    let mut pair = Pair::default();
+    let (client_ch, server_ch) = pair.connect();
+    let max = pair.client_datagrams(client_ch).max_size().unwrap();
+
+    // A batch mixing one oversized datagram with two valid ones: the oversized
+    // one is skipped, the valid ones are queued.
+    let oversized = Bytes::from(vec![0u8; max + 1]);
+    let ok1 = Bytes::from_static(b"ok1");
+    let ok2 = Bytes::from_static(b"ok2");
+    let batch = vec![ok1.clone(), oversized, ok2.clone()];
+    let queued = pair
+        .client_datagrams(client_ch)
+        .send_many(batch)
+        .unwrap();
+    assert_eq!(queued, 2);
+
+    pair.drive();
+    assert_matches!(
+        pair.server_conn_mut(server_ch).poll(),
+        Some(Event::DatagramReceived)
+    );
+    let mut out = Vec::new();
+    pair.server_datagrams(server_ch).recv_many(&mut out);
+    assert_eq!(out.len(), 2);
+    assert_eq!(out[0], ok1);
+    assert_eq!(out[1], ok2);
+}
+
+#[test]
+fn datagram_batch_send_empty_is_ok() {
+    let _guard = subscribe();
+    let mut pair = Pair::default();
+    let (client_ch, server_ch) = pair.connect();
+    assert_matches!(pair.server_conn_mut(server_ch).poll(), None);
+
+    // An empty batch is a no-op, not an error.
+    let queued = pair
+        .client_datagrams(client_ch)
+        .send_many(std::iter::empty())
+        .unwrap();
+    assert_eq!(queued, 0);
+}
+
+#[test]
 fn datagram_recv_buffer_overflow() {
     let _guard = subscribe();
     const WINDOW: usize = 100;
