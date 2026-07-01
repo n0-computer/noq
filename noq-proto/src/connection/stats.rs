@@ -360,8 +360,12 @@ pub(super) struct PathStatsMap(FxHashMap<PathId, PathStats>);
 
 impl PathStatsMap {
     /// Returns the [`PathStats`] for the path.
-    pub(super) fn for_path(&mut self, path_id: PathId) -> &mut PathStats {
+    pub(super) fn get_mut(&mut self, path_id: PathId) -> &mut PathStats {
         self.0.entry(path_id).or_default()
+    }
+
+    pub(super) fn get(&self, path_id: PathId) -> Option<PathStats> {
+        self.0.get(&path_id).copied()
     }
 
     /// An iterator over all contained [`PathStats`].
