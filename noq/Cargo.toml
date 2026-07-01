@@ -67,7 +67,7 @@ derive_more = { workspace = true }
 futures-io = { workspace = true, optional = true }
 rustc-hash = { workspace = true }
 pin-project-lite = { workspace = true }
-proto = { package = "noq-proto", path = "../noq-proto", version = "1.0.1", default-features = false }
+proto = { package = "noq-proto", path = "../noq-proto", version = "1.1.0-alpha.0", default-features = false }
 rustls = { workspace = true, optional = true }
 smol = { workspace = true, optional = true }
 thiserror = { workspace = true }
