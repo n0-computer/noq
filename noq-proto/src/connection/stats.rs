@@ -351,7 +351,7 @@ impl std::ops::AddAssign<PathStats> for ConnectionStats {
 
 /// Helper to make [`PathStats`] infallibly available.
 ///
-/// This helper also helps with borrowing issues compared to having the [`Self::for_path`]
+/// This helper also helps with borrowing issues compared to having the [`Self::get_mut`]
 /// function as a helper directly on [`Connection`].
 ///
 /// [`Connection`]: super::Connection
