@@ -1286,7 +1286,7 @@ fn stale_coalesced_datagram_after_path_discard_is_ignored() {
             let Ok((first_decode, remaining)) = PartialDecode::new(
                 inbound.packet.clone(),
                 &cid_parser,
-                &DEFAULT_SUPPORTED_VERSIONS,
+                DEFAULT_SUPPORTED_VERSIONS,
                 pair.client.config().grease_quic_bit,
             ) else {
                 return None;
