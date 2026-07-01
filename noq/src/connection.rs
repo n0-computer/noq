@@ -1188,7 +1188,7 @@ impl Closed {
     /// Snapshot the current connection state into a [`Closed`] value.
     ///
     /// Must only be called once `state.error` has been set.
-    pub(crate) fn new(state: &mut State, reason: ConnectionError) -> Self {
+    pub(crate) fn new(state: &State, reason: ConnectionError) -> Self {
         let stats = state.inner.stats();
 
         let non_discarded_paths = state.inner.paths();
@@ -1810,7 +1810,7 @@ impl State {
     ///
     /// This gets the stats from [`proto::Connection`]. If that returns `None`
     /// it gets them from `Self::final_path_stats` instead.
-    pub(crate) fn path_stats(&mut self, path_id: PathId) -> Option<PathStats> {
+    pub(crate) fn path_stats(&self, path_id: PathId) -> Option<PathStats> {
         self.inner
             .path_stats(path_id)
             .or_else(|| self.final_path_stats.get(&path_id).copied())

@@ -2638,7 +2638,7 @@ impl Connection {
     }
 
     /// Returns connection statistics
-    pub fn stats(&mut self) -> ConnectionStats {
+    pub fn stats(&self) -> ConnectionStats {
         let mut stats = self.partial_stats.clone();
 
         for path_stats in self.path_stats.iter_stats() {
@@ -2652,8 +2652,8 @@ impl Connection {
         stats
     }
 
-    /// Returns path statistics
-    pub fn path_stats(&mut self, path_id: PathId) -> Option<PathStats> {
+    /// Returns path statistics.
+    pub fn path_stats(&self, path_id: PathId) -> Option<PathStats> {
         let path = self.paths.get(&path_id)?;
         let mut stats = self.path_stats.get(path_id).unwrap_or_default();
         stats.rtt = path.data.rtt.get();

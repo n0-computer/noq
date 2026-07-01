@@ -899,12 +899,12 @@ impl ConnPair {
         self.conn_mut(side).datagrams()
     }
 
-    pub(super) fn stats(&mut self, side: Side) -> ConnectionStats {
-        self.conn_mut(side).stats()
+    pub(super) fn stats(&self, side: Side) -> ConnectionStats {
+        self.conn(side).stats()
     }
 
-    pub(super) fn path_stats(&mut self, side: Side, path_id: PathId) -> Option<PathStats> {
-        self.conn_mut(side).path_stats(path_id)
+    pub(super) fn path_stats(&self, side: Side, path_id: PathId) -> Option<PathStats> {
+        self.conn(side).path_stats(path_id)
     }
 
     pub(super) fn ping(&mut self, side: Side) {
