@@ -1072,6 +1072,10 @@ impl Connection {
             if !connection_close_pending
                 && let Some(transmit) = self.poll_transmit_off_path(now, buf, path_id)
             {
+                #[cfg(test)]
+                {
+                    self.partial_stats.transmits_tx += 1;
+                }
                 return Some(transmit);
             }
 
@@ -1084,6 +1088,10 @@ impl Connection {
                 &info,
                 connection_close_pending,
             ) {
+                #[cfg(test)]
+                {
+                    self.partial_stats.transmits_tx += 1;
+                }
                 return Some(transmit);
             }
 
@@ -1108,6 +1116,10 @@ impl Connection {
             let mut next_path_id = self.paths.first_entry().map(|e| *e.key());
             while let Some(path_id) = next_path_id {
                 if let Some(transmit) = self.poll_transmit_mtu_probe(now, buf, path_id) {
+                    #[cfg(test)]
+                    {
+                        self.partial_stats.transmits_tx += 1;
+                    }
                     return Some(transmit);
                 }
                 next_path_id = self.paths.keys().find(|i| **i > path_id).copied();
@@ -3388,8 +3400,9 @@ impl Connection {
             );
         }
         // Before removing the path, we fetch the final path stats via `Self::path_stats`.
-        // This updates some values for the last time.
-        let path_stats = self.path_stats.discard(&path_id);
+        // This ensures snapshot values (like rtt) are properly updated.
+        let path_stats = self.path_stats(path_id).unwrap_or_default();
+        self.path_stats.discard(&path_id);
         self.partial_stats += path_stats;
         self.paths.remove(&path_id);
         self.spaces[SpaceId::Data].number_spaces.remove(&path_id);
@@ -4227,8 +4240,6 @@ impl Connection {
         stateless_reset: bool,
         mut qlog: QlogRecvPacket,
     ) {
-        self.path_stats.for_path(path_id).udp_rx.ios += 1;
-
         if let Some(ref packet) = packet {
             trace!(
                 "got {:?} packet ({} bytes) from {} using id {}",

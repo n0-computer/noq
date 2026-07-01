@@ -2237,6 +2237,51 @@ fn regression_delayed_path_cids_blocked() -> TestResult {
 }
 
 #[test]
+fn regression_discarded_path_stats_are_up_to_date() -> TestResult {
+    let _guard = subscribe();
+    let mut pair = ConnPair::builder().enable_multipath().connect();
+
+    let server_addr = pair.routes.public_server_addr();
+    let path_id = pair.open_path(
+        Client,
+        FourTuple::from_remote(server_addr),
+        PathStatus::Available,
+    )?;
+    pair.drive();
+
+    // Drain establishment events.
+    while pair.poll(Client).is_some() {}
+    while pair.poll(Server).is_some() {}
+
+    // Close the path and drive until both sides discard it.
+    pair.close_path(Client, path_id, 0u8.into())?;
+    pair.drive();
+
+    assert_matches!(
+        pair.poll(Client),
+        Some(Event::Path(PathEvent::Abandoned { id, .. })) if id == path_id
+    );
+    assert_matches!(
+        pair.poll(Server),
+        Some(Event::Path(PathEvent::Abandoned { id, .. })) if id == path_id
+    );
+
+    pair.drive();
+
+    let discarded_stats = assert_matches!(
+        pair.poll(Client),
+        Some(Event::Path(PathEvent::Discarded { id, path_stats })) if id == path_id
+        => *path_stats
+    );
+
+    // After a full handshake + MTU probing on the second path, these must be non-zero.
+    assert_ne!(discarded_stats.cwnd, 0);
+    assert_ne!(discarded_stats.current_mtu, 0);
+
+    Ok(())
+}
+
+#[test]
 fn throughput() -> TestResult {
     const TOTAL_BYTES: usize = 10_000_000;
     const BPS_LIMIT: u64 = 1_000_000;

@@ -2,7 +2,30 @@
 
 All notable changes to noq will be documented in this file.
 
-## [1.0.0](https://github.com/n0-computer/noq/compare/noq-v1.0.0-rc.1..1.0.0) - 2026-06-15
+## [1.0.1](https://github.com/n0-computer/noq/compare/noq-v1.0.0..1.0.1) - 2026-06-29
+
+### 🐛 Bug Fixes
+
+- *(migration)* Do not update local_ip for probing packets ([#715](https://github.com/n0-computer/noq/issues/715)) - ([af0fa65](https://github.com/n0-computer/noq/commit/af0fa6546859436e1866e69d0939d93a18ab71d0))
+- *(noq-udp)* Set Windows ioctls to suppress ICMP errors on recv ([#707](https://github.com/n0-computer/noq/issues/707)) - ([5a0d249](https://github.com/n0-computer/noq/commit/5a0d249f2724daddb8135d0dbce01b2bc7b0f93a))
+- *(proto)* Move pending path responses to PacketNumberSpace ([#708](https://github.com/n0-computer/noq/issues/708)) - ([b9b9fcf](https://github.com/n0-computer/noq/commit/b9b9fcf02dff1d15a7ddbda6d900c11d29817f05))
+- *(proto)* Ignore PATH_CIDS_BLOCKED when it refers to abandoned paths ([#710](https://github.com/n0-computer/noq/issues/710)) - ([8ca5916](https://github.com/n0-computer/noq/commit/8ca5916deccf276c796b545e4f2898d69a6494b1))
+- *(proto)* Use correct info in retransmission of `*_BLOCKED` frames ([#716](https://github.com/n0-computer/noq/issues/716)) - ([147892a](https://github.com/n0-computer/noq/commit/147892a1d117e8c4c26ceb4e0fe4df9027bd5d42))
+- *(proto)* Avoid `active_connections` underflow ([#717](https://github.com/n0-computer/noq/issues/717)) - ([32467e4](https://github.com/n0-computer/noq/commit/32467e456724dcbc0dd882e7133db48ec6f471c0))
+- *(proto)* ObservedAddr retransmission by creating a path-specific retransmittable data queue ([#705](https://github.com/n0-computer/noq/issues/705)) - ([c37f064](https://github.com/n0-computer/noq/commit/c37f064618c42185218f7b8d65f7b3516077fe66))
+- *(proto)* Improve queuing and sending of OBSERVED_ADDR frames ([#722](https://github.com/n0-computer/noq/issues/722)) - ([4b7a6e1](https://github.com/n0-computer/noq/commit/4b7a6e16744c4e83b75e7fb1b88c5c13b20c6cf7))
+- *(proto)* Ensure stats reported in `Discarded` events are updated ([#728](https://github.com/n0-computer/noq/issues/728)) - ([288323b](https://github.com/n0-computer/noq/commit/288323bbc8f18d7002db4ee056d3b4f3d8a1fbd8))
+
+### 🚜 Refactor
+
+- *(multipath)* Track OpenStatus on PacketNumberSpace ([#711](https://github.com/n0-computer/noq/issues/711)) - ([abdd49b](https://github.com/n0-computer/noq/commit/abdd49b480e0f5e310e4be1fb4f436d5f57244c1))
+- *(qnt)* Higher priority for add and remove address frames ([#709](https://github.com/n0-computer/noq/issues/709)) - ([611ecf3](https://github.com/n0-computer/noq/commit/611ecf32b9eae4a3c811e2507b70f4ab3ed47207))
+
+### ⚙️ Miscellaneous Tasks
+
+- *(ci)* Enable merge queue trigger for patchay tests - ([854eebd](https://github.com/n0-computer/noq/commit/854eebd809037eccd535793c1235ade3ffe3eabb))
+
+## [noq-v1.0.0](https://github.com/n0-computer/noq/compare/noq-v1.0.0-rc.1..noq-v1.0.0) - 2026-06-15
 
 ### ⛰️  Features
 
@@ -31,6 +54,10 @@ All notable changes to noq will be documented in this file.
 - *(proto)* Take `Transmit::src_ip` into account for `ManyToManyRouting` ([#673](https://github.com/n0-computer/noq/issues/673)) - ([616dc26](https://github.com/n0-computer/noq/commit/616dc264467e765dcec7a59a07c60043d3cd730c))
 - *(proto)* Add failing proptest seed from CI ([#609](https://github.com/n0-computer/noq/issues/609)) - ([cf013f8](https://github.com/n0-computer/noq/commit/cf013f8479f5db8acf7a8b0773a295a37214c2bf))
 - Add tests for easy-hard NAT combinations ([#685](https://github.com/n0-computer/noq/issues/685)) - ([cc8822e](https://github.com/n0-computer/noq/commit/cc8822e288bff3e3bb614d39801643f068f5a7bb))
+
+### ⚙️ Miscellaneous Tasks
+
+- Release - ([88b0546](https://github.com/n0-computer/noq/commit/88b05460ce23985aa34f271c03f1b6c9db29a909))
 
 ### Deps
 

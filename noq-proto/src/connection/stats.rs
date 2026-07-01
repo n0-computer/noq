@@ -20,7 +20,11 @@ pub struct UdpStats {
     pub bytes: u64,
     /// The number of I/O operations executed.
     ///
-    /// Can be less than `datagrams` when GSO, GRO, and/or batched system calls are in use.
+    /// This can't be measured from this crate and will always be 0
+    #[deprecated(
+        since = "1.0.2",
+        note = "IO counting can't be meaningfully measured from this crate. See <https://github.com/n0-computer/noq/issues/727>"
+    )]
     pub ios: u64,
 }
 
@@ -28,7 +32,6 @@ impl UdpStats {
     pub(crate) fn on_sent(&mut self, datagrams: u64, bytes: usize) {
         self.datagrams += datagrams;
         self.bytes += bytes as u64;
-        self.ios += 1;
     }
 }
 
@@ -266,6 +269,10 @@ pub struct ConnectionStats {
     pub lost_packets: u64,
     /// The number of bytes lost on the connection.
     pub lost_bytes: u64,
+
+    /// Number of [`super::Transmit`] produced by this connection.
+    #[cfg(test)]
+    pub(crate) transmits_tx: u64,
 }
 
 impl std::ops::Add<PathStats> for ConnectionStats {
@@ -297,6 +304,8 @@ impl std::ops::Add<PathStats> for ConnectionStats {
             frame_rx: self.frame_rx + frame_rx,
             lost_packets: self.lost_packets + lost_packets,
             lost_bytes: self.lost_bytes + lost_bytes,
+            #[cfg(test)]
+            transmits_tx: self.transmits_tx,
         }
     }
 }
@@ -328,6 +337,8 @@ impl std::ops::AddAssign<PathStats> for ConnectionStats {
             frame_rx,
             lost_packets,
             lost_bytes,
+            #[cfg(test)]
+                transmits_tx: _,
         } = self;
         *udp_tx += path_udp_tx;
         *udp_rx += path_udp_rx;
@@ -361,7 +372,7 @@ impl PathStatsMap {
     /// Removes the stats for a given path.
     ///
     /// Only do this once you are discarding the path.
-    pub(super) fn discard(&mut self, path_id: &PathId) -> PathStats {
-        self.0.remove(path_id).unwrap_or_default()
+    pub(super) fn discard(&mut self, path_id: &PathId) {
+        self.0.remove(path_id);
     }
 }
