@@ -652,8 +652,9 @@ fn no_establish_after_abandon() -> TestResult {
 
     // Now deliver the withheld PATH_RESPONSE. It validates the *already
     // abandoned* path.
-    for (recv_time, pkt) in withheld {
-        pair.server.inbound.push(recv_time, pkt);
+    let now = pair.time;
+    for (_, pkt) in withheld {
+        pair.server.inbound.push(now, pkt);
     }
     pair.advance_time();
     pair.drive_client();
@@ -2172,7 +2173,7 @@ fn regression_delayed_path_cids_blocked() -> TestResult {
     // This only works, because the server's outbound packet is constructed inefficiently:
     // The PATH_NEW_CONNECTION_ID frames should *actually* be coaleced together with the server's handshake response instead of
     // being put into a separate datagram. See also <https://github.com/n0-computer/noq/issues/66>
-    let (captured_server_cids_time, captured_server_cids) = pair.client.inbound.pop_last().unwrap();
+    let (_, captured_server_cids) = pair.client.inbound.pop_last().unwrap();
     pair.drive_client(); // Client receives confirmed handshake, but not PATH_NEW_CONNECTION_ID frames
     let server_ch = pair.server.assert_accept();
     pair.finish_connect(client_ch, server_ch);
@@ -2191,17 +2192,15 @@ fn regression_delayed_path_cids_blocked() -> TestResult {
     // We intentionally drop the client's PATH_CIDS_BLOCKED frame.
     pair.server.inbound.pop_last().unwrap();
     // After the client has sent the PATH_CIDS_BLOCKED frame, we give it all the server's CIDs.
-    pair.client
-        .inbound
-        .push(captured_server_cids_time, captured_server_cids);
+    let now = pair.time;
+    pair.client.inbound.push(now, captured_server_cids);
     pair.drive_client(); // Client processes the delayed server's PATH_NEW_CONNECTION_ID
 
     info!("Skipping forward 80ms");
     pair.time += Duration::from_millis(80); // Trigger the client's loss detection timer for the PATH_CIDS_BLOCKED frame
     pair.drive_client(); // Client generates another PATH_CIDS_BLOCKED
     // This is now an encrypted datagram containing a PATH_CIDS_BLOCKED path_id=1 next_seq=1 frame.
-    let (captured_client_cids_blocked_time, captured_client_cids_blocked) =
-        pair.server.inbound.pop_last().unwrap();
+    let (_, captured_client_cids_blocked) = pair.server.inbound.pop_last().unwrap();
 
     let path_id = pair.open_path(
         Client,
@@ -2213,10 +2212,8 @@ fn regression_delayed_path_cids_blocked() -> TestResult {
     pair.drive(); // Fully process closing the path on both ends, including discarding path state
 
     // Now we send the delayed PATH_CIDS_BLOCKED frame, and it'll trigger a protocol violation
-    pair.server.inbound.push(
-        captured_client_cids_blocked_time,
-        captured_client_cids_blocked,
-    );
+    let now = pair.time;
+    pair.server.inbound.push(now, captured_client_cids_blocked);
     pair.drive();
 
     // The server must not close the connection over the stale frame.
