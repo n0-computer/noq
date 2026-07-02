@@ -2508,6 +2508,26 @@ impl Connection {
                                 self.close_path_inner(now, path_id, PathAbandonReason::TimedOut)
                             {
                                 warn!(?err, "failed closing path");
+                                // The path could not be abandoned because it is the last
+                                // remaining open path. Re-arm the idle timer so the close is
+                                // retried once another path becomes available. Without this the
+                                // timed-out path would be stuck forever: it can never be
+                                // abandoned locally, and its keep-alive timer would keep the
+                                // connection active indefinitely.
+                                if matches!(err, ClosePathError::LastOpenPath)
+                                    && let Some(timeout) =
+                                        self.path_data(path_id).idle_timeout
+                                {
+                                    let dt = cmp::max(
+                                        timeout,
+                                        3 * self.pto(SpaceKind::Data, path_id),
+                                    );
+                                    self.timers.set(
+                                        Timer::PerPath(path_id, PathTimer::PathIdle),
+                                        now + dt,
+                                        self.qlog.with_time(now),
+                                    );
+                                }
                             }
                         }
 
