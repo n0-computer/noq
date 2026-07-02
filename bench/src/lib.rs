@@ -371,7 +371,10 @@ impl FromStr for Congestion {
             "cubic" => Ok(Self::Cubic),
             "newreno" | "new-reno" | "reno" => Ok(Self::NewReno),
             "bbr3" | "bbr" => Ok(Self::Bbr3),
-            _ => Err(anyhow::anyhow!("Unknown congestion {} (cubic|newreno|bbr3)", s)),
+            _ => Err(anyhow::anyhow!(
+                "Unknown congestion {} (cubic|newreno|bbr3)",
+                s
+            )),
         }
     }
 }

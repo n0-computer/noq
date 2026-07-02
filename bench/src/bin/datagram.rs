@@ -8,18 +8,14 @@
 //!   cargo run -p bench --bin datagram -- --packet-size 1200 --total-bytes 1G
 //!   cargo run -p bench --bin datagram -- --direction both --send-mode wait --congestion bbr3
 
-use std::{
-    net::SocketAddr,
-    sync::Arc,
-    time::Instant,
-};
+use std::{net::SocketAddr, sync::Arc, time::Instant};
 
 use anyhow::{Context, Result};
+use bench::stats::{DatagramCounters, DatagramReport};
 use bench::{
     DatagramOpt, Direction, SendMode, configure_tracing_subscriber, connect_client, rt,
     server_endpoint,
 };
-use bench::stats::{DatagramCounters, DatagramReport};
 use clap::Parser;
 use noq::{Connection, ConnectionError, Endpoint, VarInt};
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
@@ -71,15 +67,12 @@ fn main() {
     let mut aggregate = DatagramCounters::default();
     let mut first_id: Option<usize> = None;
     for (id, handle) in handles.into_iter().enumerate() {
-        match handle.join().expect("client thread") {
-            Ok(report) => {
-                report.print(&format!("client {id}"));
-                aggregate.merge(&report.counters);
-                if first_id.is_none() {
-                    first_id = Some(id);
-                }
+        if let Ok(report) = handle.join().expect("client thread") {
+            report.print(&format!("client {id}"));
+            aggregate.merge(&report.counters);
+            if first_id.is_none() {
+                first_id = Some(id);
             }
-            Err(_) => {}
         }
     }
 
@@ -109,7 +102,6 @@ async fn server(endpoint: Endpoint, opt: DatagramOpt) -> Result<()> {
     for _ in 0..opt.clients {
         let handshake = endpoint.accept().await.context("accept failed")?;
         let conn = handshake.await.context("handshake failed")?;
-        let opt = opt;
         tasks.push(tokio::spawn(async move {
             run_side(conn, opt, Role::Server).await
         }));
@@ -169,11 +161,10 @@ async fn run_side(conn: Connection, opt: DatagramOpt, role: Role) -> Result<Data
     if matches!(opt.direction, Direction::Both) {
         return run_both(conn, opt, role).await;
     }
-    let is_sender = match (role, opt.direction) {
-        (Role::Client, Direction::Send) => true,
-        (Role::Server, Direction::Recv) => true,
-        _ => false,
-    };
+    let is_sender = matches!(
+        (role, opt.direction),
+        (Role::Client, Direction::Send) | (Role::Server, Direction::Recv)
+    );
     if is_sender {
         // Half-duplex sender: flood then close. No receive.
         let conn = Arc::new(conn);
@@ -275,9 +266,9 @@ async fn send_loop(conn: &Connection, opt: DatagramOpt) -> Result<DatagramCounte
                 }
             },
             SendMode::Wait => {
-                conn.send_datagram_wait(pkt).await.map_err(|e| {
-                    anyhow::anyhow!("send_datagram_wait failed: {e}")
-                })?;
+                conn.send_datagram_wait(pkt)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("send_datagram_wait failed: {e}"))?;
             }
         }
         sent_bytes += pkt_size as u64;

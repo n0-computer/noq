@@ -111,7 +111,7 @@ pub struct DatagramCounters {
 
 impl DatagramCounters {
     /// Merge another set of counters (e.g. across multiple client connections).
-    pub fn merge(&mut self, other: &DatagramCounters) {
+    pub fn merge(&mut self, other: &Self) {
         self.sent_bytes += other.sent_bytes;
         self.sent_packets += other.sent_packets;
         self.recv_bytes += other.recv_bytes;

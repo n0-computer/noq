@@ -2232,13 +2232,8 @@ fn datagram_batch_send_recv_many() {
 
     // Send a batch of 5 datagrams in one call.
     const N: usize = 5;
-    let batch: Vec<Bytes> = (0..N)
-        .map(|i| Bytes::from(format!("pkt-{i}")))
-        .collect();
-    let queued = pair
-        .client_datagrams(client_ch)
-        .send_many(batch)
-        .unwrap();
+    let batch: Vec<Bytes> = (0..N).map(|i| Bytes::from(format!("pkt-{i}"))).collect();
+    let queued = pair.client_datagrams(client_ch).send_many(&batch).unwrap();
     assert_eq!(queued, N);
 
     pair.drive();
@@ -2248,48 +2243,120 @@ fn datagram_batch_send_recv_many() {
     );
 
     // Drain them all in one recv_many call.
-    let mut out = Vec::new();
+    let mut out = vec![Bytes::new(); N];
     let got = pair.server_datagrams(server_ch).recv_many(&mut out);
     assert_eq!(got, N);
-    assert_eq!(out.len(), N);
     for (i, d) in out.iter().enumerate() {
         assert_eq!(d.as_ref(), format!("pkt-{i}").as_bytes());
     }
     // Buffer is now empty.
-    let mut more = Vec::new();
+    let mut more = vec![Bytes::new(); 1];
     assert_eq!(pair.server_datagrams(server_ch).recv_many(&mut more), 0);
-    assert!(more.is_empty());
+    assert!(more[0].is_empty());
 }
 
+/// `send_many` stops at the first datagram that exceeds `max_size` and returns
+/// the number accepted from the front, so the caller can recover the unaccepted
+/// remainder by slicing its own collection with that count. This exercises that
+/// recovery contract: a batch mixing one oversized datagram with two valid ones
+/// is sent in two calls, with the caller dropping the offender and retrying the
+/// rest via `&batch[count..]`.
 #[test]
-fn datagram_batch_send_skips_oversized() {
+fn datagram_batch_send_stops_at_oversized() {
     let _guard = subscribe();
     let mut pair = Pair::default();
     let (client_ch, server_ch) = pair.connect();
     let max = pair.client_datagrams(client_ch).max_size().unwrap();
 
-    // A batch mixing one oversized datagram with two valid ones: the oversized
-    // one is skipped, the valid ones are queued.
     let oversized = Bytes::from(vec![0u8; max + 1]);
     let ok1 = Bytes::from_static(b"ok1");
     let ok2 = Bytes::from_static(b"ok2");
-    let batch = vec![ok1.clone(), oversized, ok2.clone()];
-    let queued = pair
+    let batch = [ok1.clone(), oversized.clone(), ok2.clone()];
+
+    // Accept ok1, then stop at the oversized datagram. The slice is borrowed,
+    // so the collection is retained for slicing the remainder below.
+    let queued = pair.client_datagrams(client_ch).send_many(&batch).unwrap();
+    assert_eq!(queued, 1);
+    // The offender is exactly the next element.
+    assert_eq!(batch[queued], oversized);
+
+    // Caller drops the oversized one and retries with the remainder.
+    let queued2 = pair
         .client_datagrams(client_ch)
-        .send_many(batch)
+        .send_many(&batch[queued + 1..])
         .unwrap();
-    assert_eq!(queued, 2);
+    assert_eq!(queued2, 1);
 
     pair.drive();
     assert_matches!(
         pair.server_conn_mut(server_ch).poll(),
         Some(Event::DatagramReceived)
     );
-    let mut out = Vec::new();
-    pair.server_datagrams(server_ch).recv_many(&mut out);
-    assert_eq!(out.len(), 2);
+    let mut out = vec![Bytes::new(); 2];
+    let got = pair.server_datagrams(server_ch).recv_many(&mut out);
+    assert_eq!(got, 2);
     assert_eq!(out[0], ok1);
     assert_eq!(out[1], ok2);
+}
+
+/// `send_many` applies drop-oldest backpressure per element, the same way
+/// `send(data, true)` does. This locks in two properties of that design:
+///
+/// - within a batch whose total exceeds the send buffer budget, the *newest*
+///   datagrams survive and the oldest are displaced (silent drop-oldest, as a
+///   single `send(data, true)` in a loop would do);
+/// - a datagram that is larger than the budget but still under `max_size` is
+///   enqueued once the queue has been emptied for it, matching `send(data, true)`.
+///   (The previous push-all-then-evict implementation would evict it in the
+///   post-hoc pass and silently drop it.)
+#[test]
+fn datagram_batch_send_drop_oldest_per_element() {
+    let _guard = subscribe();
+
+    const WINDOW: usize = 100;
+    let client_cfg = ClientConfig {
+        transport: Arc::new(TransportConfig {
+            datagram_send_buffer_size: WINDOW,
+            ..TransportConfig::default()
+        }),
+        ..client_config()
+    };
+    let mut pair = Pair::default();
+    let (client_ch, server_ch) = pair.connect_with(client_cfg);
+    assert_matches!(pair.server_conn_mut(server_ch).poll(), None);
+    let max = pair.client_datagrams(client_ch).max_size().unwrap();
+    assert!(max > WINDOW, "MTU must exceed the test budget");
+
+    // Three datagrams whose total exceeds `WINDOW`: A is displaced to make room
+    // for B, and B for C. Only the newest (C) survives on the server side.
+    let a = Bytes::from(vec![0xA0; WINDOW / 2 + 1]);
+    let b = Bytes::from(vec![0xB0; WINDOW / 2 + 1]);
+    let c = Bytes::from(vec![0xC0; WINDOW / 2 + 1]);
+    let queued = pair
+        .client_datagrams(client_ch)
+        .send_many(&[a.clone(), b.clone(), c.clone()])
+        .unwrap();
+    assert_eq!(queued, 3);
+    pair.drive();
+    assert_matches!(
+        pair.server_conn_mut(server_ch).poll(),
+        Some(Event::DatagramReceived)
+    );
+    assert_eq!(pair.server_datagrams(server_ch).recv().unwrap(), c);
+    assert_matches!(pair.server_datagrams(server_ch).recv(), None);
+
+    // A datagram larger than the budget (but under `max_size`) is still enqueued
+    // once the queue is emptied for it, just like `send(data, true)`.
+    let big = Bytes::from(vec![0xD0; WINDOW + 10]);
+    assert!(big.len() < max);
+    let queued = pair
+        .client_datagrams(client_ch)
+        .send_many(std::slice::from_ref(&big))
+        .unwrap();
+    assert_eq!(queued, 1);
+    pair.drive();
+    assert_eq!(pair.server_datagrams(server_ch).recv().unwrap(), big);
+    assert_matches!(pair.server_datagrams(server_ch).recv(), None);
 }
 
 #[test]
@@ -2300,10 +2367,7 @@ fn datagram_batch_send_empty_is_ok() {
     assert_matches!(pair.server_conn_mut(server_ch).poll(), None);
 
     // An empty batch is a no-op, not an error.
-    let queued = pair
-        .client_datagrams(client_ch)
-        .send_many(std::iter::empty())
-        .unwrap();
+    let queued = pair.client_datagrams(client_ch).send_many(&[]).unwrap();
     assert_eq!(queued, 0);
 }
 
