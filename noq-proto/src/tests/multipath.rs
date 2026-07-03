@@ -1,6 +1,6 @@
 //! Tests for multipath
 
-use std::net::SocketAddr;
+use std::net::{Ipv6Addr, SocketAddr};
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Duration;
@@ -2270,6 +2270,77 @@ fn regression_discarded_path_stats_are_up_to_date() -> TestResult {
     // After a full handshake + MTU probing on the second path, these must be non-zero.
     assert_ne!(discarded_stats.cwnd, 0);
     assert_ne!(discarded_stats.current_mtu, 0);
+
+    Ok(())
+}
+
+/// Regression test for issue #738.
+///
+/// When a client opens a new path with an explicit `local_ip` set in the
+/// [`FourTuple`], the path should validate successfully.  On real devices the
+/// `PATH_RESPONSE` was never matched to the outstanding `PATH_CHALLENGE` on
+/// such paths, causing them to be abandoned with
+/// [`PathAbandonReason::ValidationFailed`].
+///
+/// This test sets up a routing table where the client has a second interface
+/// that can reach the *same* server address as the initial connection, and
+/// opens a path on that second interface with an explicit `local_ip`.
+///
+/// See <https://github.com/n0-computer/noq/issues/738>
+#[test]
+fn open_path_with_explicit_local_ip() -> TestResult {
+    let _guard = subscribe();
+    let mut pair = ConnPair::builder().enable_multipath().connect();
+
+    // Set up routing with a second client interface that can reach the same
+    // server as the first interface.  Both server routes point to the same
+    // server address but link to different client interfaces, so the server
+    // can respond on either client interface.
+    let first_client_addr = pair.routes.as_basic().client_addr;
+    let server_addr = pair.routes.as_basic().server_addr;
+    let second_client_addr = {
+        let mut addr = first_client_addr;
+        if let SocketAddr::V6(v6) = &mut addr {
+            let s = v6.ip().segments();
+            v6.set_ip(Ipv6Addr::new(
+                s[0],
+                s[1],
+                s[2],
+                s[3],
+                s[4],
+                s[5],
+                s[6],
+                s[7] + 1,
+            ));
+        }
+        addr
+    };
+
+    pair.routes = ManyToManyRouting::from_routes(
+        vec![(first_client_addr, 0), (second_client_addr, 1)],
+        vec![(server_addr, 0), (server_addr, 1)],
+    )
+    .into();
+
+    // Open a path with an explicit local_ip, targeting the same server as
+    // the initial connection (path 0).
+    let new_path = FourTuple {
+        local_ip: Some(second_client_addr.ip()),
+        remote: server_addr,
+    };
+    let path_id = pair.open_path(Client, new_path, PathStatus::Available)?;
+    pair.drive();
+
+    // The path should be established on both sides, not abandoned with
+    // ValidationFailed.
+    assert_matches!(
+        pair.poll(Client),
+        Some(Event::Path(crate::PathEvent::Established { id })) if id == path_id
+    );
+    assert_matches!(
+        pair.poll(Server),
+        Some(Event::Path(crate::PathEvent::Established { id })) if id == path_id
+    );
 
     Ok(())
 }
