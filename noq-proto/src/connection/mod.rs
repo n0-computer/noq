@@ -1820,8 +1820,6 @@ impl Connection {
 
         builder.finish_and_track(now, self, path_id, PadDatagram::ToSize(probe_size));
 
-        self.path_stats.get_mut(path_id).sent_plpmtud_probes += 1;
-
         Some(self.build_transmit(path_id, transmit))
     }
 

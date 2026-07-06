@@ -232,6 +232,29 @@ pub struct PathStats {
     pub congestion_events: u64,
     /// Spurious congestion events on the connection.
     pub spurious_congestion_events: u64,
+    /// The number of QUIC packets sent on this path.
+    ///
+    /// The intention for this stat is to capture all the packets we send that are congestion controlled
+    /// and which we *expect to be transmitted*.
+    ///
+    /// This does *not* count off-path path challenges, off-path path responses, any path challenges
+    /// or responses sent for NAT traversal or MTUD probes, for which the above is not the case (we
+    /// expect these packets to not make it in many cases).
+    ///
+    /// This value should be meaningful relative to [`Self::lost_packets`], packets this way can get lost
+    /// and will be counted in lost packets.
+    ///
+    /// This counts individual QUIC packets, which may differ from [`UdpStats::datagrams`] when
+    /// packets are coalesced into a single UDP datagram.
+    pub sent_packets: u64,
+    /// The total number of QUIC bytes sent on this path (sum of all sent packet sizes).
+    ///
+    /// This counts only the QUIC packet payload bytes, not UDP/IP header bytes.
+    ///
+    /// This also does not count coalesced packets.
+    ///
+    /// Caveats similar to the ones in [`Self::sent_packets`] apply.
+    pub sent_bytes: u64,
     /// The number of packets lost on this path.
     pub lost_packets: u64,
     /// The number of bytes lost on this path.
@@ -265,6 +288,14 @@ pub struct ConnectionStats {
     pub frame_tx: FrameStats,
     /// Statistics about frames received on the connection.
     pub frame_rx: FrameStats,
+    /// The number of QUIC packets sent on the connection (sum across all paths).
+    ///
+    /// See also [`PathStats::sent_packets`].
+    pub sent_packets: u64,
+    /// The total number of QUIC bytes sent on the connection (sum across all paths).
+    ///
+    /// See also [`PathStats::sent_bytes`].
+    pub sent_bytes: u64,
     /// The number of packets lost on the connection.
     pub lost_packets: u64,
     /// The number of bytes lost on the connection.
@@ -290,6 +321,8 @@ impl std::ops::Add<PathStats> for ConnectionStats {
             cwnd: _,
             congestion_events: _,
             spurious_congestion_events: _,
+            sent_packets,
+            sent_bytes,
             lost_packets,
             lost_bytes,
             sent_plpmtud_probes: _,
@@ -302,6 +335,8 @@ impl std::ops::Add<PathStats> for ConnectionStats {
             udp_rx: self.udp_rx + udp_rx,
             frame_tx: self.frame_tx + frame_tx,
             frame_rx: self.frame_rx + frame_rx,
+            sent_packets: self.sent_packets + sent_packets,
+            sent_bytes: self.sent_bytes + sent_bytes,
             lost_packets: self.lost_packets + lost_packets,
             lost_bytes: self.lost_bytes + lost_bytes,
             #[cfg(test)]
@@ -323,6 +358,8 @@ impl std::ops::AddAssign<PathStats> for ConnectionStats {
             cwnd: _,
             congestion_events: _,
             spurious_congestion_events: _,
+            sent_packets: path_sent_packets,
+            sent_bytes: path_sent_bytes,
             lost_packets: path_lost_packets,
             lost_bytes: path_lost_bytes,
             sent_plpmtud_probes: _,
@@ -335,6 +372,8 @@ impl std::ops::AddAssign<PathStats> for ConnectionStats {
             udp_rx,
             frame_tx,
             frame_rx,
+            sent_packets,
+            sent_bytes,
             lost_packets,
             lost_bytes,
             #[cfg(test)]
@@ -344,6 +383,8 @@ impl std::ops::AddAssign<PathStats> for ConnectionStats {
         *udp_rx += path_udp_rx;
         *frame_tx += path_frame_tx;
         *frame_rx += path_frame_rx;
+        *sent_packets += path_sent_packets;
+        *sent_bytes += path_sent_bytes;
         *lost_packets += path_lost_packets;
         *lost_bytes += path_lost_bytes;
     }
