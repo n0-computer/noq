@@ -235,7 +235,7 @@ pub struct PathStats {
     /// The number of QUIC packets sent on this path.
     ///
     /// The intention for this stat is to capture all the packets we send that are congestion controlled
-    /// and which we *expect to be transmitted*.
+    /// and which we *expect to be received*.
     ///
     /// This does *not* count off-path path challenges, off-path path responses, any path challenges
     /// or responses sent for NAT traversal or MTUD probes, for which the above is not the case (we
@@ -250,8 +250,11 @@ pub struct PathStats {
     /// The total number of QUIC bytes sent on this path (sum of all sent packet sizes).
     ///
     /// This counts only the QUIC packet payload bytes, not UDP/IP header bytes.
+    /// It also doesn't count ACK-only packets in an effort to stay consistent with
+    /// [`Self::lost_bytes`], which doesn't count ACK-only packets either.
     ///
-    /// This also does not count coalesced packets.
+    /// If you're interested in the full amount of bytes transmitted, consider looking
+    /// at [`ConnectionStats::udp_tx`].
     ///
     /// Caveats similar to the ones in [`Self::sent_packets`] apply.
     pub sent_bytes: u64,
@@ -290,11 +293,13 @@ pub struct ConnectionStats {
     pub frame_rx: FrameStats,
     /// The number of QUIC packets sent on the connection (sum across all paths).
     ///
-    /// See also [`PathStats::sent_packets`].
+    /// This does not count bytes for some kinds of probing packets, for more information
+    /// see [`PathStats::sent_packets`].
     pub sent_packets: u64,
     /// The total number of QUIC bytes sent on the connection (sum across all paths).
     ///
-    /// See also [`PathStats::sent_bytes`].
+    /// This does not count bytes for some kinds of probing packets, for more information
+    /// see [`PathStats::sent_bytes`] and [`PathStats::sent_packets`].
     pub sent_bytes: u64,
     /// The number of packets lost on the connection.
     pub lost_packets: u64,
