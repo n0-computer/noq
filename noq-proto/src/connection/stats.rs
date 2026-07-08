@@ -238,8 +238,8 @@ pub struct PathStats {
     /// and which we *expect to be received*.
     ///
     /// This does *not* count off-path path challenges, off-path path responses, any path challenges
-    /// or responses sent for NAT traversal or MTUD probes, for which the above is not the case (we
-    /// expect these packets to not make it in many cases).
+    /// or responses sent for NAT traversal or MTUD probes (we expect these packets to not make it in
+    /// many cases).
     ///
     /// This value should be meaningful relative to [`Self::lost_packets`], packets this way can get lost
     /// and will be counted in lost packets.
