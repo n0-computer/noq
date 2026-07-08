@@ -3224,7 +3224,7 @@ impl Connection {
         }
 
         let Some((_, space)) = self.pto_time_and_space(now, path_id) else {
-            error!(%path_id, "PTO expired while unset");
+            debug!(%path_id, "PTO expired while unset");
             return;
         };
         trace!(
