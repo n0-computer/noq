@@ -4467,32 +4467,23 @@ fn throughput() -> TestResult {
     let mut bytes_received = 0;
 
     let start = pair.time;
-    let client_stream = pair.conn_mut(Client).streams().open(Dir::Bi).unwrap();
+    let client_stream = pair.streams(Client).open(Dir::Bi).unwrap();
     // send the first batch to ensure the other side created the stream
-    bytes_to_send -= pair
-        .conn_mut(Client)
-        .send_stream(client_stream)
-        .write(&ZEROES)?;
+    bytes_to_send -= pair.send_stream(Client, client_stream).write(&ZEROES)?;
     let server_stream = loop {
         pair.step();
-        if let Some(stream) = pair.conn_mut(Server).streams().accept(Dir::Bi) {
+        if let Some(stream) = pair.streams(Server).accept(Dir::Bi) {
             break stream;
         }
     };
     loop {
         if bytes_to_send > 0 {
-            send_bytes(
-                pair.conn_mut(Client).send_stream(client_stream),
-                &mut bytes_to_send,
-            )?;
+            send_bytes(pair.send_stream(Client, client_stream), &mut bytes_to_send)?;
             if bytes_to_send == 0 {
-                pair.conn_mut(Client).send_stream(client_stream).finish()?;
+                pair.send_stream(Client, client_stream).finish()?;
             }
         }
-        recv_bytes(
-            pair.conn_mut(Server).recv_stream(server_stream),
-            &mut bytes_received,
-        );
+        recv_bytes(pair.recv_stream(Server, server_stream), &mut bytes_received);
         if !pair.step() {
             break;
         }
