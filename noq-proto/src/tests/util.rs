@@ -643,7 +643,7 @@ impl ConnPairBuilder {
         let mut pair = Pair::new_from_endpoint(client, server);
 
         if let Some(latency) = latency {
-            pair.routes.as_basic_mut().latency = latency;
+            pair.routes.set_latency(latency);
         }
         if let Some(mtu) = mtu {
             pair.mtu = mtu;
@@ -1697,6 +1697,18 @@ impl Routing {
             _ => panic!("cast to BasicRouting failed, a different routing table is set"),
         }
     }
+
+    /// Sets the one-way latency between the two endpoints.
+    pub(super) fn set_latency(&mut self, latency: Duration) {
+        match self {
+            Self::Basic(basic_routing) => basic_routing.set_latency(latency),
+            Self::SimpleFirewall(simple_firewall_routing) => {
+                simple_firewall_routing.set_latency(latency)
+            }
+            Self::ManyToMany(many_to_many_routing) => many_to_many_routing.set_latency(latency),
+            Self::BwLimited(bw_limited_routing) => bw_limited_routing.set_latency(latency),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -1740,6 +1752,10 @@ impl From<BasicRouting> for Routing {
 }
 
 impl BasicRouting {
+    pub(super) fn set_latency(&mut self, latency: Duration) {
+        self.latency = latency;
+    }
+
     fn public_server_addr(&self) -> SocketAddr {
         self.server_addr
     }
@@ -1996,6 +2012,10 @@ impl ManyToManyRouting {
         route.0 = modify_fn(route.0);
         Some(route.0)
     }
+
+    pub(super) fn set_latency(&mut self, latency: Duration) {
+        self.latency = latency;
+    }
 }
 
 /// A routing table with one open and one firewalled interface.
@@ -2077,6 +2097,10 @@ impl SimpleFirewallRouting {
             server_firewall_open: false,
             latency: Duration::ZERO,
         }
+    }
+
+    pub(super) fn set_latency(&mut self, latency: Duration) {
+        self.latency = latency;
     }
 
     fn public_server_addr(&self) -> SocketAddr {
@@ -2249,6 +2273,10 @@ impl BwLimitedRouting {
             limiter_server_to_client: Limiter::new(bytes_per_second, buffer_size, now),
             latency,
         }
+    }
+
+    pub(super) fn set_latency(&mut self, latency: Duration) {
+        self.latency = latency;
     }
 
     fn public_server_addr(&self) -> SocketAddr {

@@ -545,7 +545,7 @@ fn congestion() {
 fn high_latency_handshake() {
     let _guard = subscribe();
     let mut pair = Pair::default();
-    pair.routes.as_basic_mut().latency = Duration::from_micros(200 * 1000);
+    pair.routes.set_latency(Duration::from_micros(200 * 1000));
     let (client_ch, server_ch) = pair.connect();
     assert_eq!(pair.client_conn_mut(client_ch).bytes_in_flight(), 0);
     assert_eq!(pair.server_conn_mut(server_ch).bytes_in_flight(), 0);
@@ -3081,7 +3081,7 @@ fn setup_ack_frequency_test(max_ack_delay: Duration) -> (Pair, ConnectionHandle,
         .initial_rtt(Duration::from_millis(10)); // To avoid delays from pacing
 
     let mut pair = Pair::default_with_deterministic_pns();
-    pair.routes.as_basic_mut().latency = Duration::from_millis(10); // Need latency to avoid an RTT = 0
+    pair.routes.set_latency(Duration::from_millis(10)); // Need latency to avoid an RTT = 0
     let (client_ch, server_ch) = pair.connect_with(client_config);
     pair.drive();
 
