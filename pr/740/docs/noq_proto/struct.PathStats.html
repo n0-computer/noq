@@ -28,8 +28,8 @@
 <p>The intention for this stat is to capture all the packets we send that are congestion controlled
 and which we <em>expect to be received</em>.</p>
 <p>This does <em>not</em> count off-path path challenges, off-path path responses, any path challenges
-or responses sent for NAT traversal or MTUD probes, for which the above is not the case (we
-expect these packets to not make it in many cases).</p>
+or responses sent for NAT traversal or MTUD probes (we expect these packets to not make it in
+many cases).</p>
 <p>This value should be meaningful relative to <a href="struct.PathStats.html#structfield.lost_packets" title="field noq_proto::PathStats::lost_packets"><code>Self::lost_packets</code></a>, packets this way can get lost
 and will be counted in lost packets.</p>
 <p>This counts individual QUIC packets, which may differ from <a href="struct.UdpStats.html#structfield.datagrams" title="field noq_proto::UdpStats::datagrams"><code>UdpStats::datagrams</code></a> when
