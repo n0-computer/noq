@@ -1000,13 +1000,13 @@
 <a href=#1000 id=1000 data-nosnippet>1000</a>    }
 <a href=#1001 id=1001 data-nosnippet>1001</a>}
 <a href=#1002 id=1002 data-nosnippet>1002</a>
-<a href=#1003 id=1003 data-nosnippet>1003</a><span class="doccomment">/// Inner bitfield type.
+<a href=#1003 id=1003 data-nosnippet>1003</a><span class="doccomment">/// Inner bitfield type
 <a href=#1004 id=1004 data-nosnippet>1004</a>///
 <a href=#1005 id=1005 data-nosnippet>1005</a>/// Because QUIC never reuses packet numbers, this only needs to be large enough to deal with
 <a href=#1006 id=1006 data-nosnippet>1006</a>/// packets that are reordered but still delivered in a timely manner.
 <a href=#1007 id=1007 data-nosnippet>1007</a></span><span class="kw">type </span>Window = u128;
 <a href=#1008 id=1008 data-nosnippet>1008</a>
-<a href=#1009 id=1009 data-nosnippet>1009</a><span class="doccomment">/// Number of packets tracked by `Dedup`.
+<a href=#1009 id=1009 data-nosnippet>1009</a><span class="doccomment">/// Number of packets tracked by `Dedup`
 <a href=#1010 id=1010 data-nosnippet>1010</a></span><span class="kw">const </span>WINDOW_SIZE: u64 = <span class="number">1 </span>+ mem::size_of::&lt;Window&gt;() <span class="kw">as </span>u64 * <span class="number">8</span>;
 <a href=#1011 id=1011 data-nosnippet>1011</a><span class="doccomment">/// Indicates which data is available for sending
 <a href=#1012 id=1012 data-nosnippet>1012</a>///
