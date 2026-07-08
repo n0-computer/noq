@@ -4515,3 +4515,27 @@ fn initial_tail_loss_probe() {
     pair.drive();
     pair.server.assert_accept();
 }
+
+/// Snapshot test to prevent accidentally skipping code-paths related to `sent_packets` stats.
+#[test]
+fn sent_packets_stats_snapshot_test() {
+    let _guard = subscribe();
+    let mut pair = Pair::default();
+    let (client_ch, server_ch) = pair.connect();
+    pair.drive();
+
+    let client_stats = pair.client_conn_mut(client_ch).stats();
+    let server_stats = pair.server_conn_mut(server_ch).stats();
+    assert_eq!(client_stats.sent_packets, 9);
+    assert_eq!(server_stats.sent_packets, 6);
+
+    let s = pair.client_streams(client_ch).open(Dir::Uni).unwrap();
+    const MSG: &[u8] = b"Hello, World!";
+    pair.client_send(client_ch, s).write(MSG).unwrap();
+    pair.drive();
+
+    let client_stats2 = pair.client_conn_mut(client_ch).stats();
+    let server_stats2 = pair.server_conn_mut(server_ch).stats();
+    assert_eq!(client_stats2.sent_packets, 10);
+    assert_eq!(server_stats2.sent_packets, 7);
+}
