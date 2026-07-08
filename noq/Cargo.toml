@@ -1,6 +1,6 @@
 [package]
 name = "noq"
-version = "1.0.1"
+version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "General purpose QUIC transport protocol implementation"
@@ -73,7 +73,7 @@ smol = { workspace = true, optional = true }
 thiserror = { workspace = true }
 tracing =  { workspace = true }
 tokio = { workspace = true }
-udp = { package = "noq-udp", path = "../noq-udp", version = "1.0.1", default-features = false, features = ["tracing"] }
+udp = { package = "noq-udp", path = "../noq-udp", version = "1.1.0-alpha.0", default-features = false, features = ["tracing"] }
 
 # Fix minimal dependencies for indirect deps
 async-global-executor = { workspace = true, optional = true }
