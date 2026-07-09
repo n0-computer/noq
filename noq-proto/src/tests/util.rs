@@ -1196,6 +1196,10 @@ impl InboundQueue {
         self.push(last_t, first);
         self.push(first_t, last);
     }
+
+    pub(super) fn iter(&self) -> impl Iterator<Item = (&Instant, &Inbound)> {
+        self.inner.iter().map(|((t, _), v)| (t, v))
+    }
 }
 
 impl std::ops::Index<usize> for InboundQueue {
