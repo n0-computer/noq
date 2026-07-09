@@ -170,10 +170,11 @@ where
                 this.writable_fut
                     .set(Some((this.make_writable_fut_fn)(this.socket)));
             }
-            // We're forced to `unwrap` here because `Fut` may be `!Unpin`, which means we can't safely
-            // obtain an `&mut WritableFut` after storing it in `self.writable_fut` when `self` is already behind `Pin`,
-            // and if we didn't store it then we wouldn't be able to keep it alive between
-            // `poll_send` calls.
+            // We're forced to `unwrap` here because `Fut` may be `!Unpin`, which means we can't
+            // safely obtain an `&mut WritableFut` after storing it in
+            // `self.writable_fut` when `self` is already behind `Pin`, and if we didn't
+            // store it then we wouldn't be able to keep it alive between `poll_send`
+            // calls.
             let result =
                 std::task::ready!(this.writable_fut.as_mut().as_pin_mut().unwrap().poll(cx));
 
@@ -185,10 +186,10 @@ where
             result?;
 
             match this.socket.try_send(transmit) {
-                // We thought the socket was writable, but it wasn't, then retry so that either another
-                // `writable().await` call determines that the socket is indeed not writable and
-                // registers us for a wakeup, or the send succeeds if this really was just a
-                // transient failure.
+                // We thought the socket was writable, but it wasn't, then retry so that either
+                // another `writable().await` call determines that the socket is
+                // indeed not writable and registers us for a wakeup, or the send
+                // succeeds if this really was just a transient failure.
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => continue,
                 // In all other cases, either propagate the error or we're Ok
                 result => return Poll::Ready(result),

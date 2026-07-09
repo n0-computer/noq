@@ -99,8 +99,9 @@ impl UdpSocketState {
 
         #[cfg(any(target_os = "linux", target_os = "android"))]
         {
-            // Forbid IPv4 fragmentation. Set even for IPv6 to account for IPv6 mapped IPv4 addresses.
-            // Set `may_fragment` to `true` if this option is not supported on the platform.
+            // Forbid IPv4 fragmentation. Set even for IPv6 to account for IPv6 mapped IPv4
+            // addresses. Set `may_fragment` to `true` if this option is not supported
+            // on the platform.
             may_fragment |= !set_socket_option_supported(
                 &*io,
                 libc::IPPROTO_IP,
@@ -125,8 +126,8 @@ impl UdpSocketState {
                 // #define UDP_GRO_CNT_MAX 64
                 //
                 // NOTE: this MUST be set to UDP_GRO_CNT_MAX to ensure that the receive buffer size
-                // (get_max_udp_payload_size() * gro_segments()) is large enough to hold the largest GRO
-                // list the kernel might potentially produce. See
+                // (get_max_udp_payload_size() * gro_segments()) is large enough to hold the largest
+                // GRO list the kernel might potentially produce. See
                 // https://github.com/quinn-rs/quinn/pull/1354.
                 gro_segments = NonZeroUsize::new(64).expect("known");
             }
@@ -197,8 +198,8 @@ impl UdpSocketState {
         match send(self, socket.0, transmit) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => Err(e),
-            // - EMSGSIZE is expected for MTU probes. Future work might be able to avoid
-            //   these by automatically clamping the MTUD upper bound to the interface MTU.
+            // - EMSGSIZE is expected for MTU probes. Future work might be able to avoid these by
+            //   automatically clamping the MTUD upper bound to the interface MTU.
             Err(e) if e.raw_os_error() == Some(libc::EMSGSIZE) => Ok(()),
             Err(e) => {
                 log_sendmsg_error(&self.last_send_error, e, transmit);

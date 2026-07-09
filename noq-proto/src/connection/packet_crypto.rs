@@ -42,8 +42,8 @@ pub(super) struct PrevCrypto {
     /// The keys used for the previous key phase, temporarily retained to decrypt packets sent by
     /// the peer prior to its own key update.
     pub(super) crypto: KeyPair<Box<dyn PacketKey>>,
-    /// The incoming packet that ends the interval for which these keys are applicable, and the time
-    /// of its receipt.
+    /// The incoming packet that ends the interval for which these keys are applicable, and the
+    /// time of its receipt.
     ///
     /// Incoming packets should be decrypted using these keys iff this is `None` or their packet
     /// number is lower. `None` indicates that we have not yet received a packet using newer keys,
@@ -199,7 +199,8 @@ impl CryptoState {
         }
         // Packets that do not belong to known path ids are valid as long as they can be decrypted.
         // If we didn't have a path, that's for the purposes of this function equivalent to not
-        // having received packets on that path yet. So both of these cases are represented by `None`.
+        // having received packets on that path yet. So both of these cases are represented by
+        // `None`.
         let rx_packet_number = spaces[space]
             .path_space(path_id)
             .and_then(|s| s.largest_received_packet_number);
@@ -266,9 +267,9 @@ impl CryptoState {
 
         if crypto_update {
             // Validate incoming key update
-            // If `rx_packet` is `None`, then either the path is entirely new, or we haven't received
-            // any packets on this path yet. In that case, having the first packet be a crypto update
-            // is fine.
+            // If `rx_packet` is `None`, then either the path is entirely new, or we haven't
+            // received any packets on this path yet. In that case, having the first
+            // packet be a crypto update is fine.
             let invalid_packet_number =
                 rx_packet_number.is_some_and(|rx_packet| packet_number <= rx_packet);
             if invalid_packet_number || self.prev_crypto.as_ref().is_some_and(|x| x.update_unacked)

@@ -269,7 +269,8 @@ impl TestOp {
 impl StreamOp {
     fn run(self, pair: &mut Pair, state: &mut State) -> Option<()> {
         let conn = state.conn(pair)?;
-        // We generally ignore application-level errors. It's legal to call these APIs, so we do. We don't expect them to work all the time.
+        // We generally ignore application-level errors. It's legal to call these APIs, so we do. We
+        // don't expect them to work all the time.
         match self {
             Self::Open(kind) => state.send_streams.extend(conn.streams().open(kind)),
             Self::Send { stream, num_bytes } => {

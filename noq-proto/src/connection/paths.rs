@@ -140,13 +140,13 @@ pub(super) struct SentChallengeInfo {
 /// to a different 4-tuple, in a similar manner as an RFC9000 connection can use "path
 /// migration" to move to a different 4-tuple. There are thus two states we keep for paths:
 ///
-/// - [`PacketNumberSpace`]: The state for a single packet number space, i.e. [`PathId`],
-///   which remains in place across path migrations to different 4-tuples.
+/// - [`PacketNumberSpace`]: The state for a single packet number space, i.e. [`PathId`], which
+///   remains in place across path migrations to different 4-tuples.
 ///
 ///   This is stored in [`PacketSpace::number_spaces`] indexed on [`PathId`].
 ///
-/// - [`PathData`]: The state we keep for each unique 4-tuple within a space. Of note is
-///   that a single [`PathData`] can never belong to a different [`PacketNumberSpace`].
+/// - [`PathData`]: The state we keep for each unique 4-tuple within a space. Of note is that a
+///   single [`PathData`] can never belong to a different [`PacketNumberSpace`].
 ///
 ///   This is stored in [`Connection::paths`] indexed by the current [`PathId`] for which
 ///   space it exists. Either as the primary 4-tuple or as the previous 4-tuple just after a
@@ -172,14 +172,15 @@ pub(super) struct PathData {
     /// no outgoing application data.
     ///
     /// The RFC writes:
-    /// > When bytes in flight is smaller than the congestion window and sending is not pacing limited,
-    /// > the congestion window is underutilized. This can happen due to insufficient application data
-    /// > or flow control limits. When this occurs, the congestion window SHOULD NOT be increased in
-    /// > either slow start or congestion avoidance.
+    /// > When bytes in flight is smaller than the congestion window and sending is not pacing
+    /// > limited, the congestion window is underutilized. This can happen due to insufficient
+    /// > application data or flow control limits. When this occurs, the congestion window SHOULD
+    /// > NOT be increased in either slow start or congestion avoidance.
     ///
     /// (RFC9002, section 7.8)
     ///
-    /// I.e. when app_limited is true, the congestion controller doesn't increase the congestion window.
+    /// I.e. when app_limited is true, the congestion controller doesn't increase the congestion
+    /// window.
     pub(super) app_limited: bool,
 
     /// Whether to trigger sending another PATH_CHALLENGE in the next poll_transmit.
@@ -220,7 +221,8 @@ pub(super) struct PathData {
     pub(super) in_flight: InFlight,
     /// Queue of data that must be sent over this specific [`PathData::generation`] path.
     pub(super) pending: PathRetransmits,
-    /// Observed address frame with the largest sequence number received from the peer on this path.
+    /// Observed address frame with the largest sequence number received from the peer on this
+    /// path.
     pub(super) last_observed_addr_report: Option<ObservedAddr>,
     /// The QUIC-MULTIPATH path status
     pub(super) status: PathStatusState,
@@ -242,7 +244,6 @@ pub(super) struct PathData {
 
     //
     // Per-path idle & keep alive
-    //
     /// Idle timeout for the path
     ///
     /// If expired, the path will be abandoned.  This is different from the connection-wide
@@ -944,8 +945,8 @@ pub(super) struct InFlight {
     /// Number of packets in flight containing frames other than ACK and PADDING
     ///
     /// This can be 0 even when bytes is not 0 because PADDING frames cause a packet to be
-    /// considered "in flight" by congestion control. However, if this is nonzero, bytes will always
-    /// also be nonzero.
+    /// considered "in flight" by congestion control. However, if this is nonzero, bytes will
+    /// always also be nonzero.
     pub(super) ack_eliciting: u64,
 }
 
@@ -1135,7 +1136,8 @@ pub enum SetPathStatusError {
     /// Error indicating that a path has not been opened or has already been abandoned
     #[error("closed path")]
     ClosedPath,
-    /// Error indicating that this operation requires multipath to be negotiated whereas it hasn't been
+    /// Error indicating that this operation requires multipath to be negotiated whereas it hasn't
+    /// been
     #[error("multipath not negotiated")]
     MultipathNotNegotiated,
 }

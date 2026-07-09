@@ -616,9 +616,10 @@ impl TransportParameters {
 /// A reserved transport parameter.
 ///
 /// It has an identifier of the form 31 * N + 27 for the integer value of N.
-/// Such identifiers are reserved to exercise the requirement that unknown transport parameters be ignored.
-/// The reserved transport parameter has no semantics and can carry arbitrary values.
-/// It may be included in transport parameters sent to the peer, and should be ignored when received.
+/// Such identifiers are reserved to exercise the requirement that unknown transport parameters be
+/// ignored. The reserved transport parameter has no semantics and can carry arbitrary values.
+/// It may be included in transport parameters sent to the peer, and should be ignored when
+/// received.
 ///
 /// See spec: <https://www.rfc-editor.org/rfc/rfc9000.html#section-18.1>
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]

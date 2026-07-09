@@ -178,11 +178,11 @@ impl Path {
     pub fn stats(&self) -> PathStats {
         // The `expect` is safe:
         // - `Path` can only be created for non-closed paths.
-        // - `Path` and its clones or `WeakPathHandle`s all increment the connection state's `path_ref`
-        //   reference counter
+        // - `Path` and its clones or `WeakPathHandle`s all increment the connection state's
+        //   `path_ref` reference counter
         // - As long as a path is not abandoned, its stats are available from `proto::Connection`
-        // - If a path is abandoned, the `crate::Connection` stores the final stats as long as
-        //   the path's refcount is not 0
+        // - If a path is abandoned, the `crate::Connection` stores the final stats as long as the
+        //   path's refcount is not 0
         // - Therefore, we always get stats here.
         self.conn
             .lock_without_waking("Path::stats")
@@ -298,10 +298,11 @@ impl PartialEq for Path {
 
 /// Weak handle for a [`Path`] that does not keep the connection alive.
 ///
-/// As long as a [`WeakPathHandle`] for a path exists, that path's final stats will not be dropped even if
-/// the path was abandoned.
+/// As long as a [`WeakPathHandle`] for a path exists, that path's final stats will not be dropped
+/// even if the path was abandoned.
 ///
-/// The [`WeakPathHandle`] can be upgraded to a [`Path`] as long as its [`Connection`] has not been dropped.
+/// The [`WeakPathHandle`] can be upgraded to a [`Path`] as long as its [`Connection`] has not been
+/// dropped.
 ///
 /// [`Connection`]: crate::Connection
 #[derive(Debug, Clone)]

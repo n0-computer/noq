@@ -29,7 +29,8 @@ pub trait QlogFactory: Send + Sync + 'static {
 /// This struct is returned from [`QlogFactory::for_connection`] if qlog logging should
 /// be enabled for a connection. It allows to set metadata for the qlog trace.
 ///
-/// The trace will be written to the provided writer in the [`JSON-SEQ format`] defined in the qlog spec.
+/// The trace will be written to the provided writer in the [`JSON-SEQ format`] defined in the qlog
+/// spec.
 ///
 /// [`JSON-SEQ format`](https://www.ietf.org/archive/id/draft-ietf-quic-qlog-main-schema-13.html#section-5)
 #[cfg(feature = "qlog")]

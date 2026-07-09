@@ -163,7 +163,8 @@ impl RecvStream {
     /// [`RecvStream::read_chunk`]; use [`bytes_read()`](Self::bytes_read) to query that offset
     /// explicitly.
     ///
-    /// For unordered reads, convert the stream into an unordered stream using [`Self::into_unordered`].
+    /// For unordered reads, convert the stream into an unordered stream using
+    /// [`Self::into_unordered`].
     ///
     /// Slightly more efficient than [`RecvStream::read`] due to not copying. Chunk boundaries do
     /// not correspond to peer writes, and hence cannot be used as framing.

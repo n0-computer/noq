@@ -21,7 +21,8 @@ pub(super) struct CidState {
     issued: u64,
     /// Sequence numbers of local connection IDs not yet retired by the peer
     active_seq: FxHashSet<u64>,
-    /// Sequence number the peer has already retired all CIDs below at our request via `retire_prior_to`
+    /// Sequence number the peer has already retired all CIDs below at our request via
+    /// `retire_prior_to`
     prev_retire_seq: u64,
     /// Sequence number to set in retire_prior_to field in NEW_CONNECTION_ID frame
     retire_seq: u64,
@@ -95,7 +96,8 @@ impl CidState {
 
     /// Update local CID state when previously issued CID is retired
     ///
-    /// Return whether a new CID needs to be pushed that notifies remote peer to respond `RETIRE_CONNECTION_ID`
+    /// Return whether a new CID needs to be pushed that notifies remote peer to respond
+    /// `RETIRE_CONNECTION_ID`
     pub(crate) fn on_cid_timeout(&mut self) -> bool {
         // Whether the peer hasn't retired all the CIDs we asked it to yet
         let unretired_ids_found =
@@ -129,8 +131,9 @@ impl CidState {
         // NEW_CONNECTION_ID frame also requires the retirement of any excess,
         // by including a sufficiently large value in the Retire Prior To field.
         //
-        // If yes (return true), a new CID must be pushed with updated `retire_prior_to` field to remote peer.
-        // If no (return false), it means CIDs that reach the end of lifetime have been retired already. Do not push a new CID in order to avoid violating above RFC.
+        // If yes (return true), a new CID must be pushed with updated `retire_prior_to` field to
+        // remote peer. If no (return false), it means CIDs that reach the end of lifetime
+        // have been retired already. Do not push a new CID in order to avoid violating above RFC.
         (current_retire_prior_to..self.retire_seq).any(|seq| self.active_seq.contains(&seq))
     }
 
@@ -180,7 +183,8 @@ impl CidState {
         // Peer B first send a NEW_CONNECTION_ID with cid 3 and retire_prior_to set to 1.
         // Peer A processes this NEW_CONNECTION_ID frame; update remote cid to 1,2,3
         // and meanwhile send a RETIRE_CONNECTION_ID to retire cid 0 to peer B.
-        // If peer B doesn't check the cid limit here and send a new cid again, peer A will then face CONNECTION_ID_LIMIT_ERROR
+        // If peer B doesn't check the cid limit here and send a new cid again, peer A will then
+        // face CONNECTION_ID_LIMIT_ERROR
         Ok(limit > self.active_seq.len() as u64)
     }
 

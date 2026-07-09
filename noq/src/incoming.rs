@@ -102,7 +102,8 @@ impl Incoming {
     /// Decrypt the Initial packet payload
     ///
     /// This clones and decrypts the packet payload (~1200 bytes).
-    /// Can be used to extract information from the TLS ClientHello without completing the handshake.
+    /// Can be used to extract information from the TLS ClientHello without completing the
+    /// handshake.
     pub fn decrypt(&self) -> Option<DecryptedInitial> {
         self.0.as_ref()?.inner.decrypt()
     }

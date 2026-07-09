@@ -469,8 +469,8 @@ fn open_path_validation_fails_client_side() -> TestResult {
     // Sever the connection and run it to idle.
     // This makes sure that
     // - path validation can't succeed because path responses don't make it through and
-    // - the server needs to decide to close the path on its own, because path abandons
-    //   don't make it through.
+    // - the server needs to decide to close the path on its own, because path abandons don't make
+    //   it through.
     while pair.blackhole_step(true, true) {}
 
     assert_matches!(
@@ -2047,7 +2047,8 @@ fn on_path_challenge_lost_backoff() {
         expected_path_challenges_received: u64,
     ) {
         for _ in 0..10 {
-            // attempt to drive the server until it receives the PATH_CHALLENGE and sends a PATH_RESPONSE
+            // attempt to drive the server until it receives the PATH_CHALLENGE and sends a
+            // PATH_RESPONSE
             pair.time = pair
                 .server
                 .next_wakeup()
@@ -2150,8 +2151,8 @@ fn paths_blocked_retransmission() -> TestResult {
 
 /// This test used to generate a PROTOCOL_VIOLATION error from just packet loss and delayed packets.
 ///
-/// The problem was receiving a PATH_CIDS_BLOCKED frame with path_id=1 and next_seq=1 when the server
-/// side had already abandoned and discarded path 1.
+/// The problem was receiving a PATH_CIDS_BLOCKED frame with path_id=1 and next_seq=1 when the
+/// server side had already abandoned and discarded path 1.
 /// In that case, we assumed the other side would violate the protocol, whereas in reality it's just
 /// a (very) delayed packet.
 ///
@@ -2168,16 +2169,17 @@ fn regression_delayed_path_cids_blocked() -> TestResult {
     pair.drive_server(); // Server receives Initial, sends Handshake
     pair.drive_client(); // Client receives Handshake, sends handshake confirmed
     pair.drive_server(); // Server receives handshake confirmed, sends PATH_NEW_CONNECTION_ID and confirms handshake itself
-    // Capture the server's PATH_NEW_CONNECTION_ID frames so the client generates a PATH_CIDS_BLOCKED frame on the next open_path call.
-    // This only works, because the server's outbound packet is constructed inefficiently:
-    // The PATH_NEW_CONNECTION_ID frames should *actually* be coaleced together with the server's handshake response instead of
-    // being put into a separate datagram. See also <https://github.com/n0-computer/noq/issues/66>
+    // Capture the server's PATH_NEW_CONNECTION_ID frames so the client generates a
+    // PATH_CIDS_BLOCKED frame on the next open_path call. This only works, because the server's
+    // outbound packet is constructed inefficiently: The PATH_NEW_CONNECTION_ID frames should
+    // *actually* be coaleced together with the server's handshake response instead of being put into a separate datagram. See also <https://github.com/n0-computer/noq/issues/66>
     let (_, captured_server_cids) = pair.client.inbound.pop_last().unwrap();
     pair.drive_client(); // Client receives confirmed handshake, but not PATH_NEW_CONNECTION_ID frames
     let server_ch = pair.server.assert_accept();
     pair.finish_connect(client_ch, server_ch);
 
-    // Attempting to open a path on the client side will fail, because we're missing the CIDs for path 1 and more
+    // Attempting to open a path on the client side will fail, because we're missing the CIDs for
+    // path 1 and more
     let mut pair = ConnPair::new(pair, client_ch, server_ch);
     let server_addr = pair.routes.public_server_addr();
     pair.open_path(

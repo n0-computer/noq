@@ -63,11 +63,11 @@ pub(crate) enum PathTimer {
     /// When to abandon a path due to failed validation.
     ///
     /// There are two situations in which we give up a path from validation.
-    /// 1. When opening a path we validate it according to RFC9000 §8.2 as required by the
-    ///    multipath spec. This timer is armed to time-bound that validation.
-    /// 2. When validating an already opened multipath path for various reasons in which we
-    ///    expect the path to either work or not work and want to respond correspondingly in
-    ///    a timely manner.
+    /// 1. When opening a path we validate it according to RFC9000 §8.2 as required by the multipath
+    ///    spec. This timer is armed to time-bound that validation.
+    /// 2. When validating an already opened multipath path for various reasons in which we expect
+    ///    the path to either work or not work and want to respond correspondingly in a timely
+    ///    manner.
     AbandonFromValidation = 4,
     /// When to send a `PING` frame to keep the path alive
     PathKeepAlive = 5,

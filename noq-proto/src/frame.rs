@@ -528,8 +528,8 @@ impl Frame {
     pub(crate) fn is_1rtt(&self) -> bool {
         // See also https://www.ietf.org/archive/id/draft-ietf-quic-multipath-17.html#section-4-1:
         // > All frames defined in this document MUST only be sent in 1-RTT packets.
-        // > If an endpoint receives a multipath-specific frame in a different packet type, it MUST close the
-        // > connection with an error of type PROTOCOL_VIOLATION.
+        // > If an endpoint receives a multipath-specific frame in a different packet type, it MUST
+        // > close the connection with an error of type PROTOCOL_VIOLATION.
 
         self.is_multipath_frame() || self.is_qad_frame()
     }

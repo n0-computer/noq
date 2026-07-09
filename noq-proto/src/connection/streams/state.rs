@@ -79,10 +79,11 @@ pub struct StreamsState {
     pub(super) max_remote: [u64; 2],
     /// Value of `max_remote` most recently transmitted to the peer in a `MAX_STREAMS` frame
     sent_max_remote: [u64; 2],
-    /// Number of streams that we've given the peer permission to open and which aren't fully closed
+    /// Number of streams that we've given the peer permission to open and which aren't fully
+    /// closed
     pub(super) allocated_remote_count: [u64; 2],
-    /// Size of the desired stream flow control window. May be smaller than `allocated_remote_count`
-    /// due to `set_max_concurrent` calls.
+    /// Size of the desired stream flow control window. May be smaller than
+    /// `allocated_remote_count` due to `set_max_concurrent` calls.
     max_concurrent_remote_count: [u64; 2],
     /// Whether `max_concurrent_remote_count` has ever changed
     flow_control_adjusted: bool,
@@ -556,10 +557,11 @@ impl StreamsState {
             }
 
             if stream.is_pending() {
-                // If the stream still has pending data, reinsert it, possibly with an updated priority value
-                // Fairness with other streams is achieved by implementing round-robin scheduling,
-                // so that the other streams will have a chance to write data
-                // before we touch this stream again.
+                // If the stream still has pending data, reinsert it, possibly with an updated
+                // priority value Fairness with other streams is achieved by
+                // implementing round-robin scheduling, so that the other streams
+                // will have a chance to write data before we touch this stream
+                // again.
                 if fair {
                     self.pending.push_pending(id, stream.priority);
                 } else {
@@ -739,8 +741,8 @@ impl StreamsState {
                 debug_assert!(stream.connection_blocked);
                 stream.connection_blocked = false;
 
-                // If it's no longer sensible to write to a stream (even to detect an error) then don't
-                // report it.
+                // If it's no longer sensible to write to a stream (even to detect an error) then
+                // don't report it.
                 if stream.is_writable() && stream.max_data > stream.offset() {
                     return Some(StreamEvent::Writable { id });
                 }
@@ -842,8 +844,8 @@ impl StreamsState {
 
     /// Allocate any new remote streams when a packet arrives for a stream id.
     /// Any streams above `next_remote` are considered in the default state, avoiding allocations.
-    /// Once we receive a packet for a new remote stream, we advance `next_remote` and allocate actual state.
-    /// If there's a gap, we insert `None` placeholders for the missing streams.
+    /// Once we receive a packet for a new remote stream, we advance `next_remote` and allocate
+    /// actual state. If there's a gap, we insert `None` placeholders for the missing streams.
     /// Returns `true` if `id` was a newly allocated remote stream.
     fn ensure_remote(&mut self, id: StreamId) -> bool {
         let dir = id.dir();
@@ -2039,7 +2041,8 @@ mod tests {
         assert_eq!(server.receive_window_shrink_debt, shrink_diff);
         let prev_local_max_data = server.local_max_data;
 
-        // credit twice, local_max_data does not change as it is absorbed by receive_window_shrink_debt
+        // credit twice, local_max_data does not change as it is absorbed by
+        // receive_window_shrink_debt
         let credits = 1024u64;
         for _ in 0..2 {
             let expected_receive_window_shrink_debt = server.receive_window_shrink_debt - credits;

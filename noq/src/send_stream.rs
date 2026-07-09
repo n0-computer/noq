@@ -27,8 +27,8 @@ use crate::{
 /// A `write` method is said to be *cancel-safe* when dropping its future before the future becomes
 /// ready will always result in no data being written to the stream. This is true of methods which
 /// succeed immediately when any progress is made, and is not true of methods which might need to
-/// perform multiple writes internally before succeeding. Each `write` method documents whether it is
-/// cancel-safe.
+/// perform multiple writes internally before succeeding. Each `write` method documents whether it
+/// is cancel-safe.
 ///
 /// [`reset()`]: SendStream::reset
 /// [`finish()`]: SendStream::finish
@@ -90,8 +90,8 @@ impl SendStream {
     /// On success, this method both mutates `bufs` and returns the number of bytes written:
     ///
     /// - `bufs` is advanced past chunks that were fully written.
-    /// - If a [`Bytes`] chunk was partially written, the chunk at the new front of `bufs` is
-    ///   [split to](Bytes::split_to) contain only the suffix of bytes that were not written.
+    /// - If a [`Bytes`] chunk was partially written, the chunk at the new front of `bufs` is [split
+    ///   to](Bytes::split_to) contain only the suffix of bytes that were not written.
     ///
     /// # Cancel safety
     ///
@@ -191,8 +191,8 @@ impl SendStream {
             conn.skip_waking();
             match e {
                 FinishError::ClosedStream => Err(ClosedStream::default()),
-                // Harmless. If the application needs to know about stopped streams at this point, it
-                // should call `stopped`.
+                // Harmless. If the application needs to know about stopped streams at this point,
+                // it should call `stopped`.
                 FinishError::Stopped(_) => Ok(()),
             }
         } else {
@@ -253,8 +253,8 @@ impl SendStream {
     /// determine whether the stream was rejected.
     pub fn stopped(&self) -> Stopped {
         let notified = {
-            // Create an `OwnedNotified` to move into the future. By creating it before the first poll,
-            // we make sure that we don't miss any notifications.
+            // Create an `OwnedNotified` to move into the future. By creating it before the first
+            // poll, we make sure that we don't miss any notifications.
             let mut conn = self.conn.lock_without_waking("SendStream::stopped");
             conn.stopped
                 .entry(self.stream)
