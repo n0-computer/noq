@@ -382,11 +382,103 @@ impl UdpSocketState {
     }
 }
 
+/// Maximum UDP payload bytes packable into one `sendmsg` call.
+///
+/// Two upper bounds:
+/// * `u16::MAX - ip_udp_header_overhead`: the kernel builds one IP packet per
+///   `sendmsg` whose 16-bit total-length field caps header + payload at
+///   `u16::MAX`. IPv4 headers can include up to 40 bytes of options (60 total);
+///   IPv6's fixed header is 40; UDP is 8.
+/// * `max_gso_segments * segment_size`: the kernel rejects GSO sends with more
+///   than `UDP_MAX_SEGMENTS` segments; we cap our own per-batch segment count
+///   at the runtime budget.
+///
+/// The batch may end with a partial segment, so a transmit whose total byte
+/// length is at most `max_batch_bytes` ships in a single `sendmsg` even when
+/// `contents.len() / segment_size` exceeds the segment budget by one partial
+/// segment.
+#[cfg(any(not(any(apple, target_os = "openbsd", target_os = "netbsd")), test))]
+fn max_batch_bytes(max_gso_segments: usize, segment_size: usize, destination: SocketAddr) -> usize {
+    let header_overhead = match destination {
+        SocketAddr::V4(_) => 60 + 8,
+        SocketAddr::V6(_) => 40 + 8,
+    };
+    let max_payload = (u16::MAX as usize) - header_overhead;
+    max_payload.min(max_gso_segments * segment_size)
+}
+
+/// Number of bytes to send in the next `sendmsg`, given `remaining` bytes left
+/// in the transmit and a per-call budget of `max_bytes`.
+///
+/// `max_batch_bytes` can land mid-segment (the `u16::MAX` byte cap is rarely a
+/// multiple of `segment_size`). But the kernel segments a GSO buffer purely by
+/// byte offset - every `segment_size` bytes - with no knowledge of intended
+/// datagram boundaries. So an intermediate batch must stop on a segment
+/// boundary; otherwise the split emits a short datagram in the middle of the
+/// stream and shifts every segment after it. Only the genuine final batch (the
+/// remainder of the whole transmit) may carry a partial last segment.
+#[cfg(any(not(any(apple, target_os = "openbsd", target_os = "netbsd")), test))]
+fn next_batch_bytes(remaining: usize, max_bytes: usize, segment_size: usize) -> usize {
+    if remaining <= max_bytes {
+        remaining
+    } else {
+        (max_bytes / segment_size).max(1) * segment_size
+    }
+}
+
+/// Send a `Transmit` as one or more `sendmsg` calls.
+///
+/// Each iteration packs up to `max_bytes` bytes (chosen so that both the
+/// kernel byte limit and the runtime GSO segment budget are respected) into
+/// one syscall, rounded down to a segment boundary by [`next_batch_bytes`] so
+/// intermediate batches never split a segment.
+///
+/// If a multi-segment batch fails with `EIO`/`EINVAL` (common on Android
+/// cellular: the kernel reports GSO support but the radio driver rejects the
+/// actual send), the loop halts GSO globally, drops `max_bytes` to one
+/// segment, and retries the failed batch as individual datagrams.
 #[cfg(not(any(apple, target_os = "openbsd", target_os = "netbsd")))]
-fn send(
+fn send(state: &UdpSocketState, io: SockRef<'_>, transmit: &Transmit<'_>) -> io::Result<()> {
+    let segment_size = transmit.segment_size.unwrap_or(transmit.contents.len());
+    let mut max_bytes = max_batch_bytes(
+        state.max_gso_segments().get(),
+        segment_size,
+        transmit.destination,
+    );
+
+    let mut pos = 0;
+    while pos < transmit.contents.len() {
+        let remaining = transmit.contents.len() - pos;
+        let batch_end = pos + next_batch_bytes(remaining, max_bytes, segment_size);
+        let batch = Transmit {
+            destination: transmit.destination,
+            ecn: transmit.ecn,
+            contents: &transmit.contents[pos..batch_end],
+            segment_size: transmit.segment_size,
+            src_ip: transmit.src_ip,
+        };
+        match send_packet(state, &io, &batch) {
+            Ok(()) => pos = batch_end,
+            Err(e)
+                if matches!(e.raw_os_error(), Some(libc::EIO) | Some(libc::EINVAL))
+                    && max_bytes > segment_size =>
+            {
+                crate::log::info!("`libc::sendmsg` failed with {e}; halting segmentation offload");
+                state.max_gso_segments.store(1, Ordering::Relaxed);
+                max_bytes = segment_size;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
+}
+
+/// Send one `Transmit` as a single `sendmsg` call.
+#[cfg(not(any(apple, target_os = "openbsd", target_os = "netbsd")))]
+fn send_packet(
     #[allow(unused_variables)] // only used on Linux
     state: &UdpSocketState,
-    io: SockRef<'_>,
+    io: &SockRef<'_>,
     transmit: &Transmit<'_>,
 ) -> io::Result<()> {
     #[allow(unused_mut)] // only mutable on FreeBSD
@@ -427,43 +519,34 @@ fn send(
             // Retry the transmission
             io::ErrorKind::Interrupted => continue,
             io::ErrorKind::WouldBlock => return Err(e),
-            _ => {
-                // Some network adapters and drivers do not support GSO. Unfortunately, Linux
-                // offers no easy way for us to detect this short of an EIO or sometimes EINVAL
-                // when we try to actually send datagrams using it.
-                #[cfg(any(target_os = "linux", target_os = "android"))]
-                if let Some(libc::EIO) | Some(libc::EINVAL) = e.raw_os_error() {
-                    // Prevent new transmits from being scheduled using GSO. Existing GSO transmits
-                    // may already be in the pipeline, so we need to tolerate additional failures.
-                    if state.max_gso_segments().get() > 1 {
-                        crate::log::info!(
-                            "`libc::sendmsg` failed with {e}; halting segmentation offload"
-                        );
-                        state
-                            .max_gso_segments
-                            .store(1, std::sync::atomic::Ordering::Relaxed);
-                    }
-                }
-
-                // Some arguments to `sendmsg` are not supported. Switch to
-                // fallback mode and retry if we haven't already.
-                if e.raw_os_error() == Some(libc::EINVAL) && !state.sendmsg_einval() {
-                    state.set_sendmsg_einval();
-                    prepare_msg(
-                        transmit,
-                        &dst_addr,
-                        &mut msg_hdr,
-                        &mut iovec,
-                        &mut cmsgs,
-                        encode_src_ip,
-                        state.sendmsg_einval(),
-                    );
-                    continue;
-                }
-
-                return Err(e);
-            }
+            _ => {}
         }
+
+        // Some cmsg flags aren't supported on older kernels (e.g. `IP_TOS` on
+        // Linux <3.13). Switch to fallback mode and retry once.
+        //
+        // Only engage when this particular `sendmsg` didn't use UDP_SEGMENT:
+        // disabling `IP_TOS` is a one-way door (it stays off for the life of
+        // the socket), and we don't want a GSO-related `EINVAL` to permanently
+        // strip ECN.
+        if e.raw_os_error() == Some(libc::EINVAL)
+            && !state.sendmsg_einval()
+            && transmit.effective_segment_size().is_none()
+        {
+            state.set_sendmsg_einval();
+            prepare_msg(
+                transmit,
+                &dst_addr,
+                &mut msg_hdr,
+                &mut iovec,
+                &mut cmsgs,
+                encode_src_ip,
+                state.sendmsg_einval(),
+            );
+            continue;
+        }
+
+        return Err(e);
     }
 }
 
@@ -1254,5 +1337,103 @@ fn retry_if_interrupted(mut f: impl FnMut() -> isize) -> io::Result<isize> {
         if e.kind() != io::ErrorKind::Interrupted {
             return Err(e);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn v4_dest() -> SocketAddr {
+        SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0))
+    }
+
+    fn v6_dest() -> SocketAddr {
+        SocketAddr::from((Ipv6Addr::UNSPECIFIED, 0))
+    }
+
+    #[test]
+    fn max_batch_bytes_capped_by_gso_budget() {
+        assert_eq!(max_batch_bytes(8, 1200, v4_dest()), 8 * 1200);
+    }
+
+    #[test]
+    fn max_batch_bytes_capped_by_byte_limit() {
+        assert_eq!(max_batch_bytes(64, 1200, v4_dest()), 65535 - 68);
+        assert_eq!(max_batch_bytes(64, 1200, v6_dest()), 65535 - 48);
+    }
+
+    #[test]
+    fn max_batch_bytes_differs_by_family() {
+        let v4 = max_batch_bytes(usize::MAX, 1, v4_dest());
+        let v6 = max_batch_bytes(usize::MAX, 1, v6_dest());
+        assert_eq!(v4, u16::MAX as usize - 68);
+        assert_eq!(v6, u16::MAX as usize - 48);
+        assert_eq!(v6 - v4, 20);
+    }
+
+    #[test]
+    fn max_batch_bytes_allows_partial_last_segment() {
+        let max = max_batch_bytes(64, 1280, v6_dest());
+        assert_eq!(max, 65487);
+        assert!(51 * 1280 + 207 <= max);
+    }
+
+    #[test]
+    fn next_batch_bytes_final_batch_keeps_partial() {
+        assert_eq!(next_batch_bytes(65487, 65487, 1280), 65487);
+        assert_eq!(next_batch_bytes(500, 65487, 1280), 500);
+    }
+
+    #[test]
+    fn next_batch_bytes_intermediate_is_segment_aligned() {
+        let max = max_batch_bytes(64, 1280, v6_dest());
+        let batch = next_batch_bytes(81920, max, 1280);
+        assert_eq!(
+            batch,
+            51 * 1280,
+            "must round 65487 down to 51 whole segments"
+        );
+        assert_eq!(
+            batch % 1280,
+            0,
+            "intermediate batch must be segment-aligned"
+        );
+        assert_eq!(81920 - batch, 13 * 1280);
+    }
+
+    #[test]
+    fn next_batch_bytes_always_progresses() {
+        assert_eq!(next_batch_bytes(10_000, 1000, 1500), 1500);
+    }
+
+    #[test]
+    fn next_batch_bytes_single_segment_after_gso_halt() {
+        assert_eq!(next_batch_bytes(81920, 1280, 1280), 1280);
+    }
+
+    #[test]
+    fn slicing_preserves_segment_alignment() {
+        const SEGMENT: usize = 1280;
+        let total = 100 * SEGMENT + 333;
+        let max = max_batch_bytes(64, SEGMENT, v6_dest());
+
+        let mut pos = 0;
+        let mut batches = 0;
+        while pos < total {
+            let remaining = total - pos;
+            let len = next_batch_bytes(remaining, max, SEGMENT);
+            assert!(len > 0);
+            if remaining > max {
+                assert_eq!(len % SEGMENT, 0, "intermediate batch split a segment");
+            }
+            pos += len;
+            batches += 1;
+        }
+        assert_eq!(pos, total, "slicing must cover exactly the whole transmit");
+        assert!(
+            batches >= 2,
+            "this transmit should require multiple syscalls"
+        );
     }
 }
