@@ -79,14 +79,12 @@ jobs:
           echo noq-udp version: $NOQ_UDP_VERSION
 
           sed -i -E "/^noq .*version/s/(version += +)\"[0-9.]+\"/\1 $NOQ_VERSION/" iroh/Cargo.toml
-          sed -i -E "/^noq .*version/s/(version += +)\"[0-9.]+\"/\1 $NOQ_VERSION/" iroh/bench/Cargo.toml
           sed -i -E "/^noq .*version/s/(version += +)\"[0-9.]+\"/\1 $NOQ_VERSION/" iroh-relay/Cargo.toml
           sed -i -E "/^noq-proto .*version/s/(version += +)\"[0-9.]+\"/\1 $NOQ_PROTO_VERSION/" iroh/Cargo.toml
-          sed -i -E "/^noq-proto .*version/s/(version += +)\"[0-9.]+\"/\1 $NOQ_PROTO_VERSION/" iroh/bench/Cargo.toml
           sed -i -E "/^noq-proto .*version/s/(version += +)\"[0-9.]+\"/\1 $NOQ_PROTO_VERSION/" iroh-relay/Cargo.toml
           sed -i -E "/^noq-udp .*version/s/(version += +)\"[0-9.]+\"/\1 $NOQ_UDP_VERSION/" iroh/Cargo.toml
-          sed -i -E "/^noq-udp .*version/s/(version += +)\"[0-9.]+\"/\1 $NOQ_UDP_VERSION/" iroh/bench/Cargo.toml
           sed -i -E "/^noq-udp .*version/s/(version += +)\"[0-9.]+\"/\1 $NOQ_UDP_VERSION/" iroh-relay/Cargo.toml
+          sed -i -E "/^noq = \"[0-9.]+\"/s/\"[0-9.]+\"/\"\1\" $NOQ_VERSION/" iroh/bench/Cargo.toml
 
 
       - name: Build patchbay tests
