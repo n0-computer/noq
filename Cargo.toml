@@ -4,7 +4,7 @@ default-members = ["noq", "noq-proto", "noq-udp", "bench", "perf"]
 resolver = "2"
 
 [workspace.package]
-version = "1.1.0-alpha.0"
+version = "1.1.0"
 rust-version = "1.88"
 edition = "2024"
 license = "MIT OR Apache-2.0"
