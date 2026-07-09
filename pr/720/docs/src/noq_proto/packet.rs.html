@@ -632,7 +632,7 @@
 <a href=#632 id=632 data-nosnippet>632</a>
 <a href=#633 id=633 data-nosnippet>633</a>    <span class="doccomment">/// Decode a plain header from given buffer, with given [`ConnectionIdParser`].
 <a href=#634 id=634 data-nosnippet>634</a>    </span><span class="kw">pub fn </span>decode(
-<a href=#635 id=635 data-nosnippet>635</a>        buf: <span class="kw-2">&amp;mut </span>io::Cursor&lt;BytesMut&gt;,
+<a href=#635 id=635 data-nosnippet>635</a>        buf: <span class="kw-2">&amp;mut </span>io::Cursor&lt;<span class="kw">impl </span>AsRef&lt;[u8]&gt;&gt;,
 <a href=#636 id=636 data-nosnippet>636</a>        cid_parser: <span class="kw-2">&amp;</span>(<span class="kw">impl </span>ConnectionIdParser + <span class="question-mark">?</span>Sized),
 <a href=#637 id=637 data-nosnippet>637</a>        supported_versions: <span class="kw-2">&amp;</span>[u32],
 <a href=#638 id=638 data-nosnippet>638</a>        grease_quic_bit: bool,
