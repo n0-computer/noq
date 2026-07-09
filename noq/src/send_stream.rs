@@ -79,8 +79,9 @@ impl SendStream {
         Ok(())
     }
 
-    /// Writes [`Bytes`] from a slice of buffers into this stream, returning how many bytes were.
-    /// written
+    /// Writes [`Bytes`] from a slice of buffers into this stream.
+    ///
+    /// Returns how many bytes were written.
     ///
     /// Bytes to try to write are provided to this method as an array of cheaply cloneable chunks.
     /// Unless this method errors, it waits until some amount of those bytes can be written into

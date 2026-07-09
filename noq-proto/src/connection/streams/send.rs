@@ -13,8 +13,9 @@ pub(super) struct Send {
     pub(super) state: SendState,
     pub(super) pending: SendBuffer,
     pub(super) priority: i32,
-    /// Whether a frame containing a FIN bit must be transmitted, even if we don't have any new
-    /// data
+    /// Whether a frame containing a FIN bit must be transmitted.
+    ///
+    /// Even if we don't have any new data.
     pub(super) fin_pending: bool,
     /// Whether this stream is in the `connection_blocked` list of `Streams`
     pub(super) connection_blocked: bool,

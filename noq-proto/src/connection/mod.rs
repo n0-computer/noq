@@ -5397,9 +5397,10 @@ impl Connection {
                     }
                 }
                 Frame::PathsBlocked(frame::PathsBlocked(max_path_id)) => {
-                    // Receipt of a value of Maximum Path Identifier or Path Identifier that is
-                    // higher than the local maximum value MUST be treated as a
-                    // connection error of type PROTOCOL_VIOLATION. Ref <https://www.ietf.org/archive/id/draft-ietf-quic-multipath-14.html#name-paths_blocked-and-path_cids>
+                    // Receipt of a value of Maximum Path Identifier or Path Identifier that
+                    // is higher than the local maximum value MUST be treated as a
+                    // connection error of type PROTOCOL_VIOLATION. Ref
+                    // <https://www.ietf.org/archive/id/draft-ietf-quic-multipath-14.html#name-paths_blocked-and-path_cids>
                     if self.is_multipath_negotiated() {
                         if max_path_id > self.local_max_path_id {
                             return Err(TransportError::PROTOCOL_VIOLATION(
@@ -5417,9 +5418,10 @@ impl Connection {
                     // always issue all CIDs we're allowed to issue, so either this is an
                     // impatient peer or a bug on our side.
 
-                    // Receipt of a value of Maximum Path Identifier or Path Identifier that is
-                    // higher than the local maximum value MUST be treated as a
-                    // connection error of type PROTOCOL_VIOLATION. Ref <https://www.ietf.org/archive/id/draft-ietf-quic-multipath-14.html#name-paths_blocked-and-path_cids>
+                    // Receipt of a value of Maximum Path Identifier or Path Identifier that
+                    // is higher than the local maximum value MUST be treated as a
+                    // connection error of type PROTOCOL_VIOLATION. Ref
+                    // <https://www.ietf.org/archive/id/draft-ietf-quic-multipath-14.html#name-paths_blocked-and-path_cids>
                     if self.is_multipath_negotiated() {
                         if path_id > self.local_max_path_id {
                             return Err(TransportError::PROTOCOL_VIOLATION(
@@ -7725,15 +7727,17 @@ impl SentFrames {
     }
 }
 
-/// Compute the negotiated idle timeout based on local and remote max_idle_timeout transport
-/// parameters.
+/// Computes the negotiated idle timeout based on the transport parameters.
 ///
-/// According to the definition of max_idle_timeout, a value of `0` means the timeout is disabled; see <https://www.rfc-editor.org/rfc/rfc9000#section-18.2-4.4.1.>
+/// According to the definition of max_idle_timeout, a value of `0` means the timeout is
+/// disabled; see <https://www.rfc-editor.org/rfc/rfc9000#section-18.2-4.4.1.>
 ///
-/// According to the negotiation procedure, either the minimum of the timeouts or one specified is used as the negotiated value; see <https://www.rfc-editor.org/rfc/rfc9000#section-10.1-2.>
+/// According to the negotiation procedure, either the minimum of the timeouts or one
+/// specified is used as the negotiated value; see
+/// <https://www.rfc-editor.org/rfc/rfc9000#section-10.1-2.>
 ///
-/// Returns the negotiated idle timeout as a `Duration`, or `None` when both endpoints have opted
-/// out of idle timeout.
+/// Returns the negotiated idle timeout as a `Duration`, or `None` when both endpoints have
+/// opted out of idle timeout.
 fn negotiate_max_idle_timeout(x: Option<VarInt>, y: Option<VarInt>) -> Option<Duration> {
     match (x, y) {
         (Some(VarInt(0)) | None, Some(VarInt(0)) | None) => None,

@@ -74,13 +74,13 @@ pub struct StreamsState {
     /// Maximum number of locally-initiated streams that may be opened over the lifetime of the
     /// connection so far, per direction
     pub(super) max: [u64; 2],
-    /// Maximum number of remotely-initiated streams that may be opened over the lifetime of the
-    /// connection so far, per direction
+    /// Maximum number of remotely-initiated streams that may be opened.
+    ///
+    /// This is over the lifetime of the connection so far, per direction.
     pub(super) max_remote: [u64; 2],
     /// Value of `max_remote` most recently transmitted to the peer in a `MAX_STREAMS` frame
     sent_max_remote: [u64; 2],
-    /// Number of streams that we've given the peer permission to open and which aren't fully
-    /// closed
+    /// Number of streams the peer may open and which aren't fully closed.
     pub(super) allocated_remote_count: [u64; 2],
     /// Size of the desired stream flow control window. May be smaller than
     /// `allocated_remote_count` due to `set_max_concurrent` calls.
@@ -89,8 +89,9 @@ pub struct StreamsState {
     flow_control_adjusted: bool,
     /// Lowest remotely-initiated stream index that haven't actually been opened by the peer
     pub(super) next_remote: [u64; 2],
-    /// Whether the remote endpoint has opened any streams the application doesn't know about yet,
-    /// per directionality
+    /// Whether the remote opened streams which are not yet reported to the application.
+    ///
+    /// Per directionality.
     opened: [bool; 2],
     // Next to report to the application, once opened
     pub(super) next_reported_remote: [u64; 2],

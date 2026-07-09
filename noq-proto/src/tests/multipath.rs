@@ -2168,11 +2168,13 @@ fn regression_delayed_path_cids_blocked() -> TestResult {
     pair.drive_client(); // Client sends Initial
     pair.drive_server(); // Server receives Initial, sends Handshake
     pair.drive_client(); // Client receives Handshake, sends handshake confirmed
-    pair.drive_server(); // Server receives handshake confirmed, sends PATH_NEW_CONNECTION_ID and confirms handshake itself
-    // Capture the server's PATH_NEW_CONNECTION_ID frames so the client generates a
-    // PATH_CIDS_BLOCKED frame on the next open_path call. This only works, because the server's
-    // outbound packet is constructed inefficiently: The PATH_NEW_CONNECTION_ID frames should
-    // *actually* be coaleced together with the server's handshake response instead of being put into a separate datagram. See also <https://github.com/n0-computer/noq/issues/66>
+    pair.drive_server(); // Server receives handshake confirmed, sends
+    // PATH_NEW_CONNECTION_ID and confirms handshake itself Capture the server's
+    // PATH_NEW_CONNECTION_ID frames so the client generates a PATH_CIDS_BLOCKED frame on
+    // the next open_path call. This only works, because the server's outbound packet is
+    // constructed inefficiently: The PATH_NEW_CONNECTION_ID frames should *actually* be
+    // coaleced together with the server's handshake response instead of being put into a
+    // separate datagram. See also <https://github.com/n0-computer/noq/issues/66>
     let (_, captured_server_cids) = pair.client.inbound.pop_last().unwrap();
     pair.drive_client(); // Client receives confirmed handshake, but not PATH_NEW_CONNECTION_ID frames
     let server_ch = pair.server.assert_accept();

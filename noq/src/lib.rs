@@ -129,8 +129,9 @@ fn udp_ecn(ecn: proto::EcnCodepoint) -> udp::EcnCodepoint {
     }
 }
 
-/// Maximum number of datagrams processed in send/recv calls to make before moving on to other
-/// processing
+/// Maximum number of datagrams processed at once in send/recv calls.
+///
+/// This after this the driver moves on to other processing.
 ///
 /// This helps ensure we don't starve anything when the CPU is slower than the link.
 /// Value is selected by picking a low number which didn't degrade throughput in benchmarks.

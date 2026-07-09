@@ -31,8 +31,9 @@ pub struct PartialDecode {
 
 #[allow(clippy::len_without_is_empty)]
 impl PartialDecode {
-    /// Begin decoding a QUIC packet from `bytes`, returning any trailing data not part of that
-    /// packet
+    /// Begins decoding a QUIC packet from `bytes`.
+    ///
+    /// Returns any trailing data not part of that packet.
     pub fn new(
         bytes: BytesMut,
         cid_parser: &(impl ConnectionIdParser + ?Sized),
