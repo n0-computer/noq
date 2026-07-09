@@ -1716,7 +1716,7 @@ impl Connection {
                 pad_datagram |= PadDatagram::ToMinMtu;
             }
 
-            for (path_id, _pn) in builder.sent_frames().largest_acked.iter() {
+            for path_id in builder.sent_frames().largest_acked.keys() {
                 self.spaces[space_id]
                     .for_path(*path_id)
                     .pending_acks
