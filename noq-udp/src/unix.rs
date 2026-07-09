@@ -19,26 +19,6 @@ use super::{
     EcnCodepoint, IO_ERROR_LOG_INTERVAL, RecvMeta, Transmit, UdpSockRef, cmsg, log_sendmsg_error,
 };
 
-// Adapted from https://github.com/apple-oss-distributions/xnu/blob/8d741a5de7ff4191bf97d57b9f54c2f6d4a15585/bsd/sys/socket_private.h
-#[cfg(apple_fast)]
-#[repr(C)]
-#[allow(non_camel_case_types)]
-pub(crate) struct msghdr_x {
-    pub msg_name: *mut libc::c_void,
-    pub msg_namelen: libc::socklen_t,
-    pub msg_iov: *mut libc::iovec,
-    pub msg_iovlen: libc::c_int,
-    pub msg_control: *mut libc::c_void,
-    pub msg_controllen: libc::socklen_t,
-    pub msg_flags: libc::c_int,
-    pub msg_datalen: usize,
-}
-
-#[cfg(target_os = "freebsd")]
-type IpTosTy = libc::c_uchar;
-#[cfg(not(any(target_os = "freebsd", target_os = "netbsd")))]
-type IpTosTy = libc::c_int;
-
 /// Tokio-compatible UDP socket with some useful specializations.
 ///
 /// Unlike a standard tokio UDP socket, this allows ECN bits to be read and written on some
@@ -69,6 +49,7 @@ impl UdpSocketState {
     pub fn new(sock: UdpSockRef<'_>) -> io::Result<Self> {
         let io = sock.0;
         let mut cmsg_platform_space = 0;
+        #[cfg(not(target_os = "redox"))]
         if cfg!(target_os = "linux")
             || cfg!(bsd)
             || cfg!(apple)
@@ -80,7 +61,7 @@ impl UdpSocketState {
         }
 
         assert!(
-            CMSG_LEN
+            cmsg::LEN
                 >= unsafe { libc::CMSG_SPACE(mem::size_of::<libc::c_int>() as _) as usize }
                     + cmsg_platform_space
         );
@@ -173,6 +154,7 @@ impl UdpSocketState {
         }
 
         // Options standardized in RFC 3542
+        #[cfg(not(target_os = "redox"))]
         if !is_ipv4 {
             set_socket_option(&*io, libc::IPPROTO_IPV6, libc::IPV6_RECVPKTINFO, OPTION_ON)?;
             set_socket_option(&*io, libc::IPPROTO_IPV6, libc::IPV6_RECVTCLASS, OPTION_ON)?;
@@ -236,6 +218,7 @@ impl UdpSocketState {
         target_os = "openbsd",
         target_os = "netbsd",
         target_os = "dragonfly",
+        target_os = "redox",
         solarish
     )))]
     pub fn recv(
@@ -265,6 +248,7 @@ impl UdpSocketState {
         target_os = "openbsd",
         target_os = "netbsd",
         target_os = "dragonfly",
+        target_os = "redox",
         solarish,
         apple_slow
     ))]
@@ -277,11 +261,11 @@ impl UdpSocketState {
         recv_single(socket.0, bufs, meta)
     }
 
-    /// The maximum amount of segments which can be transmitted if a platform
-    /// supports Generic Send Offload (GSO).
+    /// Maximum number of segments to transmit if Generic Send Offload (GSO) is enabled.
     ///
-    /// This is 1 if the platform doesn't support GSO. Subject to change if errors are detected
-    /// while using GSO.
+    /// This is 1 if the platform doesn't support GSO.
+    ///
+    /// Subject to change if errors are detected while using GSO.
     #[inline]
     pub fn max_gso_segments(&self) -> NonZeroUsize {
         self.max_gso_segments
@@ -290,8 +274,9 @@ impl UdpSocketState {
             .expect("must have non zero GSO segments")
     }
 
-    /// The number of segments to read when GRO is enabled. Used as a factor to
-    /// compute the receive buffer size.
+    /// The number of segments to read when GRO is enabled.
+    ///
+    /// Used as a factor to compute the receive buffer size.
     ///
     /// Returns 1 if the platform doesn't support GRO.
     #[inline]
@@ -343,6 +328,7 @@ impl UdpSocketState {
     }
 
     /// Enables Apple's fast UDP datapath using private `sendmsg_x`/`recvmsg_x` APIs.
+    ///
     /// Once enabled, this also updates [`max_gso_segments`] to allow batched sends.
     ///
     /// # Safety
@@ -370,8 +356,10 @@ impl UdpSocketState {
         self.max_gso_segments.store(1, Ordering::Relaxed);
     }
 
-    /// Resolves an Apple fast-path function pointer via `resolver`, disabling the fast path if
-    /// the symbol is absent so that future calls use the slow path directly.
+    /// Resolves an Apple fast-path function pointer via `resolver`.
+    ///
+    /// Disables the fast path if the symbol is absent so that future calls use the slow path
+    /// directly.
     #[cfg(apple_fast)]
     fn resolve_apple_fast_fn<T>(&self, resolver: fn() -> Option<T>) -> Option<T> {
         let f = resolver();
@@ -403,7 +391,7 @@ fn send(
     }
     let mut msg_hdr: libc::msghdr = unsafe { mem::zeroed() };
     let mut iovec: libc::iovec = unsafe { mem::zeroed() };
-    let mut cmsgs = cmsg::Aligned([0u8; CMSG_LEN]);
+    let mut cmsgs = cmsg::Aligned([0u8; cmsg::LEN]);
     let dst_addr = socket2::SockAddr::from(transmit.destination);
     prepare_msg(
         transmit,
@@ -485,7 +473,7 @@ fn send_via_sendmsg_x(
 ) -> io::Result<()> {
     let mut hdrs = unsafe { mem::zeroed::<[msghdr_x; BATCH_SIZE]>() };
     let mut iovs = unsafe { mem::zeroed::<[libc::iovec; BATCH_SIZE]>() };
-    let mut ctrls = [cmsg::Aligned([0u8; CMSG_LEN]); BATCH_SIZE];
+    let mut ctrls = [cmsg::Aligned([0u8; cmsg::LEN]); BATCH_SIZE];
     let addr = socket2::SockAddr::from(transmit.destination);
     let segment_size = transmit.segment_size.unwrap_or(transmit.contents.len());
     let mut cnt = 0;
@@ -531,7 +519,7 @@ fn send(state: &UdpSocketState, io: SockRef<'_>, transmit: &Transmit<'_>) -> io:
 fn send_single(state: &UdpSocketState, io: SockRef<'_>, transmit: &Transmit<'_>) -> io::Result<()> {
     let mut hdr: libc::msghdr = unsafe { mem::zeroed() };
     let mut iov: libc::iovec = unsafe { mem::zeroed() };
-    let mut ctrl = cmsg::Aligned([0u8; CMSG_LEN]);
+    let mut ctrl = cmsg::Aligned([0u8; cmsg::LEN]);
     let addr = socket2::SockAddr::from(transmit.destination);
     prepare_msg(
         transmit,
@@ -552,6 +540,7 @@ fn send_single(state: &UdpSocketState, io: SockRef<'_>, transmit: &Transmit<'_>)
     target_os = "openbsd",
     target_os = "netbsd",
     target_os = "dragonfly",
+    target_os = "redox",
     solarish
 )))]
 fn recv_via_recvmmsg(
@@ -560,7 +549,7 @@ fn recv_via_recvmmsg(
     meta: &mut [RecvMeta],
 ) -> io::Result<usize> {
     let mut names = [MaybeUninit::<libc::sockaddr_storage>::uninit(); BATCH_SIZE];
-    let mut ctrls = [cmsg::Aligned(MaybeUninit::<[u8; CMSG_LEN]>::uninit()); BATCH_SIZE];
+    let mut ctrls = [cmsg::Aligned(MaybeUninit::<[u8; cmsg::LEN]>::uninit()); BATCH_SIZE];
     let mut hdrs = unsafe { mem::zeroed::<[libc::mmsghdr; BATCH_SIZE]>() };
     let max_msg_count = bufs.len().min(BATCH_SIZE);
     for i in 0..max_msg_count {
@@ -601,7 +590,7 @@ fn recv_via_recvmsg_x(
     // uninitialized memory, do not use `MaybeUninit` for `ctrls`, instead
     // initialize `ctrls` with `0`s. A control message of all `0`s is
     // automatically skipped by `libc::CMSG_NXTHDR`.
-    let mut ctrls = [cmsg::Aligned([0u8; CMSG_LEN]); BATCH_SIZE];
+    let mut ctrls = [cmsg::Aligned([0u8; cmsg::LEN]); BATCH_SIZE];
     let mut hdrs = unsafe { mem::zeroed::<[msghdr_x; BATCH_SIZE]>() };
     let max_msg_count = bufs.len().min(BATCH_SIZE);
     for i in 0..max_msg_count {
@@ -664,6 +653,7 @@ fn resolve_symbol(lock: &std::sync::OnceLock<usize>, name: &std::ffi::CStr) -> O
     target_os = "openbsd",
     target_os = "netbsd",
     target_os = "dragonfly",
+    target_os = "redox",
     solarish,
     apple
 ))]
@@ -674,7 +664,7 @@ fn recv_single(
     meta: &mut [RecvMeta],
 ) -> io::Result<usize> {
     let mut name = MaybeUninit::<libc::sockaddr_storage>::uninit();
-    let mut ctrl = cmsg::Aligned(MaybeUninit::<[u8; CMSG_LEN]>::uninit());
+    let mut ctrl = cmsg::Aligned(MaybeUninit::<[u8; cmsg::LEN]>::uninit());
     let mut hdr = unsafe { mem::zeroed::<libc::msghdr>() };
     prepare_recv(&mut bufs[0], &mut name, &mut ctrl, &mut hdr);
     let n = loop {
@@ -699,15 +689,13 @@ fn recv_single(
     Ok(1)
 }
 
-const CMSG_LEN: usize = 88;
-
 #[cfg_attr(apple_fast, allow(dead_code))] // Unused when apple_fast is enabled
 fn prepare_msg(
     transmit: &Transmit<'_>,
     dst_addr: &socket2::SockAddr,
     hdr: &mut libc::msghdr,
     iov: &mut libc::iovec,
-    ctrl: &mut cmsg::Aligned<[u8; CMSG_LEN]>,
+    ctrl: &mut cmsg::Aligned<[u8; cmsg::LEN]>,
     #[allow(unused_variables)] // only used on FreeBSD & macOS
     encode_src_ip: bool,
     sendmsg_einval: bool,
@@ -728,7 +716,7 @@ fn prepare_msg(
     hdr.msg_iovlen = 1;
 
     hdr.msg_control = ctrl.0.as_mut_ptr() as _;
-    hdr.msg_controllen = CMSG_LEN as _;
+    hdr.msg_controllen = cmsg::LEN as _;
     let mut encoder = unsafe { cmsg::Encoder::new(hdr) };
     let ecn = transmit.ecn.map_or(0, |x| x as libc::c_int);
     // True for IPv4 or IPv4-Mapped IPv6
@@ -742,6 +730,7 @@ fn prepare_msg(
             }
         }
     } else {
+        #[cfg(not(target_os = "redox"))]
         encoder.push(libc::IPPROTO_IPV6, libc::IPV6_TCLASS, ecn);
     }
 
@@ -777,6 +766,9 @@ fn prepare_msg(
                     }
                 }
             }
+            #[cfg(target_os = "redox")]
+            IpAddr::V6(_) => {}
+            #[cfg(not(target_os = "redox"))]
             IpAddr::V6(v6) => {
                 let pktinfo = libc::in6_pktinfo {
                     ipi6_ifindex: 0,
@@ -799,7 +791,7 @@ fn prepare_msg_x(
     dst_addr: &socket2::SockAddr,
     hdr: &mut msghdr_x,
     iov: &mut libc::iovec,
-    ctrl: &mut cmsg::Aligned<[u8; CMSG_LEN]>,
+    ctrl: &mut cmsg::Aligned<[u8; cmsg::LEN]>,
     #[allow(unused_variables)] encode_src_ip: bool,
     sendmsg_einval: bool,
 ) {
@@ -814,7 +806,7 @@ fn prepare_msg_x(
     hdr.msg_iovlen = 1;
 
     hdr.msg_control = ctrl.0.as_mut_ptr() as _;
-    hdr.msg_controllen = CMSG_LEN as _;
+    hdr.msg_controllen = cmsg::LEN as _;
     let mut encoder = unsafe { cmsg::Encoder::new(hdr) };
     let ecn = transmit.ecn.map_or(0, |x| x as libc::c_int);
     let is_ipv4 = transmit.destination.is_ipv4()
@@ -856,7 +848,7 @@ fn prepare_msg_x(
 fn prepare_recv(
     buf: &mut IoSliceMut<'_>,
     name: &mut MaybeUninit<libc::sockaddr_storage>,
-    ctrl: &mut cmsg::Aligned<MaybeUninit<[u8; CMSG_LEN]>>,
+    ctrl: &mut cmsg::Aligned<MaybeUninit<[u8; cmsg::LEN]>>,
     hdr: &mut libc::msghdr,
 ) {
     hdr.msg_name = name.as_mut_ptr() as _;
@@ -864,7 +856,7 @@ fn prepare_recv(
     hdr.msg_iov = buf as *mut IoSliceMut<'_> as *mut libc::iovec;
     hdr.msg_iovlen = 1;
     hdr.msg_control = ctrl.0.as_mut_ptr() as _;
-    hdr.msg_controllen = CMSG_LEN as _;
+    hdr.msg_controllen = cmsg::LEN as _;
     hdr.msg_flags = 0;
 }
 
@@ -873,7 +865,7 @@ fn prepare_recv(
 fn prepare_recv_x(
     buf: &mut IoSliceMut<'_>,
     name: &mut MaybeUninit<libc::sockaddr_storage>,
-    ctrl: &mut cmsg::Aligned<[u8; CMSG_LEN]>,
+    ctrl: &mut cmsg::Aligned<[u8; cmsg::LEN]>,
     hdr: &mut msghdr_x,
 ) {
     hdr.msg_name = name.as_mut_ptr() as _;
@@ -881,7 +873,7 @@ fn prepare_recv_x(
     hdr.msg_iov = buf as *mut IoSliceMut<'_> as *mut libc::iovec;
     hdr.msg_iovlen = 1;
     hdr.msg_control = ctrl.0.as_mut_ptr() as _;
-    hdr.msg_controllen = CMSG_LEN as _;
+    hdr.msg_controllen = cmsg::LEN as _;
     hdr.msg_flags = 0;
     hdr.msg_datalen = buf.len();
 }
@@ -939,6 +931,7 @@ impl ControlMetadata {
             (libc::IPPROTO_IP, libc::IP_RECVTOS) => unsafe {
                 self.ecn_bits = cmsg::decode::<u8, libc::cmsghdr>(cmsg);
             },
+            #[cfg(not(target_os = "redox",))]
             (libc::IPPROTO_IPV6, libc::IPV6_TCLASS) => unsafe {
                 // Temporary hack around broken macos ABI. Remove once upstream fixes it.
                 // https://bugreport.apple.com/web/?problemID=48761855
@@ -964,6 +957,7 @@ impl ControlMetadata {
                 let in_addr = unsafe { cmsg::decode::<libc::in_addr, libc::cmsghdr>(cmsg) };
                 self.dst_ip = Some(IpAddr::V4(Ipv4Addr::from(in_addr.s_addr.to_ne_bytes())));
             }
+            #[cfg(not(target_os = "redox",))]
             (libc::IPPROTO_IPV6, libc::IPV6_PKTINFO) => {
                 let pktinfo = unsafe { cmsg::decode::<libc::in6_pktinfo, libc::cmsghdr>(cmsg) };
                 self.dst_ip = Some(IpAddr::V6(Ipv6Addr::from(pktinfo.ipi6_addr.s6_addr)));
@@ -1029,8 +1023,9 @@ mod gso {
         major_revision: 18,
     };
 
-    /// Checks whether GSO support is available by checking the kernel version followed by setting
-    /// the UDP_SEGMENT option on a socket
+    /// Checks whether GSO support is available.
+    ///
+    /// Checks the kernel version followed by setting the UDP_SEGMENT option on a socket.
     pub(crate) fn max_gso_segments(socket: &impl AsRawFd) -> usize {
         const GSO_SIZE: libc::c_int = 1500;
 
@@ -1200,6 +1195,26 @@ mod gso {
     }
 }
 
+// Adapted from https://github.com/apple-oss-distributions/xnu/blob/8d741a5de7ff4191bf97d57b9f54c2f6d4a15585/bsd/sys/socket_private.h
+#[cfg(apple_fast)]
+#[repr(C)]
+#[allow(non_camel_case_types)]
+pub(crate) struct msghdr_x {
+    pub msg_name: *mut libc::c_void,
+    pub msg_namelen: libc::socklen_t,
+    pub msg_iov: *mut libc::iovec,
+    pub msg_iovlen: libc::c_int,
+    pub msg_control: *mut libc::c_void,
+    pub msg_controllen: libc::socklen_t,
+    pub msg_flags: libc::c_int,
+    pub msg_datalen: usize,
+}
+
+#[cfg(target_os = "freebsd")]
+type IpTosTy = libc::c_uchar;
+#[cfg(not(any(target_os = "freebsd", target_os = "netbsd")))]
+type IpTosTy = libc::c_int;
+
 /// Returns whether the given socket option is supported on the current platform
 ///
 /// Yields `Ok(true)` if the option was set successfully, `Ok(false)` if setting
@@ -1242,8 +1257,9 @@ fn set_socket_option(
 
 const OPTION_ON: libc::c_int = 1;
 
-/// Calls `f` in a loop, retrying on `EINTR`, and returns the non-negative result or the first
-/// non-`EINTR` error.
+/// Calls `f` in a loop, retrying on `EINTR`.
+///
+/// Returns the non-negative result or the first non-`EINTR` error.
 fn retry_if_interrupted(mut f: impl FnMut() -> isize) -> io::Result<isize> {
     loop {
         let n = f();

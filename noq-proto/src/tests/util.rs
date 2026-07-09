@@ -1820,13 +1820,24 @@ impl BasicRouting {
 /// Set of uni-directional links between interfaces of a client and server.
 ///
 /// Each entry on the client or server side represents a single interface in a /32
-/// subnet. Each interface has exactly one uni-directional outgoing link to a peer
-/// interface. The destination interface is identified by the `usize` index into the peer's
-/// interfaces `Vec`.
+/// subnet. There is at most one peer address which can send to this interface, indicated by
+/// the index into the peer's interfaces. If the peer interface does not exist datagrams
+/// will be dropped. If the peer sent the packet using a different source address than the
+/// allowed interface the datagram will be dropped.
 ///
-/// An interface may only appear once for a peer, so each interface only has a single
-/// outgoing link. However interfaces can have multiple incoming links if multiple
-/// interfaces of the peer have an outgoing link to it.
+/// This implies an interface can only have one incoming link. It does allow creating
+/// interface pairs that do not have bi-directional connectivity. E.g.:
+///
+/// ```rust
+/// ManyToManyRouting {
+///     client_routes: [("[::1:1]:1", 1), ("[::1:2]:1", 1)],
+///     server_routes: [("[::2:1]:1", 1), ("[::2:2]:1", 1)],
+/// }
+/// ```
+///
+/// This would allow the client to open up a path from `::1:2` to `::2:2`, but because a
+/// path is on the 4-tuple the server would respond from `::2:2` which is not allowed to
+/// send to `::1:2` and the response path would drop all datagrams.
 #[derive(Debug, Clone)]
 pub(super) struct ManyToManyRouting {
     client_routes: Vec<(SocketAddr, usize)>,

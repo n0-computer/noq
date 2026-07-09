@@ -23,16 +23,18 @@ use tracing::info;
 
 use crate::{
     AckFrequencyConfig, ApplicationClose, ClientConfig, Connection, ConnectionClose,
-    ConnectionError, ConnectionHandle, DEFAULT_SUPPORTED_VERSIONS, Datagram, DatagramEvent, Dir,
-    Duration, Endpoint, EndpointConfig, Event, FinishError, FourTuple, HashedConnectionIdGenerator,
-    Instant, MIN_INITIAL_SIZE, PathEvent, PathId, ReadError, ReadableError, RecvStream,
-    SendDatagramError, ServerConfig,
+    ConnectionError, ConnectionEvent, ConnectionHandle, DEFAULT_SUPPORTED_VERSIONS, Datagram,
+    DatagramEvent, Dir, Duration, Endpoint, EndpointConfig, Event, FinishError, FourTuple,
+    HashedConnectionIdGenerator, Instant, MIN_INITIAL_SIZE, PathEvent, PathId, PathStatus,
+    ReadError, ReadableError, RecvStream, SendDatagramError, ServerConfig,
     Side::*,
     StreamEvent, Transmit, TransportConfig, TransportErrorCode, VarInt, WriteError,
     cid_generator::{ConnectionIdGenerator, RandomConnectionIdGenerator},
     coding::{Decodable, Encodable},
     crypto::rustls::{QuicServerConfig, configured_provider},
     frame::{self, Frame, FrameStruct},
+    packet::{FixedLengthConnectionIdParser, PartialDecode},
+    shared::{ConnectionEventInner, DatagramConnectionEvent},
     tests::util::{BwLimitConfig, BwLimitedRouting},
     transport_parameters::TransportParameters,
 };
@@ -1265,6 +1267,81 @@ fn initial_retransmit() {
         pair.client_conn_mut(client_ch).poll(),
         Some(Event::Connected)
     );
+}
+
+#[test]
+fn stale_coalesced_datagram_after_path_discard_is_ignored() {
+    let _guard = subscribe();
+    let (mut pair, client_cfg) = ConnPair::builder().enable_multipath().build_pair();
+
+    let client_ch = pair.begin_connect(client_cfg);
+    pair.drive_client();
+    pair.drive_server();
+
+    let cid_parser =
+        FixedLengthConnectionIdParser::new(RandomConnectionIdGenerator::default().cid_len());
+    let (first_decode, remaining, ecn, remote, dst_ip) = pair
+        .client
+        .inbound
+        .iter()
+        .find_map(|(_, inbound)| {
+            let Ok((first_decode, remaining)) = PartialDecode::new(
+                inbound.packet.clone(),
+                &cid_parser,
+                DEFAULT_SUPPORTED_VERSIONS,
+                pair.client.config().grease_quic_bit,
+            ) else {
+                return None;
+            };
+
+            remaining.is_some().then_some((
+                first_decode,
+                remaining,
+                inbound.ecn,
+                inbound.remote,
+                inbound.dst_ip,
+            ))
+        })
+        .expect("server should have queued a coalesced handshake datagram for client");
+
+    pair.drive();
+    let server_ch = pair.server.assert_accept();
+    pair.finish_connect(client_ch, server_ch);
+
+    let mut pair = ConnPair::new(pair, client_ch, server_ch);
+    let path_id = pair
+        .open_path(
+            Client,
+            FourTuple::from_remote(pair.routes.public_server_addr()),
+            PathStatus::Available,
+        )
+        .expect("path should open");
+    pair.drive();
+    assert_ne!(path_id, PathId::ZERO);
+
+    pair.close_path(Client, PathId::ZERO, 0u8.into())
+        .expect("path 0 should close once path 1 exists");
+    pair.drive();
+    assert!(
+        !pair.paths(Client).contains(&PathId::ZERO),
+        "path 0 should have been discarded"
+    );
+
+    let now = pair.time;
+    pair.conn_mut(Client)
+        .handle_event(ConnectionEvent(ConnectionEventInner::Datagram(
+            DatagramConnectionEvent {
+                now,
+                network_path: FourTuple {
+                    remote,
+                    local_ip: dst_ip,
+                },
+                path_id: PathId::ZERO,
+                ecn,
+                first_decode,
+                remaining,
+            },
+        )));
 }
 
 #[test]
