@@ -217,16 +217,11 @@ impl CryptoState {
         } else if packet_key_phase == conn_key_phase || space != SpaceKind::Data {
             let (_, packet) = self.remote_crypto(space.encryption_level()).unwrap();
             packet
-        } else if let Some(prev) = self.prev_crypto.as_ref().and_then(|crypto| {
+        } else if let Some(prev) = self.prev_crypto.as_ref().filter(|&crypto| {
             // If this packet comes prior to acknowledgment of the key update by the peer,
-            if crypto.end_packet.is_none_or(|(pn, _)| packet_number < pn) {
-                // use the previous keys.
-                Some(crypto)
-            } else {
-                // Otherwise, this must be a remotely-initiated key update, so fall through to the
-                // final case.
-                None
-            }
+            // use the previous keys. Otherwise, this must be a remotely-initiated key update, so
+            // fall through to the final case.
+            crypto.end_packet.is_none_or(|(pn, _)| packet_number < pn)
         }) {
             &*prev.crypto.remote
         } else {
