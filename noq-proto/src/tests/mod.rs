@@ -18,20 +18,24 @@ use rustls::{
     pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
     server::WebPkiClientVerifier,
 };
+use testresult::TestResult;
 use tracing::info;
 
 use crate::{
     AckFrequencyConfig, ApplicationClose, ClientConfig, Connection, ConnectionClose,
-    ConnectionError, ConnectionHandle, DEFAULT_SUPPORTED_VERSIONS, Datagram, DatagramEvent, Dir,
-    Duration, Endpoint, EndpointConfig, Event, FinishError, FourTuple, HashedConnectionIdGenerator,
-    Instant, MIN_INITIAL_SIZE, PathEvent, PathId, ReadError, ReadableError, RecvStream,
-    SendDatagramError, ServerConfig,
+    ConnectionError, ConnectionEvent, ConnectionHandle, DEFAULT_SUPPORTED_VERSIONS, Datagram,
+    DatagramEvent, Dir, Duration, Endpoint, EndpointConfig, Event, FinishError, FourTuple,
+    HashedConnectionIdGenerator, Instant, MIN_INITIAL_SIZE, PathEvent, PathId, PathStatus,
+    ReadError, ReadableError, RecvStream, SendDatagramError, ServerConfig,
     Side::*,
     StreamEvent, Transmit, TransportConfig, TransportErrorCode, VarInt, WriteError,
     cid_generator::{ConnectionIdGenerator, RandomConnectionIdGenerator},
     coding::{Decodable, Encodable},
     crypto::rustls::{QuicServerConfig, configured_provider},
     frame::{self, Frame, FrameStruct},
+    packet::{FixedLengthConnectionIdParser, PartialDecode},
+    shared::{ConnectionEventInner, DatagramConnectionEvent},
+    tests::util::{BwLimitConfig, BwLimitedRouting},
     transport_parameters::TransportParameters,
 };
 
@@ -543,7 +547,7 @@ fn congestion() {
 fn high_latency_handshake() {
     let _guard = subscribe();
     let mut pair = Pair::default();
-    pair.latency = Duration::from_micros(200 * 1000);
+    pair.routes.set_latency(Duration::from_micros(200 * 1000));
     let (client_ch, server_ch) = pair.connect();
     assert_eq!(pair.client_conn_mut(client_ch).bytes_in_flight(), 0);
     assert_eq!(pair.server_conn_mut(server_ch).bytes_in_flight(), 0);
@@ -1263,6 +1267,81 @@ fn initial_retransmit() {
         pair.client_conn_mut(client_ch).poll(),
         Some(Event::Connected)
     );
+}
+
+#[test]
+fn stale_coalesced_datagram_after_path_discard_is_ignored() {
+    let _guard = subscribe();
+    let (mut pair, client_cfg) = ConnPair::builder().enable_multipath().build_pair();
+
+    let client_ch = pair.begin_connect(client_cfg);
+    pair.drive_client();
+    pair.drive_server();
+
+    let cid_parser =
+        FixedLengthConnectionIdParser::new(RandomConnectionIdGenerator::default().cid_len());
+    let (first_decode, remaining, ecn, remote, dst_ip) = pair
+        .client
+        .inbound
+        .iter()
+        .find_map(|(_, inbound)| {
+            let Ok((first_decode, remaining)) = PartialDecode::new(
+                inbound.packet.clone(),
+                &cid_parser,
+                DEFAULT_SUPPORTED_VERSIONS,
+                pair.client.config().grease_quic_bit,
+            ) else {
+                return None;
+            };
+
+            remaining.is_some().then_some((
+                first_decode,
+                remaining,
+                inbound.ecn,
+                inbound.remote,
+                inbound.dst_ip,
+            ))
+        })
+        .expect("server should have queued a coalesced handshake datagram for client");
+
+    pair.drive();
+    let server_ch = pair.server.assert_accept();
+    pair.finish_connect(client_ch, server_ch);
+
+    let mut pair = ConnPair::new(pair, client_ch, server_ch);
+    let path_id = pair
+        .open_path(
+            Client,
+            FourTuple::from_remote(pair.routes.public_server_addr()),
+            PathStatus::Available,
+        )
+        .expect("path should open");
+    pair.drive();
+    assert_ne!(path_id, PathId::ZERO);
+
+    pair.close_path(Client, PathId::ZERO, 0u8.into())
+        .expect("path 0 should close once path 1 exists");
+    pair.drive();
+    assert!(
+        !pair.paths(Client).contains(&PathId::ZERO),
+        "path 0 should have been discarded"
+    );
+
+    let now = pair.time;
+    pair.conn_mut(Client)
+        .handle_event(ConnectionEvent(ConnectionEventInner::Datagram(
+            DatagramConnectionEvent {
+                now,
+                network_path: FourTuple {
+                    remote,
+                    local_ip: dst_ip,
+                },
+                path_id: PathId::ZERO,
+                ecn,
+                first_decode,
+                remaining,
+            },
+        )));
 }
 
 #[test]
@@ -2132,7 +2211,7 @@ fn tail_loss_respect_max_datagrams() {
 
     // Finally checking the number of sent udp datagrams match the number of iops
     let client_stats = pair.client_conn_mut(client_ch).stats();
-    assert_eq!(client_stats.udp_tx.ios, client_stats.udp_tx.datagrams);
+    assert_eq!(client_stats.transmits_tx, client_stats.udp_tx.datagrams);
 }
 
 #[test]
@@ -3013,7 +3092,7 @@ fn setup_ack_frequency_test(max_ack_delay: Duration) -> (Pair, ConnectionHandle,
         .initial_rtt(Duration::from_millis(10)); // To avoid delays from pacing
 
     let mut pair = Pair::default_with_deterministic_pns();
-    pair.latency = Duration::from_millis(10); // Need latency to avoid an RTT = 0
+    pair.routes.set_latency(Duration::from_millis(10)); // Need latency to avoid an RTT = 0
     let (client_ch, server_ch) = pair.connect_with(client_config);
     pair.drive();
 
@@ -3097,7 +3176,7 @@ fn ack_frequency_ack_sent_after_max_ack_delay() {
     pair.drive_client();
 
     // Server: receive the ping, send no ACK
-    pair.time += pair.latency;
+    pair.time += pair.routes.as_basic().latency;
     let server_stats_before = pair.server_conn_mut(server_ch).stats();
     pair.drive_server();
     let server_stats_after = pair.server_conn_mut(server_ch).stats();
@@ -3310,7 +3389,7 @@ fn ack_frequency_update_max_delay() {
 
     // RTT jumps, client sends another ping
     info!("delayed ping");
-    pair.latency *= 10;
+    pair.routes.as_basic_mut().latency *= 10;
     pair.client_conn_mut(client_ch).ping();
     pair.drive();
 
@@ -3435,7 +3514,7 @@ fn stream_gso() {
 
     let s = pair.client_streams(client_ch).open(Dir::Uni).unwrap();
 
-    let initial_ios = pair.client_conn_mut(client_ch).stats().udp_tx.ios;
+    let initial_transmit_count = pair.client_conn_mut(client_ch).stats().transmits_tx;
 
     // Send 20KiB of stream data, which comfortably fits inside two `tests::util::MAX_DATAGRAMS`
     // datagram batches
@@ -3445,8 +3524,8 @@ fn stream_gso() {
     }
     pair.client_send(client_ch, s).finish().unwrap();
     pair.drive();
-    let final_ios = pair.client_conn_mut(client_ch).stats().udp_tx.ios;
-    assert_eq!(final_ios - initial_ios, 2);
+    let final_transmit_count = pair.client_conn_mut(client_ch).stats().transmits_tx;
+    assert_eq!(final_transmit_count - initial_transmit_count, 2);
 }
 
 #[test]
@@ -3455,7 +3534,7 @@ fn datagram_gso() {
     let mut pair = Pair::default();
     let (client_ch, _) = pair.connect();
 
-    let initial_ios = pair.client_conn_mut(client_ch).stats().udp_tx.ios;
+    let initial_transmit_count = pair.client_conn_mut(client_ch).stats().transmits_tx;
     let initial_bytes = pair.client_conn_mut(client_ch).stats().udp_tx.bytes;
 
     // Send 10 datagrams above half the MTU, which fits inside a `tests::util::MAX_DATAGRAMS`
@@ -3469,9 +3548,9 @@ fn datagram_gso() {
             .unwrap();
     }
     pair.drive();
-    let final_ios = pair.client_conn_mut(client_ch).stats().udp_tx.ios;
+    let final_transmit_count = pair.client_conn_mut(client_ch).stats().transmits_tx;
     let final_bytes = pair.client_conn_mut(client_ch).stats().udp_tx.bytes;
-    assert_eq!(final_ios - initial_ios, 1);
+    assert_eq!(final_transmit_count - initial_transmit_count, 1);
     // Expected overhead: flags + CID + PN + tag + frame type + frame length = 1 + 8 + 1 + 16 + 1 + 2 = 29
     assert_eq!(
         final_bytes - initial_bytes,
@@ -3485,7 +3564,7 @@ fn gso_truncation() {
     let mut pair = Pair::default();
     let (client_ch, server_ch) = pair.connect();
 
-    let initial_ios = pair.client_conn_mut(client_ch).stats().udp_tx.ios;
+    let initial_transmit_count = pair.client_conn_mut(client_ch).stats().transmits_tx;
 
     // Send three application datagrams such that each is large to be combined with another in a
     // single MTU, and the second datagram would require an unreasonably large amount of padding to
@@ -3498,8 +3577,8 @@ fn gso_truncation() {
             .unwrap();
     }
     pair.drive();
-    let final_ios = pair.client_conn_mut(client_ch).stats().udp_tx.ios;
-    assert_eq!(final_ios - initial_ios, 2);
+    let final_transmit_count = pair.client_conn_mut(client_ch).stats().transmits_tx;
+    assert_eq!(final_transmit_count - initial_transmit_count, 2);
     for len in SIZES {
         assert_eq!(
             pair.server_datagrams(server_ch)
@@ -3530,7 +3609,7 @@ fn pad_to_mtu() {
     let mut pair = Pair::default();
     let (client_ch, server_ch) = pair.connect_with(client_config);
 
-    let initial_ios = pair.client_conn_mut(client_ch).stats().udp_tx.ios;
+    let initial_transmit_count = pair.client_conn_mut(client_ch).stats().transmits_tx;
     pair.server.capture_inbound_packets = true;
 
     info!("sending");
@@ -3558,8 +3637,8 @@ fn pad_to_mtu() {
     pair.drive();
 
     // Check that both datagrams ended up in the same GSO batch
-    let final_ios = pair.client_conn_mut(client_ch).stats().udp_tx.ios;
-    assert_eq!(final_ios - initial_ios, 1);
+    let final_transmit_count = pair.client_conn_mut(client_ch).stats().transmits_tx;
+    assert_eq!(final_transmit_count - initial_transmit_count, 1);
 
     assert_eq!(
         pair.server_datagrams(server_ch)
@@ -3589,7 +3668,7 @@ fn large_datagram_with_acks() {
     for _ in 0..10 {
         pair.server_conn_mut(server_ch).ping();
         pair.drive_server();
-        pair.client.inbound.pop_back();
+        pair.client.inbound.pop_last();
         pair.server_conn_mut(server_ch).ping();
         pair.drive_server();
     }
@@ -4371,4 +4450,104 @@ fn initial_tail_loss_probe() {
     info!("continue connection establishment");
     pair.drive();
     pair.server.assert_accept();
+}
+
+#[test]
+fn throughput() -> TestResult {
+    const TOTAL_BYTES: usize = 1_000_000;
+    const BPS_LIMIT: u64 = 100_000;
+
+    let _guard = subscribe();
+    let mut pair = ConnPair::builder()
+        .with_routes(
+            BwLimitedRouting::new(
+                Pair::CLIENT_ADDR,
+                Pair::SERVER_ADDR,
+                crate::Instant::now(),
+                BwLimitConfig {
+                    bytes_per_second: BPS_LIMIT,
+                    buffer_size: 50 * 1500, // buffer that fits ~50 full packets
+                    latency: Duration::from_millis(3),
+                },
+            )
+            .into(),
+        )
+        .connect();
+
+    let mut bytes_to_send = TOTAL_BYTES;
+    let mut bytes_received = 0;
+
+    let start = pair.time;
+    let client_stream = pair.streams(Client).open(Dir::Bi).unwrap();
+    // send the first batch to ensure the other side created the stream
+    bytes_to_send -= pair.send_stream(Client, client_stream).write(&ZEROES)?;
+    let server_stream = loop {
+        pair.step();
+        if let Some(stream) = pair.streams(Server).accept(Dir::Bi) {
+            break stream;
+        }
+    };
+    loop {
+        if bytes_to_send > 0 {
+            send_bytes(pair.send_stream(Client, client_stream), &mut bytes_to_send)?;
+            if bytes_to_send == 0 {
+                pair.send_stream(Client, client_stream).finish()?;
+            }
+        }
+        recv_bytes(pair.recv_stream(Server, server_stream), &mut bytes_received);
+        if !pair.step() {
+            break;
+        }
+    }
+
+    assert_eq!(bytes_to_send, 0);
+    assert_eq!(bytes_received, TOTAL_BYTES);
+
+    let time = pair.time.saturating_duration_since(start);
+    let bytes_per_second = TOTAL_BYTES as f64 / time.as_secs_f64();
+    info!(bytes_received, ?time, bytes_per_second);
+
+    let expected_bps = BPS_LIMIT as f64;
+    // Less than 2% deviation from the BPS limit
+    assert!(
+        (bytes_per_second - expected_bps).abs() / expected_bps < 0.05,
+        "deviated too far from expected throughput limit"
+    );
+
+    Ok(())
+}
+
+const ZEROES: [u8; 10_000] = [0u8; 10_000];
+
+fn send_bytes(mut send_stream: crate::SendStream<'_>, bytes_to_send: &mut usize) -> TestResult {
+    while *bytes_to_send > 10_000 {
+        match send_stream.write(&ZEROES) {
+            Ok(written) => {
+                *bytes_to_send -= written;
+            }
+            Err(crate::WriteError::Blocked) => return Ok(()),
+            Err(e) => panic!("{e:?}"),
+        }
+    }
+    while *bytes_to_send > 0 {
+        match send_stream.write(&vec![0u8; *bytes_to_send]) {
+            Ok(written) => {
+                *bytes_to_send -= written;
+            }
+            Err(crate::WriteError::Blocked) => return Ok(()),
+            Err(e) => panic!("{e:?}"),
+        }
+    }
+    Ok(())
+}
+
+fn recv_bytes(mut recv_stream: crate::RecvStream<'_>, bytes_received: &mut usize) {
+    let Ok(mut chunks) = recv_stream.read(true) else {
+        return;
+    };
+    while let Ok(Some(chunk)) = chunks.next(10_000) {
+        *bytes_received += chunk.bytes.len();
+    }
+    // The callee needs to immediately pair.step()
+    let _ = chunks.finalize();
 }

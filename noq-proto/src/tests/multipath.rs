@@ -679,7 +679,7 @@ fn no_establish_after_abandon() -> TestResult {
     // the path, and sends a PATH_RESPONSE. We hold back the packet containing
     // the PATH_RESPONSE.
     pair.drive_client();
-    let withheld: Vec<_> = pair.server.inbound.drain(..).collect();
+    let withheld: Vec<_> = pair.server.inbound.drain().collect();
     assert!(
         !withheld.is_empty(),
         "expected the client's PATH_RESPONSE to be in flight"
@@ -694,8 +694,9 @@ fn no_establish_after_abandon() -> TestResult {
 
     // Now deliver the withheld PATH_RESPONSE. It validates the *already
     // abandoned* path.
-    for pkt in withheld {
-        pair.server.inbound.push_back(pkt);
+    let now = pair.time;
+    for (_, pkt) in withheld {
+        pair.server.inbound.push(now, pkt);
     }
     pair.advance_time();
     pair.drive_client();
@@ -2179,7 +2180,7 @@ fn regression_delayed_path_cids_blocked() -> TestResult {
     // This only works, because the server's outbound packet is constructed inefficiently:
     // The PATH_NEW_CONNECTION_ID frames should *actually* be coaleced together with the server's handshake response instead of
     // being put into a separate datagram. See also <https://github.com/n0-computer/noq/issues/66>
-    let captured_server_cids = pair.client.inbound.pop_back().unwrap();
+    let (_, captured_server_cids) = pair.client.inbound.pop_last().unwrap();
     pair.drive_client(); // Client receives confirmed handshake, but not PATH_NEW_CONNECTION_ID frames
     let server_ch = pair.server.assert_accept();
     pair.finish_connect(client_ch, server_ch);
@@ -2196,16 +2197,17 @@ fn regression_delayed_path_cids_blocked() -> TestResult {
 
     pair.drive_client(); // Client generates PATH_CIDS_BLOCKED
     // We intentionally drop the client's PATH_CIDS_BLOCKED frame.
-    pair.server.inbound.pop_back().unwrap();
+    pair.server.inbound.pop_last().unwrap();
     // After the client has sent the PATH_CIDS_BLOCKED frame, we give it all the server's CIDs.
-    pair.client.inbound.push_back(captured_server_cids);
+    let now = pair.time;
+    pair.client.inbound.push(now, captured_server_cids);
     pair.drive_client(); // Client processes the delayed server's PATH_NEW_CONNECTION_ID
 
     info!("Skipping forward 80ms");
     pair.time += Duration::from_millis(80); // Trigger the client's loss detection timer for the PATH_CIDS_BLOCKED frame
     pair.drive_client(); // Client generates another PATH_CIDS_BLOCKED
     // This is now an encrypted datagram containing a PATH_CIDS_BLOCKED path_id=1 next_seq=1 frame.
-    let captured_client_cids_blocked = pair.server.inbound.pop_back().unwrap();
+    let (_, captured_client_cids_blocked) = pair.server.inbound.pop_last().unwrap();
 
     let path_id = pair.open_path(
         Client,
@@ -2217,7 +2219,8 @@ fn regression_delayed_path_cids_blocked() -> TestResult {
     pair.drive(); // Fully process closing the path on both ends, including discarding path state
 
     // Now we send the delayed PATH_CIDS_BLOCKED frame, and it'll trigger a protocol violation
-    pair.server.inbound.push_front(captured_client_cids_blocked);
+    let now = pair.time;
+    pair.server.inbound.push(now, captured_client_cids_blocked);
     pair.drive();
 
     // The server must not close the connection over the stale frame.
@@ -2234,5 +2237,50 @@ fn regression_delayed_path_cids_blocked() -> TestResult {
             );
         }
     }
+    Ok(())
+}
+
+#[test]
+fn regression_discarded_path_stats_are_up_to_date() -> TestResult {
+    let _guard = subscribe();
+    let mut pair = ConnPair::builder().enable_multipath().connect();
+
+    let server_addr = pair.routes.public_server_addr();
+    let path_id = pair.open_path(
+        Client,
+        FourTuple::from_remote(server_addr),
+        PathStatus::Available,
+    )?;
+    pair.drive();
+
+    // Drain establishment events.
+    while pair.poll(Client).is_some() {}
+    while pair.poll(Server).is_some() {}
+
+    // Close the path and drive until both sides discard it.
+    pair.close_path(Client, path_id, 0u8.into())?;
+    pair.drive();
+
+    assert_matches!(
+        pair.poll(Client),
+        Some(Event::Path(PathEvent::Abandoned { id, .. })) if id == path_id
+    );
+    assert_matches!(
+        pair.poll(Server),
+        Some(Event::Path(PathEvent::Abandoned { id, .. })) if id == path_id
+    );
+
+    pair.drive();
+
+    let discarded_stats = assert_matches!(
+        pair.poll(Client),
+        Some(Event::Path(PathEvent::Discarded { id, path_stats })) if id == path_id
+        => *path_stats
+    );
+
+    // After a full handshake + MTU probing on the second path, these must be non-zero.
+    assert_ne!(discarded_stats.cwnd, 0);
+    assert_ne!(discarded_stats.current_mtu, 0);
+
     Ok(())
 }

@@ -1082,6 +1082,10 @@ impl Connection {
             if !connection_close_pending
                 && let Some(transmit) = self.poll_transmit_off_path(now, buf, path_id)
             {
+                #[cfg(test)]
+                {
+                    self.partial_stats.transmits_tx += 1;
+                }
                 return Some(transmit);
             }
 
@@ -1094,6 +1098,10 @@ impl Connection {
                 &info,
                 connection_close_pending,
             ) {
+                #[cfg(test)]
+                {
+                    self.partial_stats.transmits_tx += 1;
+                }
                 return Some(transmit);
             }
 
@@ -1118,6 +1126,10 @@ impl Connection {
             let mut next_path_id = self.paths.first_entry().map(|e| *e.key());
             while let Some(path_id) = next_path_id {
                 if let Some(transmit) = self.poll_transmit_mtu_probe(now, buf, path_id) {
+                    #[cfg(test)]
+                    {
+                        self.partial_stats.transmits_tx += 1;
+                    }
                     return Some(transmit);
                 }
                 next_path_id = self.paths.keys().find(|i| **i > path_id).copied();
@@ -1243,7 +1255,7 @@ impl Connection {
             .inc_total_sent(transmit.len() as u64);
 
         self.path_stats
-            .for_path(path_id)
+            .get_mut(path_id)
             .udp_tx
             .on_sent(transmit.num_datagrams() as u64, transmit.len());
 
@@ -1632,7 +1644,7 @@ impl Connection {
                         &mut self.spaces[space_id],
                         is_multipath_negotiated,
                         &mut builder,
-                        &mut self.path_stats.for_path(path_id).frame_tx,
+                        &mut self.path_stats.get_mut(path_id).frame_tx,
                         self.crypto_state.has_keys(space_id.encryption_level()),
                     );
                 }
@@ -1648,7 +1660,7 @@ impl Connection {
                     builder.frame_space_remaining() > frame::ConnectionClose::SIZE_BOUND,
                     "ACKs should leave space for ConnectionClose"
                 );
-                let stats = &mut self.path_stats.for_path(path_id).frame_tx;
+                let stats = &mut self.path_stats.get_mut(path_id).frame_tx;
                 if frame::ConnectionClose::SIZE_BOUND < builder.frame_space_remaining() {
                     let max_frame_size = builder.frame_space_remaining();
                     let close: Close = match self.state.as_type() {
@@ -1714,7 +1726,7 @@ impl Connection {
                 pad_datagram |= PadDatagram::ToMinMtu;
             }
 
-            for (path_id, _pn) in builder.sent_frames().largest_acked.iter() {
+            for path_id in builder.sent_frames().largest_acked.keys() {
                 self.spaces[space_id]
                     .for_path(*path_id)
                     .pending_acks
@@ -1806,19 +1818,19 @@ impl Connection {
 
         // We implement MTU probes as ping packets padded up to the probe size
         trace!(?probe_size, "writing MTUD probe");
-        builder.write_frame(frame::Ping, &mut self.path_stats.for_path(path_id).frame_tx);
+        builder.write_frame(frame::Ping, &mut self.path_stats.get_mut(path_id).frame_tx);
 
         // If supported by the peer, we want no delays to the probe's ACK
         if self.peer_supports_ack_frequency() {
             builder.write_frame(
                 frame::ImmediateAck,
-                &mut self.path_stats.for_path(path_id).frame_tx,
+                &mut self.path_stats.get_mut(path_id).frame_tx,
             );
         }
 
         builder.finish_and_track(now, self, path_id, PadDatagram::ToSize(probe_size));
 
-        self.path_stats.for_path(path_id).sent_plpmtud_probes += 1;
+        self.path_stats.get_mut(path_id).sent_plpmtud_probes += 1;
 
         Some(self.build_transmit(path_id, transmit))
     }
@@ -1984,7 +1996,7 @@ impl Connection {
         // this is sent first.
         let mut builder = PacketBuilder::new(now, SpaceId::Data, path_id, *prev_cid, buf, self)?;
         let challenge = frame::PathChallenge(token);
-        let stats = &mut self.path_stats.for_path(path_id).frame_tx;
+        let stats = &mut self.path_stats.get_mut(path_id).frame_tx;
         builder.write_frame_with_log_msg(challenge, stats, Some("validating previous path"));
 
         // An endpoint MUST expand datagrams that contain a PATH_CHALLENGE frame
@@ -1995,7 +2007,7 @@ impl Connection {
 
         builder.finish(self, now);
         self.path_stats
-            .for_path(path_id)
+            .get_mut(path_id)
             .udp_tx
             .on_sent(1, buf.len());
 
@@ -2038,7 +2050,7 @@ impl Connection {
         buf.start_new_datagram();
 
         let mut builder = PacketBuilder::new(now, SpaceId::Data, path_id, cid, buf, self)?;
-        let stats = &mut self.path_stats.for_path(path_id).frame_tx;
+        let stats = &mut self.path_stats.get_mut(path_id).frame_tx;
         builder.write_frame_with_log_msg(frame, stats, Some("(off-path)"));
 
         // PATH_CHALLENGE (off-path)
@@ -2053,7 +2065,7 @@ impl Connection {
             && self.n0_nat_traversal.client_side().is_ok()
         {
             let token = self.rng.random();
-            let stats = &mut self.path_stats.for_path(path_id).frame_tx;
+            let stats = &mut self.path_stats.get_mut(path_id).frame_tx;
             builder.write_frame(frame::PathChallenge(token), stats);
             let ip_port = (network_path.remote.ip(), network_path.remote.port());
             self.n0_nat_traversal.mark_probe_sent(ip_port, token);
@@ -2065,7 +2077,7 @@ impl Connection {
         builder.finish(self, now);
 
         let size = buf.len();
-        self.path_stats.for_path(path_id).udp_tx.on_sent(1, size);
+        self.path_stats.get_mut(path_id).udp_tx.on_sent(1, size);
 
         trace!(
             dst = ?network_path.remote,
@@ -2117,7 +2129,7 @@ impl Connection {
         buf.start_new_datagram();
 
         let mut builder = PacketBuilder::new(now, SpaceId::Data, path_id, cid, &mut buf, self)?;
-        let stats = &mut self.path_stats.for_path(path_id).frame_tx;
+        let stats = &mut self.path_stats.get_mut(path_id).frame_tx;
         builder.write_frame_with_log_msg(frame, stats, Some("(nat-traversal)"));
         // Off-path: not tracked in congestion control. The packet is sent to a
         // different destination than path_id's network path.
@@ -2127,7 +2139,7 @@ impl Connection {
         self.n0_nat_traversal.mark_probe_sent(remote, token);
 
         let size = buf.len();
-        self.path_stats.for_path(path_id).udp_tx.on_sent(1, size);
+        self.path_stats.get_mut(path_id).udp_tx.on_sent(1, size);
 
         trace!(dst = ?remote, len = buf.len(), "sending off-path NAT probe");
         Some(Transmit {
@@ -2216,7 +2228,7 @@ impl Connection {
                     // anti-amplification blocked for it previously.
                     .unwrap_or(false);
 
-                let rx = &mut self.path_stats.for_path(path_id).udp_rx;
+                let rx = &mut self.path_stats.get_mut(path_id).udp_rx;
                 rx.datagrams += 1;
                 rx.bytes += first_decode.len() as u64;
                 let data_len = first_decode.len();
@@ -2231,7 +2243,7 @@ impl Connection {
                 }
 
                 if let Some(data) = remaining {
-                    self.path_stats.for_path(path_id).udp_rx.bytes += data.len() as u64;
+                    self.path_stats.get_mut(path_id).udp_rx.bytes += data.len() as u64;
                     self.handle_coalesced(now, network_path, path_id, ecn, data);
                 }
 
@@ -2293,6 +2305,11 @@ impl Connection {
     fn early_discard_packet(&mut self, network_path: FourTuple, path_id: PathId) -> bool {
         if self.is_handshaking() && path_id != PathId::ZERO {
             debug!(%network_path, %path_id, "discarding multipath packet during handshake");
+            return true;
+        }
+
+        if !self.paths.contains_key(&path_id) && self.abandoned_paths.contains(&path_id) {
+            trace!(%path_id, "discarding packet for discarded path");
             return true;
         }
 
@@ -2525,10 +2542,11 @@ impl Connection {
                                 self.qlog.with_time(now),
                             );
                             debug!("path migration validation failed");
+                            path.data.reset_on_path_challenges();
                             if let Some((_, prev)) = path.prev.take() {
                                 path.data = prev;
+                                self.set_loss_detection_timer(now, path_id);
                             }
-                            path.data.reset_on_path_challenges();
                         }
                         PathTimer::PathChallengeLost => {
                             let Some(path) = self.paths.get_mut(&path_id) else {
@@ -2640,11 +2658,11 @@ impl Connection {
     /// Returns path statistics
     pub fn path_stats(&mut self, path_id: PathId) -> Option<PathStats> {
         let path = self.paths.get(&path_id)?;
-        let stats = self.path_stats.for_path(path_id);
+        let mut stats = self.path_stats.get(path_id).unwrap_or_default();
         stats.rtt = path.data.rtt.get();
         stats.cwnd = path.data.congestion.window();
         stats.current_mtu = path.data.mtud.current_mtu();
-        Some(*stats)
+        Some(stats)
     }
 
     /// Ping the remote endpoint
@@ -2926,7 +2944,7 @@ impl Connection {
         };
 
         if self.detect_spurious_loss(&ack, space, path) {
-            self.path_stats.for_path(path).spurious_congestion_events += 1;
+            self.path_stats.get_mut(path).spurious_congestion_events += 1;
             self.path_data_mut(path)
                 .congestion
                 .on_spurious_congestion_event();
@@ -3120,7 +3138,7 @@ impl Connection {
             }
             Ok(false) => {}
             Ok(true) => {
-                self.path_stats.for_path(path).congestion_events += 1;
+                self.path_stats.get_mut(path).congestion_events += 1;
                 self.path_data_mut(path).congestion.on_congestion_event(
                     now,
                     largest_sent_time,
@@ -3203,7 +3221,7 @@ impl Connection {
         }
 
         let Some((_, space)) = self.pto_time_and_space(now, path_id) else {
-            error!(%path_id, "PTO expired while unset");
+            debug!(%path_id, "PTO expired while unset");
             return;
         };
         trace!(
@@ -3385,8 +3403,9 @@ impl Connection {
             );
         }
         // Before removing the path, we fetch the final path stats via `Self::path_stats`.
-        // This updates some values for the last time.
-        let path_stats = self.path_stats.discard(&path_id);
+        // This ensures snapshot values (like rtt) are properly updated.
+        let path_stats = self.path_stats(path_id).unwrap_or_default();
+        self.path_stats.discard(&path_id);
         self.partial_stats += path_stats;
         self.paths.remove(&path_id);
         self.spaces[SpaceId::Data].number_spaces.remove(&path_id);
@@ -3424,7 +3443,7 @@ impl Connection {
                 .get(largest_lost)
                 .unwrap()
                 .time_sent;
-            let path_stats = self.path_stats.for_path(path_id);
+            let path_stats = self.path_stats.get_mut(path_id);
             path_stats.lost_packets += lost_packets.len() as u64;
             path_stats.lost_bytes += size_of_lost_packets;
             trace!(
@@ -3472,7 +3491,7 @@ impl Connection {
                     self.datagrams.send_blocked = false;
                     self.events.push_back(Event::DatagramsUnblocked);
                 }
-                self.path_stats.for_path(path_id).black_holes_detected += 1;
+                self.path_stats.get_mut(path_id).black_holes_detected += 1;
             }
 
             // Don't apply congestion penalty for lost ack-only packets
@@ -3480,7 +3499,7 @@ impl Connection {
                 old_bytes_in_flight != self.path_data_mut(path_id).in_flight.bytes;
 
             if lost_ack_eliciting {
-                self.path_stats.for_path(path_id).congestion_events += 1;
+                self.path_stats.get_mut(path_id).congestion_events += 1;
                 self.path_data_mut(path_id).congestion.on_congestion_event(
                     now,
                     largest_lost_sent,
@@ -3504,7 +3523,7 @@ impl Connection {
                 .unwrap()
                 .remove_in_flight(&info);
             self.path_data_mut(path_id).mtud.on_probe_lost();
-            self.path_stats.for_path(path_id).lost_plpmtud_probes += 1;
+            self.path_stats.get_mut(path_id).lost_plpmtud_probes += 1;
         }
     }
 
@@ -4224,8 +4243,6 @@ impl Connection {
         stateless_reset: bool,
         mut qlog: QlogRecvPacket,
     ) {
-        self.path_stats.for_path(path_id).udp_rx.ios += 1;
-
         if let Some(ref packet) = packet {
             trace!(
                 "got {:?} packet ({} bytes) from {} using id {}",
@@ -4514,10 +4531,7 @@ impl Connection {
 
                     trace!(?frame, "processing frame in closed state");
 
-                    self.path_stats
-                        .for_path(path_id)
-                        .frame_rx
-                        .record(frame.ty());
+                    self.path_stats.get_mut(path_id).frame_rx.record(frame.ty());
 
                     if let Frame::Close(_error) = frame {
                         self.state.move_to_draining(None);
@@ -4821,10 +4835,7 @@ impl Connection {
                 _ => Some(trace_span!("frame", ty = %frame.ty(), path = tracing::field::Empty)),
             };
 
-            self.path_stats
-                .for_path(path_id)
-                .frame_rx
-                .record(frame.ty());
+            self.path_stats.get_mut(path_id).frame_rx.record(frame.ty());
 
             let _guard = span.as_ref().map(|x| x.enter());
             ack_eliciting |= frame.is_ack_eliciting();
@@ -4901,10 +4912,7 @@ impl Connection {
                 _ => trace_span!("frame", ty = %frame.ty(), path = tracing::field::Empty),
             };
 
-            self.path_stats
-                .for_path(path_id)
-                .frame_rx
-                .record(frame.ty());
+            self.path_stats.get_mut(path_id).frame_rx.record(frame.ty());
             // Crypto, Stream and Datagram frames are special cased in order no pollute
             // the log with payload data
             match &frame {
@@ -5014,7 +5022,7 @@ impl Connection {
                         self.open_nat_traversed_paths(now);
                     } else {
                         // Try to see if this is a response to an on-path PATH_CHALLENGE.
-                        self.handle_path_response_on_path(now, response, path_id, network_path);
+                        self.handle_path_response_on_path(now, response, path_id);
                     }
                 }
                 Frame::MaxData(frame::MaxData(bytes)) => {
@@ -5602,17 +5610,13 @@ impl Connection {
         now: Instant,
         response: frame::PathResponse,
         path_id: PathId,
-        network_path: FourTuple,
     ) {
         let is_multipath_negotiated = self.is_multipath_negotiated();
         let path = self
             .paths
             .get_mut(&path_id)
             .expect("payload is processed only after the path becomes known");
-        match path
-            .data
-            .on_path_response_received(now, response.0, network_path)
-        {
+        match path.data.on_path_response_received(now, response.0) {
             paths::OnPathResponseReceived::OnPath if !self.abandoned_paths.contains(&path_id) => {
                 let qlog = self.qlog.with_time(now);
                 self.timers.stop(
@@ -6065,7 +6069,7 @@ impl Connection {
         let is_multipath_negotiated = self.is_multipath_negotiated();
         let space_has_keys = self.crypto_state.has_keys(space_id.encryption_level());
         let is_0rtt = space_id == SpaceId::Data && !space_has_keys;
-        let stats = &mut self.path_stats.for_path(path_id).frame_tx;
+        let stats = &mut self.path_stats.get_mut(path_id).frame_tx;
         let space = &mut self.spaces[space_id];
         let path = &mut self.paths.get_mut(&path_id).expect("known path").data;
         space
@@ -6190,24 +6194,10 @@ impl Connection {
 
             // Always include an OBSERVED_ADDR frame with a PATH_CHALLENGE, regardless
             // of whether one has already been sent on this path.
-            if space_id == SpaceId::Data
-                && self
-                    .config
-                    .address_discovery_role
-                    .should_report(&self.peer_params.address_discovery_role)
-            {
-                let frame = frame::ObservedAddr::new(
-                    path.network_path.remote,
-                    self.next_observed_addr_seq_no,
-                );
-                if builder.frame_space_remaining() > frame.size() {
-                    builder.write_frame(frame, stats);
-
-                    self.next_observed_addr_seq_no =
-                        self.next_observed_addr_seq_no.saturating_add(1u8);
-                    path.pending.observed_address = false;
-                }
-            }
+            path.pending.observed_address = self
+                .config
+                .address_discovery_role
+                .should_report(&self.peer_params.address_discovery_role);
         }
 
         // PATH_RESPONSE (on-path)
@@ -6226,24 +6216,10 @@ impl Connection {
             // NOTE: this is technically not required but might be useful to ride the
             // request/response nature of path challenges to refresh an observation
             // Since PATH_RESPONSE is a probing frame, this is allowed by the spec.
-            if space_id == SpaceId::Data
-                && self
-                    .config
-                    .address_discovery_role
-                    .should_report(&self.peer_params.address_discovery_role)
-            {
-                let frame = frame::ObservedAddr::new(
-                    path.network_path.remote,
-                    self.next_observed_addr_seq_no,
-                );
-                if builder.frame_space_remaining() > frame.size() {
-                    builder.write_frame(frame, stats);
-
-                    self.next_observed_addr_seq_no =
-                        self.next_observed_addr_seq_no.saturating_add(1u8);
-                    path.pending.observed_address = false;
-                }
-            }
+            path.pending.observed_address = self
+                .config
+                .address_discovery_role
+                .should_report(&self.peer_params.address_discovery_role);
         }
 
         // ADD_ADDRESS
@@ -6318,7 +6294,6 @@ impl Connection {
 
         // OBSERVED_ADDR
         if !scheduling_info.is_abandoned
-            && scheduling_info.may_send_data
             && space_id == SpaceId::Data
             && path.pending.observed_address
         {
