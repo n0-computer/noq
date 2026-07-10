@@ -1109,8 +1109,11 @@ pub enum PathAbandonReason {
     /// We didn't receive a path response in time after opening this path.
     ///
     /// This event is no longer emitted, when validation fails a path is only abandoned once
-    /// there's a path timeout and the [`Self::TimedOut`] event would be emitted instead.
-    // TODO(flub): should this be deprecated?
+    /// there's a path timeout and the [`Self::TimedOut`] event will be emitted instead.
+    #[deprecated(
+        since = "1.1.0",
+        note = "This event is no longer emitted, TimedOut will be emitted instead"
+    )]
     ValidationFailed,
     /// We didn't receive any data from the remote within the path's idle timeout.
     TimedOut,
@@ -1133,6 +1136,7 @@ impl PathAbandonReason {
     pub(crate) fn error_code(&self) -> TransportErrorCode {
         match self {
             Self::ApplicationClosed { error_code } => (*error_code).into(),
+            #[allow(deprecated)]
             Self::ValidationFailed | Self::TimedOut | Self::UnusableAfterNetworkChange => {
                 TransportErrorCode::PATH_UNSTABLE_OR_POOR
             }

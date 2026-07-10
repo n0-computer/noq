@@ -4459,19 +4459,16 @@ fn throughput() -> TestResult {
 
     let _guard = subscribe();
     let mut pair = ConnPair::builder()
-        .with_routes(
-            BwLimitedRouting::new(
-                Pair::CLIENT_ADDR,
-                Pair::SERVER_ADDR,
-                crate::Instant::now(),
-                BwLimitConfig {
-                    bytes_per_second: BPS_LIMIT,
-                    buffer_size: 50 * 1500, // buffer that fits ~50 full packets
-                    latency: Duration::from_millis(3),
-                },
-            )
-            .into(),
-        )
+        .with_routes(BwLimitedRouting::new(
+            Pair::CLIENT_ADDR,
+            Pair::SERVER_ADDR,
+            crate::Instant::now(),
+            BwLimitConfig {
+                bytes_per_second: BPS_LIMIT,
+                buffer_size: 50 * 1500, // buffer that fits ~50 full packets
+                latency: Duration::from_millis(3),
+            },
+        ))
         .connect();
 
     let mut bytes_to_send = TOTAL_BYTES;

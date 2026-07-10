@@ -3,7 +3,7 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet, VecDeque},
     io::{self, Write},
     mem,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs},
     num::{NonZeroU32, NonZeroUsize},
     str,
     sync::{Arc, LazyLock, Mutex},
@@ -1942,16 +1942,53 @@ impl ManyToManyRouting {
         }
     }
 
+    /// Creates new routes from interface addresses and their allowed inbound links.
+    ///
+    /// Verifies all interface address are unique, and that all inbound links are valid.
     pub(super) fn from_routes(
-        client_routes: Vec<(SocketAddr, usize)>,
-        server_routes: Vec<(SocketAddr, usize)>,
+        client_routes: impl IntoIterator<Item = (impl ToSocketAddrs, usize)>,
+        server_routes: impl IntoIterator<Item = (impl ToSocketAddrs, usize)>,
     ) -> Self {
+        let client_routes: Vec<_> = client_routes
+            .into_iter()
+            .map(|(to_sockaddr, idx)| {
+                (
+                    to_sockaddr
+                        .to_socket_addrs()
+                        .expect("bad SocketAddr")
+                        .next()
+                        .expect("missing SocketAddr"),
+                    idx,
+                )
+            })
+            .collect();
+        let server_routes: Vec<_> = server_routes
+            .into_iter()
+            .map(|(to_sockaddr, idx)| {
+                (
+                    to_sockaddr
+                        .to_socket_addrs()
+                        .expect("bad SocketAddr")
+                        .next()
+                        .expect("missing SocketAddr"),
+                    idx,
+                )
+            })
+            .collect();
         for (_, idx) in client_routes.iter() {
             assert!(*idx < server_routes.len(), "routing table corrupt");
         }
         for (_, idx) in server_routes.iter() {
             assert!(*idx < client_routes.len(), "routing table corrupt");
         }
+        let mut all_addrs = client_routes.clone();
+        all_addrs.extend_from_slice(&server_routes);
+        all_addrs.dedup_by_key(|(addr, _idx)| *addr);
+        assert_eq!(
+            all_addrs.len(),
+            client_routes.len() + server_routes.len(),
+            "Duplicate interface addresses used"
+        );
         Self {
             client_routes,
             server_routes,

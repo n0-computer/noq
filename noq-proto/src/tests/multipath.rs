@@ -447,18 +447,14 @@ fn open_path_validation_fails_client_side() -> TestResult {
     let _guard = subscribe();
     let client_addr_two = "[::1:2]:1".parse()?;
     let server_addr_two = "[::2:2]:1".parse()?;
-    assert_ne!(client_addr_two, Pair::SERVER_ADDR);
-    assert_ne!(client_addr_two, Pair::CLIENT_ADDR);
-    assert_ne!(server_addr_two, Pair::SERVER_ADDR);
-    assert_ne!(server_addr_two, Pair::CLIENT_ADDR);
     let mut builder = ConnPair::builder()
         .enable_multipath()
         .disable_mtud_discovery()
         .with_routes(
             // client_addr_two can send to server_addr_two, but the reverse is broken.
             ManyToManyRouting::from_routes(
-                vec![(Pair::CLIENT_ADDR, 0), (client_addr_two, 0)],
-                vec![(Pair::SERVER_ADDR, 0), (server_addr_two, 1)],
+                [(Pair::CLIENT_ADDR, 0), (client_addr_two, 0)],
+                [(Pair::SERVER_ADDR, 0), (server_addr_two, 1)],
             ),
         );
     builder
@@ -469,41 +465,25 @@ fn open_path_validation_fails_client_side() -> TestResult {
         .default_path_max_idle_timeout(Some(Duration::from_secs(30)));
     let mut pair = builder.connect();
 
-    // Open a path from ::1:2 to ::2:2. Client datagrams can be routed, server datagrams
-    // will come from ::2:2 from ::1:2 but only ::2:1 is allowed to send to ::1:2, so server
-    // datagrams will be dropped.. This might be crazy, please file complaints to
-    // ManyToManyRouting.
+    // Open a path from ::1:2 to ::2:2. Client datagrams can be routed. Server datagrams
+    // will arrive at ::1:2 from ::2:2, but only ::2:1 is allowed to send to ::1:2, so
+    // server datagrams will be dropped.
     let network_path = FourTuple {
         remote: server_addr_two,
         local_ip: None,
     };
     let path_id = pair.open_path(Client, network_path, PathStatus::Available)?;
 
-    // // make sure the client's path open makes it through to the server and is processed.
-    // pair.drive_client();
-    // pair.drive_server();
-
-    // info!("dropping client inbound queue");
-    // pair.client.inbound.clear();
-
-    // // Sever the connection and run it to idle.
-    // // This makes sure that
-    // // - path validation can't succeed because path responses don't make it through and
-    // // - the server needs to decide to close the path on its own, because path abandons
-    // //   don't make it through.
-    // while pair.blackhole_step(true, true) {}
-
-    info!("drive to idle");
+    info!("client opens path, drive to just before idle");
     pair.drive();
 
     info!("manual keep-alive of PathId::ZERO");
-    // Though some ACKs will have been flowing over this path already, keeping it alive.
+    // Not strictly needed as some ACKs will have been flowing over this path already,
+    // keeping it alive.
     pair.ping_path(Client, PathId::ZERO)?;
     pair.ping_path(Client, PathId::ZERO)?;
 
-    info!("drive past idle");
-    // min_opt(pair.client.next_wakeup(), pair.server.next_wakeup()).map(|t| pair.time = t);
-    // pair.blackhole_step(true, true);
+    info!("drive past new path idle");
     pair.drive();
 
     // The client gave up first and timed out.

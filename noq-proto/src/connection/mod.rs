@@ -976,18 +976,6 @@ impl Connection {
             .address_discovery_role
             .should_report(&self.peer_params.address_discovery_role);
 
-        // if !data.validated {
-        //     // Hard cap on how long to try validation for.
-        //     // TODO(flub): 3 * PTO is way too short, it makes opening paths very susceptible
-        //     //    to packet loss. I prefer using the path idle timeout probably.
-        //     let pto = self.ack_frequency.max_ack_delay_for_pto() + data.rtt.pto_base();
-        //     self.timers.set(
-        //         Timer::PerPath(path_id, PathTimer::AbandonFromValidation),
-        //         now + 3 * pto,
-        //         self.qlog.with_time(now),
-        //     );
-        // }
-
         let path = vacant_entry.insert(PathState { data, prev: None });
 
         let mut pn_space = spaces::PacketNumberSpace::new(now, SpaceId::Data, &mut self.rng);

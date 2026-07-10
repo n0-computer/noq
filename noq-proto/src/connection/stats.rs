@@ -22,7 +22,7 @@ pub struct UdpStats {
     ///
     /// This can't be measured from this crate and will always be 0
     #[deprecated(
-        since = "1.0.2",
+        since = "1.1.0",
         note = "IO counting can't be meaningfully measured from this crate. See <https://github.com/n0-computer/noq/issues/727>"
     )]
     pub ios: u64,
