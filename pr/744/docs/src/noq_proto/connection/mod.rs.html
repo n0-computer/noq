@@ -1712,7 +1712,7 @@
 <a href=#1712 id=1712 data-nosnippet>1712</a>                pad_datagram |= PadDatagram::ToMinMtu;
 <a href=#1713 id=1713 data-nosnippet>1713</a>            }
 <a href=#1714 id=1714 data-nosnippet>1714</a>
-<a href=#1715 id=1715 data-nosnippet>1715</a>            <span class="kw">for </span>(path_id, _pn) <span class="kw">in </span>builder.sent_frames().largest_acked.iter() {
+<a href=#1715 id=1715 data-nosnippet>1715</a>            <span class="kw">for </span>path_id <span class="kw">in </span>builder.sent_frames().largest_acked.keys() {
 <a href=#1716 id=1716 data-nosnippet>1716</a>                <span class="self">self</span>.spaces[space_id]
 <a href=#1717 id=1717 data-nosnippet>1717</a>                    .for_path(<span class="kw-2">*</span>path_id)
 <a href=#1718 id=1718 data-nosnippet>1718</a>                    .pending_acks
