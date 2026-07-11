@@ -380,19 +380,13 @@ impl Connection {
 
     /// Receive a batch of application datagrams.
     ///
-    /// This is the batch analogue of [`read_datagram()`]: it drains up to
-    /// `out.len()` buffered datagrams in a single lock hold, filling `out` from
-    /// the front in arrival order, and returns the count written. If no datagrams
-    /// are buffered it parks on the same `datagram_received` notify as
-    /// `read_datagram` until at least one arrives, then drains. Mirrors
-    /// [`RecvStream::read_many_chunks`].
-    ///
-    /// Use this instead of [`read_datagram()`] in a loop when forwarding bursts: it
-    /// amortizes the connection mutex and the wake across a whole batch, which is
-    /// the dominant cost at high pps on the receive side.
+    /// This is the batch analogue of [`read_datagram()`]. The returned future
+    /// resolves once at least one datagram is buffered, drains up to `out.len()` of
+    /// them into `out` from the front in arrival order, and yields the count
+    /// written. Use it instead of [`read_datagram()`] in a loop when forwarding
+    /// bursts: a whole batch is taken under a single lock hold.
     ///
     /// [`read_datagram()`]: Connection::read_datagram
-    /// [`RecvStream::read_many_chunks`]: crate::RecvStream::read_many_chunks
     pub fn read_many_datagrams<'a>(&'a self, out: &'a mut [Bytes]) -> ReadManyDatagrams<'a> {
         ReadManyDatagrams {
             conn: &self.0,
@@ -690,17 +684,14 @@ impl Connection {
 
     /// Transmit many unreliable, unordered application datagrams in a single call.
     ///
-    /// This is the batch analogue of [`send_datagram()`]: it takes the connection
-    /// mutex once and queues the whole batch under a single lock hold, then wakes
-    /// the driver. For a high-rate sender (e.g. a VPN forwarding a burst of TUN
-    /// packets to one peer) this turns N mutex acquisitions into one and N driver
-    /// wakes into one, which is the dominant cost at high pps.
+    /// This is the batch analogue of [`send_datagram()`]: it queues the whole batch
+    /// under one lock hold and wakes the driver once, reducing the per-datagram
+    /// overhead of calling [`send_datagram()`] repeatedly. Like [`send_datagram()`],
+    /// older queued datagrams may be dropped to make room.
     ///
-    /// Datagrams are consumed from the slice in order and accepted until the
-    /// first one that exceeds the current maximum datagram size, at which point the
-    /// call stops and returns the number accepted. To recover the unaccepted
-    /// datagrams (e.g. to fragment or drop the oversized one and retry the rest),
-    /// slice the input with the returned count: `&datagrams[count..]`.
+    /// Returns the number of datagrams queued. The batch is rejected with
+    /// [`SendDatagramError::TooLarge`] if any datagram exceeds
+    /// [`max_datagram_size()`](Self::max_datagram_size).
     ///
     /// [`send_datagram()`]: Connection::send_datagram
     pub fn send_many_datagrams(&self, datagrams: &[Bytes]) -> Result<usize, SendDatagramError> {
@@ -708,15 +699,18 @@ impl Connection {
         if let Some(ref x) = conn.error {
             return Err(SendDatagramError::ConnectionLost(x.clone()));
         }
-        conn.inner.datagrams().send_many(datagrams).map_err(|e| {
-            use proto::SendDatagramError::*;
-            match e {
-                Blocked(..) => unreachable!(),
-                UnsupportedByPeer => SendDatagramError::UnsupportedByPeer,
-                Disabled => SendDatagramError::Disabled,
-                TooLarge => SendDatagramError::TooLarge,
-            }
-        })
+        conn.inner
+            .datagrams()
+            .send_many(datagrams, true)
+            .map_err(|e| {
+                use proto::SendDatagramError::*;
+                match e {
+                    Blocked(..) => unreachable!(),
+                    UnsupportedByPeer => SendDatagramError::UnsupportedByPeer,
+                    Disabled => SendDatagramError::Disabled,
+                    TooLarge => SendDatagramError::TooLarge,
+                }
+            })
     }
 
     /// Transmit `data` as an unreliable, unordered application datagram

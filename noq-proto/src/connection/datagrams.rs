@@ -37,17 +37,8 @@ impl Datagrams<'_> {
             return Err(SendDatagramError::TooLarge);
         }
         if drop {
-            while self.over_send_budget() {
-                let prev = self
-                    .conn
-                    .datagrams
-                    .outgoing
-                    .pop_front()
-                    .expect("datagrams.outgoing_total desynchronized");
-                trace!(len = prev.data.len(), "dropping outgoing datagram");
-                self.conn.datagrams.outgoing_total -= prev.data.len();
-            }
-        } else if self.would_exceed_send_budget(data.len()) {
+            self.drop_oldest_until_fits();
+        } else if !self.has_send_buffer_capacity(data.len()) {
             self.conn.datagrams.send_blocked = true;
             return Err(SendDatagramError::Blocked(data));
         }
@@ -58,67 +49,46 @@ impl Datagrams<'_> {
 
     /// Queue many unreliable, unordered datagrams for transmission in a single call.
     ///
-    /// This is the batch analogue of [`send`](Self::send) with `drop = true`: it
-    /// amortizes the per-datagram bookkeeping (size checks, buffer accounting) and
-    /// lets a caller that already has a batch of `Bytes` push them under one logical
-    /// operation.
+    /// This is the batch analogue of [`send`](Self::send): it applies the peer-support
+    /// and size checks once and queues the whole batch under one logical operation.
     ///
-    /// Datagrams are consumed from the slice in order and accepted until the
-    /// first one that exceeds the current `max_size`, at which point the call stops
-    /// and returns the number accepted so far. To recover the unaccepted
-    /// datagrams (e.g. to fragment or drop the oversized one and retry the rest),
-    /// slice the input with the returned count: `&datagrams[count..]`. This
-    /// mirrors the "first K succeeded" contract of `sendmmsg` and of
-    /// `SendStream::write_chunks`.
+    /// The batch is rejected atomically if any datagram is too large: when any element
+    /// exceeds [`max_size`](Self::max_size) this returns [`TooLarge`] and queues nothing,
+    /// so a caller never has to reason about a partially-sent batch on a size error.
     ///
-    /// Drop-oldest backpressure is applied per element, before each push: oldest
-    /// queued datagrams are dropped until the new one fits within the send buffer
-    /// budget (or the queue is empty). Doing this per element rather than in a
-    /// single pass after enqueueing the whole batch keeps the outgoing deque
-    /// bounded across a burst — it never transiently holds the entire batch, so a
-    /// high-rate sender's allocation stays at steady state. Datagrams displaced by
-    /// later batch elements are not reported separately, consistent with the silent
-    /// drop-oldest behaviour of `send` with `drop = true`. A datagram larger than
-    /// the budget is still enqueued once the queue is empty, leaving the buffer
-    /// transiently over budget until the next call trims it.
+    /// `drop` selects the backpressure behaviour, matching [`send`](Self::send):
     ///
-    /// Returns `Ok(n)` where `n` is the number of datagrams accepted from the
-    /// front of the slice (possibly 0, e.g. if the first datagram is too large).
-    /// Returns `Err` iff datagrams are unsupported or disabled.
-    pub fn send_many(&mut self, datagrams: &[Bytes]) -> Result<usize, SendDatagramError> {
+    /// - `drop = true` drops the oldest queued datagrams to make room, so every element
+    ///   is queued and `Ok(datagrams.len())` is returned.
+    /// - `drop = false` queues elements until the send buffer is full, then stops and
+    ///   returns `Ok(n)` for the `n` elements queued. The remaining elements are the
+    ///   caller's to retry once space frees up.
+    ///
+    /// Returns `Err` if datagrams are unsupported by the peer or disabled locally.
+    ///
+    /// [`TooLarge`]: SendDatagramError::TooLarge
+    pub fn send_many(
+        &mut self,
+        datagrams: &[Bytes],
+        drop: bool,
+    ) -> Result<usize, SendDatagramError> {
         if self.conn.config.datagram_receive_buffer_size.is_none() {
             return Err(SendDatagramError::Disabled);
         }
         let max = self
             .max_size()
             .ok_or(SendDatagramError::UnsupportedByPeer)?;
+        if datagrams.iter().any(|data| data.len() > max) {
+            return Err(SendDatagramError::TooLarge);
+        }
 
         let mut queued = 0usize;
         for data in datagrams {
-            if data.len() > max {
-                // Stop at the first datagram that can't be sent as-is. The
-                // caller is expected to inspect the remainder (fragment / drop
-                // the offender) and retry; see the doc comment above.
-                trace!(
-                    len = data.len(),
-                    max, "stopping batch at oversized datagram"
-                );
+            if drop {
+                self.drop_oldest_until_fits();
+            } else if !self.has_send_buffer_capacity(data.len()) {
+                self.conn.datagrams.send_blocked = true;
                 break;
-            }
-            // Make room for this datagram by dropping the oldest queued ones,
-            // mirroring `send(data, true)`. Applied per element so the outgoing
-            // deque never transiently holds the whole batch.
-            while self.would_exceed_send_budget(data.len())
-                && !self.conn.datagrams.outgoing.is_empty()
-            {
-                let prev = self
-                    .conn
-                    .datagrams
-                    .outgoing
-                    .pop_front()
-                    .expect("datagrams.outgoing_total desynchronized");
-                trace!(len = prev.data.len(), "dropping outgoing datagram (batch)");
-                self.conn.datagrams.outgoing_total -= prev.data.len();
             }
             self.conn.datagrams.outgoing_total += data.len();
             self.conn
@@ -166,15 +136,11 @@ impl Datagrams<'_> {
 
     /// Drain up to `out.len()` buffered datagrams into `out`, in arrival order.
     ///
-    /// This is the batch analogue of [`recv`](Self::recv): a single call drains
-    /// many datagrams, so a caller holding the connection lock once can forward a
-    /// batch without re-acquiring it per datagram. Fills `out` from the front and
-    /// returns the number of datagrams written (which may be less than
-    /// `out.len()` if fewer are buffered; 0 if none). Remaining buffered
-    /// datagrams stay in the queue for the next call.
-    ///
-    /// `out` is overwritten in place; pass a slice of empty `Bytes` sized to your
-    /// batch budget (mirroring `RecvStream::read_many_chunks` in the `noq` crate).
+    /// This is the batch analogue of [`recv`](Self::recv): a single call takes many
+    /// datagrams at once. `out` is filled from the front and overwritten in place;
+    /// pass a slice of empty `Bytes` sized to the batch you want. Returns the number
+    /// of datagrams written, which may be less than `out.len()` if fewer are buffered
+    /// (0 if none). Any remaining datagrams stay queued for the next call.
     pub fn recv_many(&mut self, out: &mut [Bytes]) -> usize {
         self.conn.datagrams.recv_many(out)
     }
@@ -190,20 +156,31 @@ impl Datagrams<'_> {
             .saturating_sub(self.conn.datagrams.outgoing_total)
     }
 
-    /// Whether the outgoing datagram buffer is currently over its send byte budget.
-    ///
-    /// Used by `send` with `drop = true` to decide how many oldest datagrams to
-    /// evict before enqueueing.
-    fn over_send_budget(&self) -> bool {
+    /// Whether the queued datagrams currently exceed the send buffer size.
+    fn is_send_buffer_exceeded(&self) -> bool {
         self.conn.datagrams.outgoing_total > self.conn.config.datagram_send_buffer_size
     }
 
-    /// Whether enqueueing a datagram of `len` bytes would push the outgoing
-    /// buffer over its send byte budget.
+    /// Whether the send buffer has room for a further `len` bytes.
+    fn has_send_buffer_capacity(&self, len: usize) -> bool {
+        self.conn.datagrams.outgoing_total + len <= self.conn.config.datagram_send_buffer_size
+    }
+
+    /// Drop the oldest queued datagrams until the send buffer is no longer exceeded.
     ///
-    /// Used by `send` (block mode) and `send_many` (per-element drop-oldest).
-    fn would_exceed_send_budget(&self, len: usize) -> bool {
-        self.conn.datagrams.outgoing_total + len > self.conn.config.datagram_send_buffer_size
+    /// Shared by [`send`](Self::send) and [`send_many`](Self::send_many) with
+    /// `drop = true`.
+    fn drop_oldest_until_fits(&mut self) {
+        while self.is_send_buffer_exceeded() {
+            let prev = self
+                .conn
+                .datagrams
+                .outgoing
+                .pop_front()
+                .expect("datagrams.outgoing_total desynchronized");
+            trace!(len = prev.data.len(), "dropping outgoing datagram");
+            self.conn.datagrams.outgoing_total -= prev.data.len();
+        }
     }
 }
 
@@ -305,21 +282,15 @@ impl DatagramState {
 
     /// Drain up to `out.len()` buffered datagrams into `out`, in arrival order.
     ///
-    /// Cheaper than calling [`recv`](Self::recv) in a loop: one `VecDeque` drain
-    /// instead of N `pop_front`s, and the caller amortizes the connection mutex.
     /// Returns the number of datagrams written into `out` (which may be less than
     /// `out.len()` if fewer are buffered). Remaining datagrams stay queued.
     pub(super) fn recv_many(&mut self, out: &mut [Bytes]) -> usize {
-        let mut count = 0;
-        while count < out.len() {
-            let Some(d) = self.incoming.pop_front() else {
-                break;
-            };
+        let n = out.len().min(self.incoming.len());
+        for (slot, d) in out.iter_mut().zip(self.incoming.drain(..n)) {
             self.recv_buffered -= d.data.len();
-            out[count] = d.data;
-            count += 1;
+            *slot = d.data;
         }
-        count
+        n
     }
 }
 
