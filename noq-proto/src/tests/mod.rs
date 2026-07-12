@@ -4617,3 +4617,32 @@ fn recv_bytes(mut recv_stream: crate::RecvStream<'_>, bytes_received: &mut usize
     // The callee needs to immediately pair.step()
     let _ = chunks.finalize();
 }
+
+/// Regression test: coalescing multiple Initial packets with 20-byte CIDs and a
+/// Retry token must not trigger `debug_assert!(max_size >= min_size)` in
+/// `PacketBuilder::new`.
+///
+/// With 20-byte CIDs, each coalesced Initial header is 133 bytes. The coalescing
+/// check only accounted for the `MIN_PACKET_SPACE = 87`, which only covers
+/// Handshake/0-RTT headers.
+#[test]
+fn regression_initial_coalescing_large_cid() {
+    let _guard = subscribe();
+
+    let mut endpoint_config = EndpointConfig::default();
+    endpoint_config.cid_generator(Arc::new(|| Box::new(RandomConnectionIdGenerator::new(20))));
+
+    let mut pair = Pair::new(Arc::new(endpoint_config), server_config());
+    pair.server.handle_incoming = Box::new(validate_incoming);
+    let _client_ch = pair.begin_connect(client_config());
+
+    pair.drive_client();
+    pair.drive_server();
+    pair.drive_client();
+    pair.advance_time();
+    pair.drive_client();
+    pair.drive_server();
+
+    pair.time = pair.time + Duration::from_secs(5);
+    pair.drive_client();
+}
