@@ -412,32 +412,61 @@ fn open_path_key_update() -> TestResult {
     Ok(())
 }
 
-// /// Client starts opening a path but the server fails to validate the path
-// ///
-// /// The client should receive an event closing the path.
-// #[test]
-// fn open_path_validation_fails_server_side() -> TestResult {
-//     let _guard = subscribe();
-//     let mut pair = ConnPair::builder().enable_multipath().connect();
+/// Client starts opening a path but the server fails to validate the path
+///
+/// The client should receive an event closing the path.
+#[test]
+fn open_path_validation_fails_server_side() -> TestResult {
+    let _guard = subscribe();
+    let client_addr_two = "[::1:2]:1".parse()?;
+    let server_addr_two = "[::2:2]:1".parse()?;
+    let mut builder = ConnPair::builder()
+        .enable_multipath()
+        .disable_mtud_discovery()
+        .with_routes(
+            // server_addr_two can send to client_addr_two, but the reverse is broken.
+            ManyToManyRouting::from_routes(
+                [(Pair::CLIENT_ADDR, 0), (client_addr_two, 1)],
+                [(Pair::SERVER_ADDR, 0), (server_addr_two, 0)],
+            ),
+        );
+    builder
+        .server_transport_cfg
+        .default_path_max_idle_timeout(Some(Duration::from_secs(8)));
+    builder
+        .client_transport_cfg
+        .default_path_max_idle_timeout(Some(Duration::from_secs(8)));
+    let mut pair = builder.connect();
 
-//     let different_addr = FourTuple {
-//         remote: SocketAddr::new([9, 8, 7, 6].into(), 5),
-//         local_ip: None,
-//     };
-//     assert_ne!(different_addr.remote, Pair::SERVER_ADDR);
-//     assert_ne!(different_addr.remote, Pair::CLIENT_ADDR);
-//     let path_id = pair.open_path(Client, different_addr, PathStatus::Available)?;
+    // Open a path from ::1:2 to ::2:2. Client datagrams will arrive from ::1:2 which is not
+    // allowed so they will be dropped.
+    let network_path = FourTuple {
+        remote: server_addr_two,
+        local_ip: Some(client_addr_two.ip()),
+    };
+    let path_id = pair.open_path(Client, network_path, PathStatus::Available)?;
 
-//     // block the server from receiving anything
-//     while pair.blackhole_step(true, false) {}
-//     assert_matches!(
-//         pair.poll(Client),
-//         Some(Event::Path(crate::PathEvent::Abandoned { id, reason: PathAbandonReason::ValidationFailed  })) if id == path_id
-//     );
+    info!("client opens path, drive to just before idle");
+    pair.drive();
 
-//     assert!(pair.poll(Server).is_none());
-//     Ok(())
-// }
+    info!("manual keep-alive of PathId::ZERO");
+    pair.ping_path(Client, PathId::ZERO)?;
+    pair.drive();
+
+    info!("advancing time to past client path {path_id} idle");
+    pair.advance_time();
+    pair.drive();
+
+    // The client gave up first and timed out.
+    assert_matches!(
+        pair.poll(Client),
+        Some(Event::Path(PathEvent::Abandoned { id, reason: PathAbandonReason::TimedOut  }))
+            if id == path_id
+    );
+    // The server sees a closed path being abandoned, never emits this to the application.
+    assert_matches!(pair.poll(Server), None);
+    Ok(())
+}
 
 /// client starts opening a path but the client fails to validate the path
 ///
@@ -478,9 +507,6 @@ fn open_path_validation_fails_client_side() -> TestResult {
     pair.drive();
 
     info!("manual keep-alive of PathId::ZERO");
-    // Not strictly needed as some ACKs will have been flowing over this path already,
-    // keeping it alive.
-    pair.ping_path(Client, PathId::ZERO)?;
     pair.ping_path(Client, PathId::ZERO)?;
 
     info!("drive past new path idle");
