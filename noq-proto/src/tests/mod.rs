@@ -309,6 +309,77 @@ fn stateless_reset_limit() {
     assert!(matches!(event, Some(DatagramEvent::Response(_))));
 }
 
+/// Regression test to ensure a connection that is already `Drained` doesn't emit a
+/// duplicate `Draining` endpoint event when a second stateless-reset datagram is processed.
+#[test]
+fn duplicate_stateless_reset_emits_single_draining() {
+    let _guard = subscribe();
+    let mut key_material = vec![0; 64];
+    let mut rng = rand::rng();
+    rng.fill_bytes(&mut key_material);
+    let reset_key = hmac::Key::new(hmac::HMAC_SHA256, &key_material);
+    rng.fill_bytes(&mut key_material);
+
+    let mut endpoint_config = EndpointConfig::new(Arc::new(reset_key));
+    endpoint_config.cid_generator(Arc::new(move || {
+        Box::new(HashedConnectionIdGenerator::from_key(0))
+    }));
+    let endpoint_config = Arc::new(endpoint_config);
+
+    let mut pair = Pair::new(endpoint_config.clone(), server_config());
+    let (client_ch, _) = pair.connect();
+    pair.drive(); // Flush any post-handshake frames
+
+    // Recreate the server endpoint so it loses all connection state but keeps the same
+    // reset key, causing it to respond to the client's packets with stateless resets.
+    pair.server.endpoint = Endpoint::new(endpoint_config, Some(Arc::new(server_config())), true);
+    // Force the server to generate the smallest possible stateless reset
+    pair.client.connections.get_mut(&client_ch).unwrap().ping();
+    pair.drive_client();
+    pair.drive_server();
+
+    // Capture the stateless reset datagram delivered to the client before it is processed.
+    let (_, captured_stateless_reset) = pair
+        .client
+        .inbound
+        .pop_first()
+        .expect("server should have sent a stateless reset");
+    pair.client.inbound.clear();
+
+    let now = pair.time;
+
+    // Duplicate the captured stateless reset token:
+    pair.client
+        .inbound
+        .push(now, captured_stateless_reset.clone());
+    pair.client.inbound.push(now, captured_stateless_reset);
+
+    // Only call drive_incoming instead of drive_client so we can manually count
+    // endpoint events below.
+    pair.client.drive_incoming(now);
+
+    // Apply the connection events produced by the endpoint and collect all endpoint events
+    // emitted by the connection.
+    let conn = pair.client.connections.get_mut(&client_ch).unwrap();
+    for (_, mut events) in pair.client.conn_events.drain() {
+        for event in events.drain(..) {
+            conn.handle_event(event);
+        }
+    }
+
+    // A drained connection receiving a second stateless reset must not emit a duplicate
+    // `Draining` event.
+    let mut draining = 0;
+    let mut drained = 0;
+    while let Some(event) = conn.poll_endpoint_events() {
+        draining += event.is_draining() as usize;
+        drained += event.is_drained() as usize;
+    }
+
+    assert_eq!(draining, 1, "expected exactly one Draining event");
+    assert_eq!(drained, 1, "expected exactly one Drained event");
+}
+
 #[test]
 fn export_keying_material() {
     let _guard = subscribe();

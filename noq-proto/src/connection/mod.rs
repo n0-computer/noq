@@ -4408,7 +4408,7 @@ impl Connection {
                     ..
                 }) => {
                     let was_draining = self.state.move_to_drained(Some(conn_err));
-                    if !was_draining {
+                    if !was_draining && !was_drained {
                         self.endpoint_events.push_back(EndpointEventInner::Draining);
                     }
                 }
