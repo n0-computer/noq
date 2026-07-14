@@ -167,7 +167,7 @@
 <a href=#167 id=167 data-nosnippet>167</a>
 <a href=#168 id=168 data-nosnippet>168</a><span class="kw">impl </span>Decodable <span class="kw">for </span>FrameType {
 <a href=#169 id=169 data-nosnippet>169</a>    <span class="kw">fn </span>decode&lt;B: Buf&gt;(buf: <span class="kw-2">&amp;mut </span>B) -&gt; coding::Result&lt;<span class="self">Self</span>&gt; {
-<a href=#170 id=170 data-nosnippet>170</a>        <span class="self">Self</span>::try_from(buf.get_var()<span class="question-mark">?</span>).map_err(|<span class="kw">_</span>| coding::UnexpectedEnd)
+<a href=#170 id=170 data-nosnippet>170</a>        <span class="self">Self</span>::try_from(buf.get_var()<span class="question-mark">?</span>).map_err(|<span class="kw">_</span>| UnexpectedEnd)
 <a href=#171 id=171 data-nosnippet>171</a>    }
 <a href=#172 id=172 data-nosnippet>172</a>}
 <a href=#173 id=173 data-nosnippet>173</a>
@@ -903,11 +903,11 @@
 <a href=#903 id=903 data-nosnippet>903</a>    <span class="doccomment">/// Type of frame that caused the close
 <a href=#904 id=904 data-nosnippet>904</a>    </span><span class="kw">pub </span>frame_type: MaybeFrame,
 <a href=#905 id=905 data-nosnippet>905</a>    <span class="doccomment">/// Human-readable reason for the close
-<a href=#906 id=906 data-nosnippet>906</a>    </span><span class="attr">#[cfg_attr(test, strategy(proptest::collection::vec(any::&lt;u8&gt;(), <span class="number">0</span>..<span class="number">64</span>).prop_map(Bytes::from)))]
+<a href=#906 id=906 data-nosnippet>906</a>    </span><span class="attr">#[cfg_attr(test, strategy(collection::vec(any::&lt;u8&gt;(), <span class="number">0</span>..<span class="number">64</span>).prop_map(Bytes::from)))]
 <a href=#907 id=907 data-nosnippet>907</a>    </span><span class="kw">pub </span>reason: Bytes,
 <a href=#908 id=908 data-nosnippet>908</a>}
 <a href=#909 id=909 data-nosnippet>909</a>
-<a href=#910 id=910 data-nosnippet>910</a><span class="kw">impl </span>fmt::Display <span class="kw">for </span>ConnectionClose {
+<a href=#910 id=910 data-nosnippet>910</a><span class="kw">impl </span>Display <span class="kw">for </span>ConnectionClose {
 <a href=#911 id=911 data-nosnippet>911</a>    <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; fmt::Result {
 <a href=#912 id=912 data-nosnippet>912</a>        <span class="self">self</span>.error_code.fmt(f)<span class="question-mark">?</span>;
 <a href=#913 id=913 data-nosnippet>913</a>        <span class="kw">if </span>!<span class="self">self</span>.reason.as_ref().is_empty() {
@@ -954,11 +954,11 @@
 <a href=#954 id=954 data-nosnippet>954</a>    <span class="doccomment">/// Application-specific reason code
 <a href=#955 id=955 data-nosnippet>955</a>    </span><span class="kw">pub </span>error_code: VarInt,
 <a href=#956 id=956 data-nosnippet>956</a>    <span class="doccomment">/// Human-readable reason for the close
-<a href=#957 id=957 data-nosnippet>957</a>    </span><span class="attr">#[cfg_attr(test, strategy(proptest::collection::vec(any::&lt;u8&gt;(), <span class="number">0</span>..<span class="number">64</span>).prop_map(Bytes::from)))]
+<a href=#957 id=957 data-nosnippet>957</a>    </span><span class="attr">#[cfg_attr(test, strategy(collection::vec(any::&lt;u8&gt;(), <span class="number">0</span>..<span class="number">64</span>).prop_map(Bytes::from)))]
 <a href=#958 id=958 data-nosnippet>958</a>    </span><span class="kw">pub </span>reason: Bytes,
 <a href=#959 id=959 data-nosnippet>959</a>}
 <a href=#960 id=960 data-nosnippet>960</a>
-<a href=#961 id=961 data-nosnippet>961</a><span class="kw">impl </span>fmt::Display <span class="kw">for </span>ApplicationClose {
+<a href=#961 id=961 data-nosnippet>961</a><span class="kw">impl </span>Display <span class="kw">for </span>ApplicationClose {
 <a href=#962 id=962 data-nosnippet>962</a>    <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; fmt::Result {
 <a href=#963 id=963 data-nosnippet>963</a>        <span class="kw">if </span>!<span class="self">self</span>.reason.as_ref().is_empty() {
 <a href=#964 id=964 data-nosnippet>964</a>            f.write_str(<span class="kw-2">&amp;</span>String::from_utf8_lossy(<span class="kw-2">&amp;</span><span class="self">self</span>.reason))<span class="question-mark">?</span>;
@@ -1882,7 +1882,7 @@
 <a href=#1882 id=1882 data-nosnippet>1882</a>}
 <a href=#1883 id=1883 data-nosnippet>1883</a>
 <a href=#1884 id=1884 data-nosnippet>1884</a><span class="attr">#[cfg(test)]
-<a href=#1885 id=1885 data-nosnippet>1885</a></span><span class="kw">fn </span>connection_id_and_reset_token() -&gt; <span class="kw">impl </span>Strategy&lt;Value = (<span class="kw">crate</span>::ConnectionId, ResetToken)&gt; {
+<a href=#1885 id=1885 data-nosnippet>1885</a></span><span class="kw">fn </span>connection_id_and_reset_token() -&gt; <span class="kw">impl </span>Strategy&lt;Value = (ConnectionId, ResetToken)&gt; {
 <a href=#1886 id=1886 data-nosnippet>1886</a>    (any::&lt;ConnectionId&gt;(), any::&lt;[u8; <span class="number">64</span>]&gt;()).prop_map(|(id, reset_key)| {
 <a href=#1887 id=1887 data-nosnippet>1887</a>        <span class="attr">#[cfg(all(feature = <span class="string">"aws-lc-rs"</span>, not(feature = <span class="string">"ring"</span>)))]
 <a href=#1888 id=1888 data-nosnippet>1888</a>        </span><span class="kw">use </span>aws_lc_rs::hmac;
@@ -2114,7 +2114,7 @@
 <a href=#2114 id=2114 data-nosnippet>2114</a>}
 <a href=#2115 id=2115 data-nosnippet>2115</a>
 <a href=#2116 id=2116 data-nosnippet>2116</a><span class="kw">impl </span>ObservedAddr {
-<a href=#2117 id=2117 data-nosnippet>2117</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>new&lt;N: Into&lt;VarInt&gt;&gt;(remote: std::net::SocketAddr, seq_no: N) -&gt; <span class="self">Self </span>{
+<a href=#2117 id=2117 data-nosnippet>2117</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>new&lt;N: Into&lt;VarInt&gt;&gt;(remote: SocketAddr, seq_no: N) -&gt; <span class="self">Self </span>{
 <a href=#2118 id=2118 data-nosnippet>2118</a>        <span class="self">Self </span>{
 <a href=#2119 id=2119 data-nosnippet>2119</a>            ip: remote.ip(),
 <a href=#2120 id=2120 data-nosnippet>2120</a>            port: remote.port(),
@@ -2740,7 +2740,7 @@
 <a href=#2740 id=2740 data-nosnippet>2740</a>            sequence: <span class="number">31</span>,
 <a href=#2741 id=2741 data-nosnippet>2741</a>            retire_prior_to: <span class="number">13</span>,
 <a href=#2742 id=2742 data-nosnippet>2742</a>            id: ConnectionId::new(<span class="kw-2">&amp;</span>[<span class="number">0xAB</span>; <span class="number">8</span>]),
-<a href=#2743 id=2743 data-nosnippet>2743</a>            reset_token: ResetToken::from([<span class="number">0xCD</span>; <span class="kw">crate</span>::RESET_TOKEN_SIZE]),
+<a href=#2743 id=2743 data-nosnippet>2743</a>            reset_token: ResetToken::from([<span class="number">0xCD</span>; RESET_TOKEN_SIZE]),
 <a href=#2744 id=2744 data-nosnippet>2744</a>        };
 <a href=#2745 id=2745 data-nosnippet>2745</a>        <span class="kw">let </span><span class="kw-2">mut </span>buf = Vec::new();
 <a href=#2746 id=2746 data-nosnippet>2746</a>        cid.encode(<span class="kw-2">&amp;mut </span>buf);

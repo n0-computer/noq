@@ -752,7 +752,7 @@
 <a href=#752 id=752 data-nosnippet>752</a>
 <a href=#753 id=753 data-nosnippet>753</a>    <span class="doccomment">/// Pops the next issued CID to transmit from the queue.
 <a href=#754 id=754 data-nosnippet>754</a>    </span><span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">fn </span>pop(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;IssuedCid&gt; {
-<a href=#755 id=755 data-nosnippet>755</a>        <span class="kw">if </span>!std::mem::replace(<span class="kw-2">&amp;mut </span><span class="self">self</span>.sorted, <span class="bool-val">true</span>) {
+<a href=#755 id=755 data-nosnippet>755</a>        <span class="kw">if </span>!mem::replace(<span class="kw-2">&amp;mut </span><span class="self">self</span>.sorted, <span class="bool-val">true</span>) {
 <a href=#756 id=756 data-nosnippet>756</a>            <span class="self">self</span>.cids
 <a href=#757 id=757 data-nosnippet>757</a>                .sort_by_key(|cid| cmp::Reverse((cid.path_id, cid.sequence)));
 <a href=#758 id=758 data-nosnippet>758</a>        }
@@ -1007,7 +1007,7 @@
 <a href=#1007 id=1007 data-nosnippet>1007</a></span><span class="kw">type </span>Window = u128;
 <a href=#1008 id=1008 data-nosnippet>1008</a>
 <a href=#1009 id=1009 data-nosnippet>1009</a><span class="doccomment">/// Number of packets tracked by `Dedup`.
-<a href=#1010 id=1010 data-nosnippet>1010</a></span><span class="kw">const </span>WINDOW_SIZE: u64 = <span class="number">1 </span>+ mem::size_of::&lt;Window&gt;() <span class="kw">as </span>u64 * <span class="number">8</span>;
+<a href=#1010 id=1010 data-nosnippet>1010</a></span><span class="kw">const </span>WINDOW_SIZE: u64 = <span class="number">1 </span>+ size_of::&lt;Window&gt;() <span class="kw">as </span>u64 * <span class="number">8</span>;
 <a href=#1011 id=1011 data-nosnippet>1011</a><span class="doccomment">/// Indicates which data is available for sending
 <a href=#1012 id=1012 data-nosnippet>1012</a>///
 <a href=#1013 id=1013 data-nosnippet>1013</a>/// This applies to a particular space ID that was queried and all refers to on-path data.
@@ -1577,7 +1577,7 @@
 <a href=#1577 id=1577 data-nosnippet>1577</a>    </span><span class="kw">fn </span>sent_packet_size() {
 <a href=#1578 id=1578 data-nosnippet>1578</a>        <span class="comment">// The tracking state of sent packets should be minimal, and not grow
 <a href=#1579 id=1579 data-nosnippet>1579</a>        // over time.
-<a href=#1580 id=1580 data-nosnippet>1580</a>        </span><span class="macro">assert!</span>(std::mem::size_of::&lt;SentPacket&gt;() &lt;= <span class="number">128</span>);
+<a href=#1580 id=1580 data-nosnippet>1580</a>        </span><span class="macro">assert!</span>(size_of::&lt;SentPacket&gt;() &lt;= <span class="number">128</span>);
 <a href=#1581 id=1581 data-nosnippet>1581</a>    }
 <a href=#1582 id=1582 data-nosnippet>1582</a>
 <a href=#1583 id=1583 data-nosnippet>1583</a>    <span class="attr">#[test]

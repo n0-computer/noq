@@ -121,7 +121,7 @@
 <a href=#121 id=121 data-nosnippet>121</a>    <span class="attr">#[cfg(feature = <span class="string">"json-output"</span>)]
 <a href=#122 id=122 data-nosnippet>122</a>    </span><span class="kw">pub fn </span>print_json(<span class="kw-2">&amp;</span><span class="self">self</span>, path: <span class="kw-2">&amp;</span>Path) -&gt; io::Result&lt;()&gt; {
 <a href=#123 id=123 data-nosnippet>123</a>        <span class="kw">if </span>path == Path::new(<span class="string">"-"</span>) {
-<a href=#124 id=124 data-nosnippet>124</a>            json::print(<span class="self">self</span>, std::io::stdout());
+<a href=#124 id=124 data-nosnippet>124</a>            json::print(<span class="self">self</span>, io::stdout());
 <a href=#125 id=125 data-nosnippet>125</a>        } <span class="kw">else </span>{
 <a href=#126 id=126 data-nosnippet>126</a>            <span class="kw">let </span>file = File::create(path)<span class="question-mark">?</span>;
 <a href=#127 id=127 data-nosnippet>127</a>            json::print(<span class="self">self</span>, file)
@@ -281,7 +281,7 @@
 <a href=#281 id=281 data-nosnippet>281</a>
 <a href=#282 id=282 data-nosnippet>282</a>    <span class="kw">fn </span>serialize_timestamp&lt;S&gt;(time: <span class="kw-2">&amp;</span>SystemTime, s: S) -&gt; <span class="prelude-ty">Result</span>&lt;S::Ok, S::Error&gt;
 <a href=#283 id=283 data-nosnippet>283</a>    <span class="kw">where
-<a href=#284 id=284 data-nosnippet>284</a>        </span>S: serde::Serializer,
+<a href=#284 id=284 data-nosnippet>284</a>        </span>S: Serializer,
 <a href=#285 id=285 data-nosnippet>285</a>    {
 <a href=#286 id=286 data-nosnippet>286</a>        <span class="kw">use </span>serde::ser::SerializeMap;
 <a href=#287 id=287 data-nosnippet>287</a>        <span class="kw">let </span><span class="kw-2">mut </span>state = s.serialize_map(<span class="prelude-val">Some</span>(<span class="number">1</span>))<span class="question-mark">?</span>;
@@ -355,7 +355,7 @@
 <a href=#355 id=355 data-nosnippet>355</a>
 <a href=#356 id=356 data-nosnippet>356</a>    <span class="kw">impl </span>Stream {
 <a href=#357 id=357 data-nosnippet>357</a>        <span class="kw">fn </span>from_stream_interval_stats(
-<a href=#358 id=358 data-nosnippet>358</a>            stats: <span class="kw-2">&amp;</span>stats::StreamIntervalStats,
+<a href=#358 id=358 data-nosnippet>358</a>            stats: <span class="kw-2">&amp;</span>StreamIntervalStats,
 <a href=#359 id=359 data-nosnippet>359</a>            period: <span class="kw-2">&amp;</span>stats::IntervalPeriod,
 <a href=#360 id=360 data-nosnippet>360</a>        ) -&gt; <span class="self">Self </span>{
 <a href=#361 id=361 data-nosnippet>361</a>            <span class="kw">let </span>bits_per_second = stats.bytes <span class="kw">as </span>f64 * <span class="number">8.0 </span>/ period.seconds;

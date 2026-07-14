@@ -914,7 +914,7 @@
 <a href=#914 id=914 data-nosnippet>914</a>    }
 <a href=#915 id=915 data-nosnippet>915</a>}
 <a href=#916 id=916 data-nosnippet>916</a>
-<a href=#917 id=917 data-nosnippet>917</a><span class="kw">impl </span>std::convert::TryFrom&lt;Duration&gt; <span class="kw">for </span>IdleTimeout {
+<a href=#917 id=917 data-nosnippet>917</a><span class="kw">impl </span>TryFrom&lt;Duration&gt; <span class="kw">for </span>IdleTimeout {
 <a href=#918 id=918 data-nosnippet>918</a>    <span class="kw">type </span>Error = VarIntBoundsExceeded;
 <a href=#919 id=919 data-nosnippet>919</a>
 <a href=#920 id=920 data-nosnippet>920</a>    <span class="kw">fn </span>try_from(timeout: Duration) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>, <span class="self">Self</span>::Error&gt; {

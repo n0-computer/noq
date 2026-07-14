@@ -79,7 +79,7 @@
 <a href=#79 id=79 data-nosnippet>79</a>    <span class="kw">fn </span>poll_recv(
 <a href=#80 id=80 data-nosnippet>80</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
 <a href=#81 id=81 data-nosnippet>81</a>        cx: <span class="kw-2">&amp;mut </span>Context&lt;<span class="lifetime">'_</span>&gt;,
-<a href=#82 id=82 data-nosnippet>82</a>        bufs: <span class="kw-2">&amp;mut </span>[std::io::IoSliceMut&lt;<span class="lifetime">'_</span>&gt;],
+<a href=#82 id=82 data-nosnippet>82</a>        bufs: <span class="kw-2">&amp;mut </span>[io::IoSliceMut&lt;<span class="lifetime">'_</span>&gt;],
 <a href=#83 id=83 data-nosnippet>83</a>        meta: <span class="kw-2">&amp;mut </span>[udp::RecvMeta],
 <a href=#84 id=84 data-nosnippet>84</a>    ) -&gt; Poll&lt;io::Result&lt;usize&gt;&gt; {
 <a href=#85 id=85 data-nosnippet>85</a>        <span class="kw">loop </span>{

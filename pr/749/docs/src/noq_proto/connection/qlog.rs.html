@@ -526,7 +526,7 @@
 <a href=#526 id=526 data-nosnippet>526</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>frame(<span class="kw-2">&amp;mut </span><span class="self">self</span>, frame: <span class="kw-2">&amp;</span>Frame) {
 <a href=#527 id=527 data-nosnippet>527</a>        <span class="attr">#[cfg(feature = <span class="string">"qlog"</span>)]
 <a href=#528 id=528 data-nosnippet>528</a>        </span>{
-<a href=#529 id=529 data-nosnippet>529</a>            <span class="kw">if </span><span class="macro">matches!</span>(frame, <span class="kw">crate</span>::Frame::Padding) {
+<a href=#529 id=529 data-nosnippet>529</a>            <span class="kw">if </span><span class="macro">matches!</span>(frame, Frame::Padding) {
 <a href=#530 id=530 data-nosnippet>530</a>                <span class="self">self</span>.padding += <span class="number">1</span>;
 <a href=#531 id=531 data-nosnippet>531</a>            } <span class="kw">else </span>{
 <a href=#532 id=532 data-nosnippet>532</a>                <span class="self">self</span>.emit_padding();
@@ -731,7 +731,7 @@
 <a href=#731 id=731 data-nosnippet>731</a>}
 <a href=#732 id=732 data-nosnippet>732</a>
 <a href=#733 id=733 data-nosnippet>733</a><span class="attr">#[cfg(feature = <span class="string">"qlog"</span>)]
-<a href=#734 id=734 data-nosnippet>734</a></span><span class="kw">impl </span>ToQlog <span class="kw">for </span>frame::StreamsBlocked {
+<a href=#734 id=734 data-nosnippet>734</a></span><span class="kw">impl </span>ToQlog <span class="kw">for </span>StreamsBlocked {
 <a href=#735 id=735 data-nosnippet>735</a>    <span class="kw">fn </span>to_qlog(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; QuicFrame {
 <a href=#736 id=736 data-nosnippet>736</a>        QuicFrame::StreamsBlocked {
 <a href=#737 id=737 data-nosnippet>737</a>            stream_type: <span class="self">self</span>.dir.into(),
