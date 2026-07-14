@@ -386,6 +386,8 @@ impl Connection {
     /// written. Use it instead of [`read_datagram()`] in a loop when forwarding
     /// bursts: a whole batch is taken under a single lock hold.
     ///
+    /// If `out` is empty the future resolves immediately with `Ok(0)`.
+    ///
     /// [`read_datagram()`]: Connection::read_datagram
     pub fn read_many_datagrams<'a>(&'a self, out: &'a mut [Bytes]) -> ReadManyDatagrams<'a> {
         ReadManyDatagrams {
@@ -1180,6 +1182,11 @@ impl Future for ReadManyDatagrams<'_> {
     type Output = Result<usize, ConnectionError>;
     fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut this = self.project();
+        // An empty `out` can never make progress; resolve instead of waiting for a
+        // datagram we could not deliver.
+        if this.out.is_empty() {
+            return Poll::Ready(Ok(0));
+        }
         let mut state = this.conn.lock_without_waking("ReadManyDatagrams::poll");
         // Drain everything currently buffered in one lock hold. Check for buffered
         // datagrams before `state.error` so a closed connection can still be drained

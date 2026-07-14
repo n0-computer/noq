@@ -2245,13 +2245,21 @@ fn datagram_batch_send_recv_many() {
         Some(Event::DatagramReceived)
     );
 
-    // Drain them all in one recv_many call.
-    let mut out = vec![Bytes::new(); N];
+    // Drain with an `out` smaller than the number buffered: only `out.len()` are
+    // taken, the rest stay queued for the next call.
+    let mut out = vec![Bytes::new(); 3];
     let got = pair.server_datagrams(server_ch).recv_many(&mut out);
-    assert_eq!(got, N);
+    assert_eq!(got, 3);
     for (i, d) in out.iter().enumerate() {
         assert_eq!(d.as_ref(), format!("pkt-{i}").as_bytes());
     }
+    // The second call yields the remaining 2 in order; the extra slot is untouched.
+    let mut out = vec![Bytes::new(); 3];
+    let got = pair.server_datagrams(server_ch).recv_many(&mut out);
+    assert_eq!(got, 2);
+    assert_eq!(out[0].as_ref(), b"pkt-3");
+    assert_eq!(out[1].as_ref(), b"pkt-4");
+    assert!(out[2].is_empty());
     // Buffer is now empty.
     let mut more = vec![Bytes::new(); 1];
     assert_eq!(pair.server_datagrams(server_ch).recv_many(&mut more), 0);

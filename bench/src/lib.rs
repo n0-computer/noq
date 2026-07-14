@@ -403,6 +403,12 @@ pub struct DatagramOpt {
     #[clap(long, default_value = "drop")]
     pub send_mode: SendMode,
 
+    /// Datagrams per API call. 1 uses the single-datagram APIs; larger values use
+    /// `send_many_datagrams` / `read_many_datagrams`. Batch sending requires
+    /// `--send-mode drop`.
+    #[clap(long, default_value = "1")]
+    pub batch_size: usize,
+
     /// Congestion controller.
     #[clap(long, default_value = "cubic")]
     pub congestion: Congestion,

@@ -155,11 +155,11 @@ impl DatagramReport {
         } else {
             (c.recv_packets as f64) / c.recv_elapsed.as_secs_f64()
         };
-        let loss_pct = if c.sent_packets == 0 {
-            0.0
-        } else {
-            (1.0 - (c.recv_packets as f64) / (c.sent_packets as f64)) * 100.0
-        };
+        // Loss is only computable when the counters hold both sides of the same
+        // flood (direction `both`, or a merged aggregate). A pure receiver has
+        // `sent_packets == 0` and cannot know how much the peer sent.
+        let loss_pct = (c.sent_packets > 0)
+            .then(|| (1.0 - (c.recv_packets as f64) / (c.sent_packets as f64)) * 100.0);
 
         println!();
         println!("{label} datagram stats:");
@@ -181,14 +181,17 @@ impl DatagramReport {
             );
         }
         if c.recv_packets > 0 {
+            let loss = match loss_pct {
+                Some(pct) => format!("   (loss: {pct:.2}%)"),
+                None => String::new(),
+            };
             println!(
-                "  received: {rb} bytes ({rp} packets) in {re:?}   -> {rmib:.2} MiB/s   {rpps:.0} pps   (loss: {loss:.2}%)",
+                "  received: {rb} bytes ({rp} packets) in {re:?}   -> {rmib:.2} MiB/s   {rpps:.0} pps{loss}",
                 rb = c.recv_bytes,
                 rp = c.recv_packets,
                 re = c.recv_elapsed,
                 rmib = recv_mibps,
                 rpps = recv_pps,
-                loss = loss_pct,
             );
         }
     }

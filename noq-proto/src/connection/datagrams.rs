@@ -286,9 +286,9 @@ impl DatagramState {
     /// `out.len()` if fewer are buffered). Remaining datagrams stay queued.
     pub(super) fn recv_many(&mut self, out: &mut [Bytes]) -> usize {
         let n = out.len().min(self.incoming.len());
-        for (slot, d) in out.iter_mut().zip(self.incoming.drain(..n)) {
+        for (i, d) in self.incoming.drain(..n).enumerate() {
             self.recv_buffered -= d.data.len();
-            *slot = d.data;
+            out[i] = d.data;
         }
         n
     }
