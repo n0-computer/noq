@@ -114,7 +114,7 @@
 <a href=#114 id=114 data-nosnippet>114</a>            <span class="comment">// On MacOS &lt; 14 CMSG_NXTHDR might continuously return a zeroed cmsg. In
 <a href=#115 id=115 data-nosnippet>115</a>            // such case, return `None` instead, thus indicating the end of
 <a href=#116 id=116 data-nosnippet>116</a>            // the cmsghdr chain.
-<a href=#117 id=117 data-nosnippet>117</a>            </span><span class="kw">if </span>current.len() &lt; mem::size_of::&lt;M::ControlMessage&gt;() {
+<a href=#117 id=117 data-nosnippet>117</a>            </span><span class="kw">if </span>current.len() &lt; size_of::&lt;M::ControlMessage&gt;() {
 <a href=#118 id=118 data-nosnippet>118</a>                <span class="kw">return </span><span class="prelude-val">None</span>;
 <a href=#119 id=119 data-nosnippet>119</a>            }
 <a href=#120 id=120 data-nosnippet>120</a>        }
