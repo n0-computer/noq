@@ -28,13 +28,18 @@
 #![warn(clippy::use_self)]
 
 use core::time::Duration;
-use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 #[cfg(any(unix, target_os = "wasi"))]
 use std::os::fd::AsFd;
 #[cfg(windows)]
 use std::os::windows::io::AsSocket;
+use std::{
+    io,
+    net::{IpAddr, Ipv6Addr, SocketAddr},
+};
 #[cfg(not(wasm_browser))]
 use std::{sync::Mutex, time::Instant};
+#[cfg(windows)]
+use windows_sys::Win32::Networking::WinSock;
 
 #[cfg(apple_fast)]
 mod apple_fast;
@@ -177,6 +182,32 @@ impl Transmit<'_> {
             size if size >= self.contents.len() => None,
             size => Some(size),
         }
+    }
+}
+
+/// Returns true if the given I/O error corresponds to a message size error
+///
+/// Useful, for example, after invoking `io::Error::last_os_error()`
+/// to check if the last OS error was a message size error
+/// (EMSGSIZE on Unix, WSAEMSGSIZE on Windows).
+///
+/// Note: EMSGSIZE's value is not standardized across OSes (90 on Linux,
+/// 40 on macOS/iOS/BSD; on Windows, `io::Error::raw_os_error()` returns
+/// the Winsock error WSAEMSGSIZE (10040) via `GetLastError()`, which is
+/// distinct from the MSVCRT `errno.h` EMSGSIZE value of 115, which is
+/// never actually populated by socket operations).
+pub fn is_msg_size_err(err: &io::Error) -> bool {
+    #[cfg(unix)]
+    {
+        err.raw_os_error() == Some(libc::EMSGSIZE)
+    }
+    #[cfg(windows)]
+    {
+        err.raw_os_error() == Some(WinSock::WSAEMSGSIZE)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        false
     }
 }
 
