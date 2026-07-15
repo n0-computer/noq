@@ -348,7 +348,7 @@
 <a href=#348 id=348 data-nosnippet>348</a>    }
 <a href=#349 id=349 data-nosnippet>349</a>
 <a href=#350 id=350 data-nosnippet>350</a>    <span class="doccomment">/// Get the next queued timeout
-<a href=#351 id=351 data-nosnippet>351</a>    </span><span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">fn </span>peek(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Instant&gt; {
+<a href=#351 id=351 data-nosnippet>351</a>    </span><span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">fn </span>peek(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Instant&gt; {
 <a href=#352 id=352 data-nosnippet>352</a>        <span class="comment">// TODO: this is currently linear in the number of paths
 <a href=#353 id=353 data-nosnippet>353</a>
 <a href=#354 id=354 data-nosnippet>354</a>        </span><span class="kw">let </span>min_generic = <span class="self">self</span>.generic.iter().filter_map(|<span class="kw-2">&amp;</span>x| x).min();
