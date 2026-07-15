@@ -98,7 +98,7 @@ pub fn throughput_bps(duration: Duration, size: u64) -> f64 {
 ///
 /// `sent_*` are filled by the sender; `recv_*` by the receiver. Under `send_mode = drop`
 /// the sender may drop oldest queued datagrams, so `recv_*` can be strictly less than
-/// `sent_*` — the difference is the loss ratio.
+/// `sent_*`; the difference is the loss ratio.
 #[derive(Default, Debug, Clone)]
 pub struct DatagramCounters {
     pub sent_bytes: u64,

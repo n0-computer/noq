@@ -383,8 +383,8 @@ impl Connection {
     /// This is the batch analogue of [`read_datagram()`]. The returned future
     /// resolves once at least one datagram is buffered, drains up to `out.len()` of
     /// them into `out` from the front in arrival order, and yields the count
-    /// written. Use it instead of [`read_datagram()`] in a loop when forwarding
-    /// bursts: a whole batch is taken under a single lock hold.
+    /// written. It is cheaper than calling [`read_datagram()`] in a loop when
+    /// receiving bursts.
     ///
     /// If `out` is empty the future resolves immediately with `Ok(0)`.
     ///
@@ -687,9 +687,8 @@ impl Connection {
     /// Transmit many unreliable, unordered application datagrams in a single call.
     ///
     /// This is the batch analogue of [`send_datagram()`]: it queues the whole batch
-    /// under one lock hold and wakes the driver once, reducing the per-datagram
-    /// overhead of calling [`send_datagram()`] repeatedly. Like [`send_datagram()`],
-    /// older queued datagrams may be dropped to make room.
+    /// in one call, which is cheaper than calling [`send_datagram()`] repeatedly.
+    /// Like [`send_datagram()`], older queued datagrams may be dropped to make room.
     ///
     /// Returns the number of datagrams queued. The batch is rejected with
     /// [`SendDatagramError::TooLarge`] if any datagram exceeds

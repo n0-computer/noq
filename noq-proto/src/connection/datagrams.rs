@@ -50,11 +50,10 @@ impl Datagrams<'_> {
     /// Queue many unreliable, unordered datagrams for transmission in a single call.
     ///
     /// This is the batch analogue of [`send`](Self::send): it applies the peer-support
-    /// and size checks once and queues the whole batch under one logical operation.
+    /// and size checks once for the whole batch.
     ///
     /// The batch is rejected atomically if any datagram is too large: when any element
-    /// exceeds [`max_size`](Self::max_size) this returns [`TooLarge`] and queues nothing,
-    /// so a caller never has to reason about a partially-sent batch on a size error.
+    /// exceeds [`max_size`](Self::max_size) this returns [`TooLarge`] and queues nothing.
     ///
     /// `drop` selects the backpressure behaviour, matching [`send`](Self::send):
     ///

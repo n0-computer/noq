@@ -274,7 +274,7 @@ async fn run_both(conn: Connection, opt: DatagramOpt, role: Role) -> Result<Data
 }
 
 /// Flood `total_bytes` worth of datagrams. Does NOT close the connection or signal
-/// completion — the caller coordinates shutdown.
+/// completion; the caller coordinates shutdown.
 async fn send_loop(conn: &Connection, opt: DatagramOpt) -> Result<DatagramCounters> {
     let max_size = conn
         .max_datagram_size()
@@ -287,8 +287,6 @@ async fn send_loop(conn: &Connection, opt: DatagramOpt) -> Result<DatagramCounte
     if batch_size > 1 && opt.send_mode == SendMode::Wait {
         anyhow::bail!("--batch-size > 1 requires --send-mode drop");
     }
-    // Pre-build the payload. `Bytes::from_static` would require a static buffer; use a
-    // heap-allocated `Bytes` so we can size it to the (runtime) `pkt_size`.
     let payload = Bytes::from(vec![0xABu8; pkt_size]);
 
     let start = Instant::now();

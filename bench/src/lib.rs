@@ -339,9 +339,9 @@ impl FromStr for Direction {
 /// How the sender should issue datagrams.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SendMode {
-    /// `Connection::send_datagram` — drops the oldest queued datagram on backpressure.
+    /// `Connection::send_datagram`: drops the oldest queued datagram on backpressure.
     Drop,
-    /// `Connection::send_datagram_wait` — backpressures (waits for buffer space).
+    /// `Connection::send_datagram_wait`: backpressures (waits for buffer space).
     Wait,
 }
 
@@ -387,7 +387,7 @@ pub struct DatagramOpt {
     #[clap(long, short = 'c', default_value = "1")]
     pub clients: usize,
 
-    /// Direction of the flood: client→server (send), server→client (recv), or both.
+    /// Direction of the flood: client to server (send), server to client (recv), or both.
     #[clap(long, default_value = "send")]
     pub direction: Direction,
 
@@ -452,8 +452,6 @@ impl BenchOpt for DatagramOpt {
         self.cipher
     }
     fn transport_config(&self) -> noq::TransportConfig {
-        use std::sync::Arc;
-
         let mut config = noq::TransportConfig::default();
         config.initial_mtu(self.initial_mtu);
         config.send_fairness(self.send_fairness);
