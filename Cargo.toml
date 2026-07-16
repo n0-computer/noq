@@ -20,7 +20,7 @@ assert_matches = "1.1"
 async-io = "2"
 aws-lc-rs = { version = "1.9", default-features = false }
 bytes = "1"
-cfg_aliases = "0.2.1"
+cfg_aliases = "0.2.2"
 clap = { version = "4.5", features = ["derive"] }
 crc = "3"
 criterion = { version = "0.7", default-features = false, features = ["async_tokio"] }
