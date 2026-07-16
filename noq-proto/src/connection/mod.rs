@@ -1742,6 +1742,9 @@ impl Connection {
                 && path_id == PathId::ZERO
                 && let Some(next_space_id) = space_id.next()
                 && max_packet_size > MIN_PACKET_SPACE
+                && self
+                    .space_can_send(space_id, path_id, max_packet_size, connection_close_pending)
+                    .is_empty()
                 && self.has_pending_packet(next_space_id, max_packet_size, connection_close_pending)
             {
                 // We can append/coalesce the next packet into the current
