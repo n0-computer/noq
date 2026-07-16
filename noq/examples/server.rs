@@ -15,8 +15,8 @@ use clap::Parser;
 use proto::crypto::rustls::QuicServerConfig;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, pem::PemObject};
 use tokio_stream::StreamExt;
+use tracing::instrument::Instrument as _;
 use tracing::{error, info, info_span};
-use tracing_futures::Instrument as _;
 
 mod common;
 
