@@ -4649,6 +4649,6 @@ fn regression_initial_coalescing_large_cid() {
 
     // Trigger loss probes, thus re-sending packets from the Initial space by moving forward
     // in time a bit:
-    pair.time = pair.time + Duration::from_secs(5);
+    pair.time += Duration::from_secs(5);
     pair.drive_client(); // this used to try to build a packet without enough datagram space
 }
