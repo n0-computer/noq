@@ -4408,7 +4408,7 @@
 <a href=#4408 id=4408 data-nosnippet>4408</a>                    ..
 <a href=#4409 id=4409 data-nosnippet>4409</a>                }) =&gt; {
 <a href=#4410 id=4410 data-nosnippet>4410</a>                    <span class="kw">let </span>was_draining = <span class="self">self</span>.state.move_to_drained(<span class="prelude-val">Some</span>(conn_err));
-<a href=#4411 id=4411 data-nosnippet>4411</a>                    <span class="kw">if </span>!was_draining {
+<a href=#4411 id=4411 data-nosnippet>4411</a>                    <span class="kw">if </span>!was_draining &amp;&amp; !was_drained {
 <a href=#4412 id=4412 data-nosnippet>4412</a>                        <span class="self">self</span>.endpoint_events.push_back(EndpointEventInner::Draining);
 <a href=#4413 id=4413 data-nosnippet>4413</a>                    }
 <a href=#4414 id=4414 data-nosnippet>4414</a>                }
