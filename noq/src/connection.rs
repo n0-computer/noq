@@ -389,7 +389,10 @@ impl Connection {
     /// If `out` is empty the future resolves immediately with `Ok(0)`.
     ///
     /// [`read_datagram()`]: Connection::read_datagram
-    pub fn read_many_datagrams<'a>(&'a self, out: &'a mut [Bytes]) -> ReadManyDatagrams<'a> {
+    pub fn read_many_datagrams<'a, 'b>(
+        &'a self,
+        out: &'b mut [Bytes],
+    ) -> ReadManyDatagrams<'a, 'b> {
         ReadManyDatagrams {
             conn: &self.0,
             out,
@@ -1169,15 +1172,15 @@ impl Future for ReadDatagram<'_> {
 
 pin_project! {
     /// Future produced by [`Connection::read_many_datagrams`]
-    pub struct ReadManyDatagrams<'a> {
+    pub struct ReadManyDatagrams<'a, 'b> {
         conn: &'a ConnectionRef,
-        out: &'a mut [Bytes],
+        out: &'b mut [Bytes],
         #[pin]
         notify: Notified<'a>,
     }
 }
 
-impl Future for ReadManyDatagrams<'_> {
+impl Future for ReadManyDatagrams<'_, '_> {
     type Output = Result<usize, ConnectionError>;
     fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut this = self.project();
