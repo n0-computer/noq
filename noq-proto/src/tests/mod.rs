@@ -4618,13 +4618,17 @@ fn recv_bytes(mut recv_stream: crate::RecvStream<'_>, bytes_received: &mut usize
     let _ = chunks.finalize();
 }
 
-/// Regression test: coalescing multiple Initial packets with 20-byte CIDs and a
-/// Retry token must not trigger `debug_assert!(max_size >= min_size)` in
-/// `PacketBuilder::new`.
+/// Regression test for when loss probes were coalesced, causing a `max_size >= min_size`
+/// assert to fail.
 ///
-/// With 20-byte CIDs, each coalesced Initial header is 133 bytes. The coalescing
-/// check only accounted for the `MIN_PACKET_SPACE = 87`, which only covers
-/// Handshake/0-RTT headers.
+/// This test used to send a bunch of Initial packets coalesced together because we
+/// didn't properly advance the space_id when coalescing.
+///
+/// To trigger the actual assertion, 20-byte CIDs and a retry token in the header were used.
+/// The MIN_PACKET_SIZE check doesn't take the retry token in initial packet headers into
+/// account, thus it doesn't properly decide to not coalesce.
+///
+/// To fix this, we properly advance the space_id when coalescing packets.
 #[test]
 fn regression_initial_coalescing_large_cid() {
     let _guard = subscribe();
@@ -4643,6 +4647,8 @@ fn regression_initial_coalescing_large_cid() {
     pair.drive_client();
     pair.drive_server();
 
+    // Trigger loss probes, thus re-sending packets from the Initial space by moving forward
+    // in time a bit:
     pair.time = pair.time + Duration::from_secs(5);
-    pair.drive_client();
+    pair.drive_client(); // this used to try to build a packet without enough datagram space
 }

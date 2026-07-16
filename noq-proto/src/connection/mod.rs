@@ -1732,20 +1732,29 @@ impl Connection {
             // as well.  Because if this is the last packet in the datagram more padding
             // might be needed because of the packet type, or to fill the GSO segment size.
 
+            let max_packet_size = builder
+                .buf
+                .datagram_remaining_mut()
+                .saturating_sub(builder.predict_packet_end());
             // Are we allowed to coalesce AND is there enough space for another *packet* in
             // this datagram AND will we definitely send another packet?
-            if builder.can_coalesce && path_id == PathId::ZERO && {
-                let max_packet_size = builder
-                    .buf
-                    .datagram_remaining_mut()
-                    .saturating_sub(builder.predict_packet_end());
-                max_packet_size > MIN_PACKET_SPACE
-                    && self.has_pending_packet(space_id, max_packet_size, connection_close_pending)
-            } {
+            if builder.can_coalesce
+                && path_id == PathId::ZERO
+                && let Some(next_space_id) = space_id.next()
+                && max_packet_size > MIN_PACKET_SPACE
+                && self.has_pending_packet(next_space_id, max_packet_size, connection_close_pending)
+            {
                 // We can append/coalesce the next packet into the current
                 // datagram. Finish the current packet without adding extra padding.
                 trace!("will coalesce with next packet");
+                let last_pn = builder.packet_number;
                 builder.finish_and_track(now, self, path_id, PadDatagram::No);
+                // We need to return - this loop would re-try the same SpaceId, which we don't want.
+                // We want to coalesce with the next space_id.
+                return PollPathSpaceStatus::WrotePacket {
+                    last_packet_number: last_pn,
+                    pad_datagram,
+                };
             } else {
                 // We need a new datagram for the next packet.  Finish the current
                 // packet with padding.
