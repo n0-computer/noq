@@ -4688,3 +4688,38 @@ fn recv_bytes(mut recv_stream: crate::RecvStream<'_>, bytes_received: &mut usize
     // The callee needs to immediately pair.step()
     let _ = chunks.finalize();
 }
+
+/// Regression test for when loss probes were coalesced, causing a `max_size >= min_size`
+/// assert to fail.
+///
+/// This test used to send a bunch of Initial packets coalesced together because we
+/// didn't properly advance the space_id when coalescing.
+///
+/// To trigger the actual assertion, 20-byte CIDs and a retry token in the header were used.
+/// The MIN_PACKET_SIZE check doesn't take the retry token in initial packet headers into
+/// account, thus it doesn't properly decide to not coalesce.
+///
+/// To fix this, we properly advance the space_id when coalescing packets.
+#[test]
+fn regression_initial_coalescing_large_cid() {
+    let _guard = subscribe();
+
+    let mut endpoint_config = EndpointConfig::default();
+    endpoint_config.cid_generator(Arc::new(|| Box::new(RandomConnectionIdGenerator::new(20))));
+
+    let mut pair = Pair::new(Arc::new(endpoint_config), server_config());
+    pair.server.handle_incoming = Box::new(validate_incoming);
+    let _client_ch = pair.begin_connect(client_config());
+
+    pair.drive_client();
+    pair.drive_server();
+    pair.drive_client();
+    pair.advance_time();
+    pair.drive_client();
+    pair.drive_server();
+
+    // Trigger loss probes, thus re-sending packets from the Initial space by moving forward
+    // in time a bit:
+    pair.time += Duration::from_secs(5);
+    pair.drive_client(); // this used to try to build a packet without enough datagram space
+}
