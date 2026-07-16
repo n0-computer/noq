@@ -295,6 +295,7 @@ async fn send_loop(conn: &Connection, opt: DatagramOpt) -> Result<DatagramCounte
     if batch_size > 1 {
         let batch = vec![payload; batch_size];
         while sent_bytes < opt.total_bytes {
+            wait_for_send_space(conn, batch_size * pkt_size).await;
             let queued = conn
                 .send_many_datagrams(&batch)
                 .map_err(|e| anyhow::anyhow!("send_many_datagrams failed: {e}"))?;
@@ -305,9 +306,11 @@ async fn send_loop(conn: &Connection, opt: DatagramOpt) -> Result<DatagramCounte
         while sent_bytes < opt.total_bytes {
             let pkt = payload.clone();
             match opt.send_mode {
-                SendMode::Drop => conn
-                    .send_datagram(pkt)
-                    .map_err(|e| anyhow::anyhow!("send_datagram failed: {e}"))?,
+                SendMode::Drop => {
+                    wait_for_send_space(conn, pkt_size).await;
+                    conn.send_datagram(pkt)
+                        .map_err(|e| anyhow::anyhow!("send_datagram failed: {e}"))?
+                }
                 SendMode::Wait => conn
                     .send_datagram_wait(pkt)
                     .await
@@ -325,6 +328,18 @@ async fn send_loop(conn: &Connection, opt: DatagramOpt) -> Result<DatagramCounte
         send_elapsed,
         ..Default::default()
     })
+}
+
+/// Wait until the outgoing datagram buffer has room for `bytes`.
+///
+/// Paces the drop-mode flood to the driver's actual transmission rate. Without
+/// this the send loop displaces its own queued datagrams (drop-oldest) faster
+/// than they can hit the wire, and the benchmark measures queueing speed
+/// instead of throughput.
+async fn wait_for_send_space(conn: &Connection, bytes: usize) {
+    while conn.datagram_send_buffer_space() < bytes {
+        tokio::task::yield_now().await;
+    }
 }
 
 /// Drain datagrams until `done` resolves (the peer finished sending), then keep
