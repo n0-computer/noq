@@ -314,13 +314,16 @@ impl FromStr for CipherSuite {
 // --- Datagram benchmark options ---
 
 /// Direction of the datagram flood.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, derive_more::Display, Clone, Copy, PartialEq, Eq)]
 pub enum Direction {
     /// Client sends, server receives.
+    #[display("send")]
     Send,
     /// Server sends, client receives.
+    #[display("recv")]
     Recv,
     /// Both sides send and receive concurrently (full-duplex).
+    #[display("both")]
     Both,
 }
 
@@ -337,11 +340,13 @@ impl FromStr for Direction {
 }
 
 /// How the sender should issue datagrams.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, derive_more::Display, Clone, Copy, PartialEq, Eq)]
 pub enum SendMode {
     /// `Connection::send_datagram`: drops the oldest queued datagram on backpressure.
+    #[display("drop")]
     Drop,
     /// `Connection::send_datagram_wait`: backpressures (waits for buffer space).
+    #[display("wait")]
     Wait,
 }
 
@@ -357,10 +362,13 @@ impl FromStr for SendMode {
 }
 
 /// Congestion controller to use.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, derive_more::Display, Clone, Copy, PartialEq, Eq)]
 pub enum Congestion {
+    #[display("cubic")]
     Cubic,
+    #[display("newreno")]
     NewReno,
+    #[display("bbr3")]
     Bbr3,
 }
 

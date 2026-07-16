@@ -9,6 +9,7 @@ publish = false
 anyhow = { workspace = true }
 bytes = { workspace = true }
 clap = { workspace = true }
+derive_more = { workspace = true }
 hdrhistogram = { workspace = true }
 noq = { package = "noq", path = "../noq", features = ["ring"] }
 rcgen = { workspace = true }
