@@ -29,16 +29,34 @@ pub fn configure_tracing_subscriber() {
     .unwrap();
 }
 
+/// Trait shared by the stream (`Opt`) and datagram (`DatagramOpt`) benchmark option
+/// structs so the endpoint/connection helpers can be reused by both binaries.
+pub trait BenchOpt: Copy {
+    /// Desired cipher suite for the TLS handshake.
+    fn cipher(&self) -> CipherSuite;
+    /// Transport config to use for this benchmark run.
+    fn transport_config(&self) -> noq::TransportConfig;
+}
+
+impl BenchOpt for Opt {
+    fn cipher(&self) -> CipherSuite {
+        self.cipher
+    }
+    fn transport_config(&self) -> noq::TransportConfig {
+        transport_config(self)
+    }
+}
+
 /// Creates a server endpoint which runs on the given runtime
-pub fn server_endpoint(
+pub fn server_endpoint<O: BenchOpt>(
     rt: &tokio::runtime::Runtime,
     cert: CertificateDer<'static>,
     key: PrivateKeyDer<'static>,
-    opt: &Opt,
+    opt: &O,
 ) -> (SocketAddr, noq::Endpoint) {
     let cert_chain = vec![cert];
     let mut server_config = noq::ServerConfig::with_single_cert(cert_chain, key).unwrap();
-    server_config.transport = Arc::new(transport_config(opt));
+    server_config.transport = Arc::new(opt.transport_config());
 
     let endpoint = {
         let _guard = rt.enter();
@@ -53,10 +71,10 @@ pub fn server_endpoint(
 }
 
 /// Create a client endpoint and client connection
-pub async fn connect_client(
+pub async fn connect_client<O: BenchOpt>(
     server_addr: SocketAddr,
     server_cert: CertificateDer<'_>,
-    opt: Opt,
+    opt: O,
 ) -> Result<(noq::Endpoint, noq::Connection)> {
     let endpoint =
         noq::Endpoint::client(SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0)).unwrap();
@@ -66,7 +84,7 @@ pub async fn connect_client(
 
     let default_provider = rustls::crypto::ring::default_provider();
     let provider = rustls::crypto::CryptoProvider {
-        cipher_suites: vec![opt.cipher.as_rustls()],
+        cipher_suites: vec![opt.cipher().as_rustls()],
         ..default_provider
     };
 
@@ -77,7 +95,7 @@ pub async fn connect_client(
         .with_no_client_auth();
 
     let mut client_config = noq::ClientConfig::new(Arc::new(QuicClientConfig::try_from(crypto)?));
-    client_config.transport_config(Arc::new(transport_config(&opt)));
+    client_config.transport_config(Arc::new(opt.transport_config()));
 
     let connection = endpoint
         .connect_with(client_config, server_addr, "localhost")
@@ -290,5 +308,184 @@ impl FromStr for CipherSuite {
             "chacha20" => Ok(Self::Chacha20),
             _ => Err(anyhow::anyhow!("Unknown cipher suite {}", s)),
         }
+    }
+}
+
+// --- Datagram benchmark options ---
+
+/// Direction of the datagram flood.
+#[derive(Debug, derive_more::Display, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    /// Client sends, server receives.
+    #[display("send")]
+    Send,
+    /// Server sends, client receives.
+    #[display("recv")]
+    Recv,
+    /// Both sides send and receive concurrently (full-duplex).
+    #[display("both")]
+    Both,
+}
+
+impl FromStr for Direction {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "send" => Ok(Self::Send),
+            "recv" | "receive" => Ok(Self::Recv),
+            "both" | "duplex" => Ok(Self::Both),
+            _ => Err(anyhow::anyhow!("Unknown direction {} (send|recv|both)", s)),
+        }
+    }
+}
+
+/// How the sender should issue datagrams.
+#[derive(Debug, derive_more::Display, Clone, Copy, PartialEq, Eq)]
+pub enum SendMode {
+    /// `Connection::send_datagram`: drops the oldest queued datagram on backpressure.
+    #[display("drop")]
+    Drop,
+    /// `Connection::send_datagram_wait`: backpressures (waits for buffer space).
+    #[display("wait")]
+    Wait,
+}
+
+impl FromStr for SendMode {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "drop" => Ok(Self::Drop),
+            "wait" => Ok(Self::Wait),
+            _ => Err(anyhow::anyhow!("Unknown send-mode {} (drop|wait)", s)),
+        }
+    }
+}
+
+/// Congestion controller to use.
+#[derive(Debug, derive_more::Display, Clone, Copy, PartialEq, Eq)]
+pub enum Congestion {
+    #[display("cubic")]
+    Cubic,
+    #[display("newreno")]
+    NewReno,
+    #[display("bbr3")]
+    Bbr3,
+}
+
+impl FromStr for Congestion {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "cubic" => Ok(Self::Cubic),
+            "newreno" | "new-reno" | "reno" => Ok(Self::NewReno),
+            "bbr3" | "bbr" => Ok(Self::Bbr3),
+            _ => Err(anyhow::anyhow!(
+                "Unknown congestion {} (cubic|newreno|bbr3)",
+                s
+            )),
+        }
+    }
+}
+
+/// Options for the datagram benchmark.
+#[derive(Parser, Debug, Clone, Copy)]
+#[clap(name = "datagram")]
+pub struct DatagramOpt {
+    /// Number of parallel client connections (each floods independently).
+    #[clap(long, short = 'c', default_value = "1")]
+    pub clients: usize,
+
+    /// Direction of the flood: client to server (send), server to client (recv), or both.
+    #[clap(long, default_value = "send")]
+    pub direction: Direction,
+
+    /// Datagram payload size in bytes. Clamped to the negotiated max datagram size.
+    #[clap(long, default_value = "1200")]
+    pub packet_size: usize,
+
+    /// Total bytes to send per direction. SI suffixes: 1G, 500M, 10k.
+    #[clap(long, default_value = "1G", value_parser = parse_byte_size)]
+    pub total_bytes: u64,
+
+    /// How the sender issues datagrams: `drop` (send_datagram) or `wait` (send_datagram_wait).
+    #[clap(long, default_value = "drop")]
+    pub send_mode: SendMode,
+
+    /// Datagrams per API call. 1 uses the single-datagram APIs; larger values use
+    /// `send_many_datagrams` / `read_many_datagrams`. Batch sending requires
+    /// `--send-mode drop`.
+    #[clap(long, default_value = "1")]
+    pub batch_size: usize,
+
+    /// Congestion controller.
+    #[clap(long, default_value = "cubic")]
+    pub congestion: Congestion,
+
+    /// `send_fairness` transport setting. Rayfish uses one datagram stream per peer, so
+    /// `false` is the likely-better setting; default keeps noq's default (`true`).
+    #[clap(long, default_value = "true")]
+    pub send_fairness: bool,
+
+    /// `datagram_send_buffer_size` in bytes.
+    #[clap(long, default_value = "1048576")]
+    pub datagram_send_buffer: usize,
+
+    /// `datagram_receive_buffer_size` in bytes. If unset, uses noq's default.
+    #[clap(long)]
+    pub datagram_recv_buffer: Option<usize>,
+
+    /// `ack_eliciting_threshold` for the ACK frequency extension. If unset, disabled.
+    #[clap(long)]
+    pub ack_frequency: Option<u32>,
+
+    /// Starting guess for maximum UDP payload size.
+    #[clap(long, default_value = "1200")]
+    pub initial_mtu: u16,
+
+    /// Print connection stats at the end.
+    #[clap(long)]
+    pub stats: bool,
+
+    /// Runtime type.
+    #[clap(long, default_value = "tokio")]
+    pub runtime_type: RuntimeType,
+
+    /// Cipher suite.
+    #[clap(long, default_value = "aes128")]
+    pub cipher: CipherSuite,
+}
+
+impl BenchOpt for DatagramOpt {
+    fn cipher(&self) -> CipherSuite {
+        self.cipher
+    }
+    fn transport_config(&self) -> noq::TransportConfig {
+        let mut config = noq::TransportConfig::default();
+        config.initial_mtu(self.initial_mtu);
+        config.send_fairness(self.send_fairness);
+        config.datagram_send_buffer_size(self.datagram_send_buffer);
+        // Only override the receive buffer when the user explicitly sets one;
+        // leaving it unset keeps noq's default (which enables datagrams). Setting
+        // `None` here would disable datagram support entirely.
+        if let Some(recv_buf) = self.datagram_recv_buffer {
+            config.datagram_receive_buffer_size(Some(recv_buf));
+        }
+        config.enable_segmentation_offload(true);
+
+        let factory: Arc<dyn noq::congestion::ControllerFactory + Send + Sync + 'static> =
+            match self.congestion {
+                Congestion::Cubic => Arc::new(noq::congestion::CubicConfig::default()),
+                Congestion::NewReno => Arc::new(noq::congestion::NewRenoConfig::default()),
+                Congestion::Bbr3 => Arc::new(noq::congestion::Bbr3Config::default()),
+            };
+        config.congestion_controller_factory(factory);
+
+        if let Some(threshold) = self.ack_frequency {
+            let mut acks = noq::AckFrequencyConfig::default();
+            acks.ack_eliciting_threshold(threshold.into());
+            config.ack_frequency_config(Some(acks));
+        }
+
+        config
     }
 }

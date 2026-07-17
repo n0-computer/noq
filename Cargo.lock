@@ -448,6 +448,7 @@ dependencies = [
  "anyhow",
  "bytes",
  "clap",
+ "derive_more",
  "hdrhistogram",
  "noq",
  "rcgen",

@@ -378,6 +378,28 @@ impl Connection {
         }
     }
 
+    /// Receive a batch of application datagrams.
+    ///
+    /// This is the batch analogue of [`read_datagram()`]. The returned future
+    /// resolves once at least one datagram is buffered, drains up to `out.len()` of
+    /// them into `out` from the front in arrival order, and yields the count
+    /// written. It is cheaper than calling [`read_datagram()`] in a loop when
+    /// receiving bursts.
+    ///
+    /// If `out` is empty the future resolves immediately with `Ok(0)`.
+    ///
+    /// [`read_datagram()`]: Connection::read_datagram
+    pub fn read_many_datagrams<'a, 'b>(
+        &'a self,
+        out: &'b mut [Bytes],
+    ) -> ReadManyDatagrams<'a, 'b> {
+        ReadManyDatagrams {
+            conn: &self.0,
+            out,
+            notify: self.0.shared.datagram_received.notified(),
+        }
+    }
+
     /// Opens a new path if no path exists yet for `network_path`.
     ///
     /// If `network_path` has no local IP set, then this will open a new path
@@ -663,6 +685,36 @@ impl Connection {
                 TooLarge => SendDatagramError::TooLarge,
             }),
         }
+    }
+
+    /// Transmit many unreliable, unordered application datagrams in a single call.
+    ///
+    /// This is the batch analogue of [`send_datagram()`]: it queues the whole batch
+    /// in one call, which is cheaper than calling [`send_datagram()`] repeatedly.
+    /// Like [`send_datagram()`], older queued datagrams may be dropped to make room.
+    ///
+    /// Returns the number of datagrams queued. The batch is rejected with
+    /// [`SendDatagramError::TooLarge`] if any datagram exceeds
+    /// [`max_datagram_size()`](Self::max_datagram_size).
+    ///
+    /// [`send_datagram()`]: Connection::send_datagram
+    pub fn send_many_datagrams(&self, datagrams: &[Bytes]) -> Result<usize, SendDatagramError> {
+        let conn = &mut *self.0.lock_and_wake("send_many_datagrams");
+        if let Some(ref x) = conn.error {
+            return Err(SendDatagramError::ConnectionLost(x.clone()));
+        }
+        conn.inner
+            .datagrams()
+            .send_many(datagrams, true)
+            .map_err(|e| {
+                use proto::SendDatagramError::*;
+                match e {
+                    Blocked(..) => unreachable!(),
+                    UnsupportedByPeer => SendDatagramError::UnsupportedByPeer,
+                    Disabled => SendDatagramError::Disabled,
+                    TooLarge => SendDatagramError::TooLarge,
+                }
+            })
     }
 
     /// Transmit `data` as an unreliable, unordered application datagram
@@ -1129,6 +1181,48 @@ impl Future for ReadDatagram<'_> {
         // datagrams, which are necessarily finite, can be drained from a closed connection.
         if let Some(x) = state.inner.datagrams().recv() {
             return Poll::Ready(Ok(x));
+        } else if let Some(ref e) = state.error {
+            return Poll::Ready(Err(e.clone()));
+        }
+        loop {
+            match this.notify.as_mut().poll(ctx) {
+                // `state` lock ensures we didn't race with readiness
+                Poll::Pending => return Poll::Pending,
+                // Spurious wakeup, get a new future
+                Poll::Ready(()) => this
+                    .notify
+                    .set(this.conn.shared.datagram_received.notified()),
+            }
+        }
+    }
+}
+
+pin_project! {
+    /// Future produced by [`Connection::read_many_datagrams`]
+    pub struct ReadManyDatagrams<'a, 'b> {
+        conn: &'a ConnectionRef,
+        out: &'b mut [Bytes],
+        #[pin]
+        notify: Notified<'a>,
+    }
+}
+
+impl Future for ReadManyDatagrams<'_, '_> {
+    type Output = Result<usize, ConnectionError>;
+    fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut this = self.project();
+        // An empty `out` can never make progress; resolve instead of waiting for a
+        // datagram we could not deliver.
+        if this.out.is_empty() {
+            return Poll::Ready(Ok(0));
+        }
+        let mut state = this.conn.lock_without_waking("ReadManyDatagrams::poll");
+        // Drain everything currently buffered in one lock hold. Check for buffered
+        // datagrams before `state.error` so a closed connection can still be drained
+        // of its finite in-flight datagrams (same ordering as `ReadDatagram`).
+        let n = state.inner.datagrams().recv_many(this.out);
+        if n > 0 {
+            return Poll::Ready(Ok(n));
         } else if let Some(ref e) = state.error {
             return Poll::Ready(Err(e.clone()));
         }

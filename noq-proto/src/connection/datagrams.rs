@@ -37,25 +37,67 @@ impl Datagrams<'_> {
             return Err(SendDatagramError::TooLarge);
         }
         if drop {
-            while self.conn.datagrams.outgoing_total > self.conn.config.datagram_send_buffer_size {
-                let prev = self
-                    .conn
-                    .datagrams
-                    .outgoing
-                    .pop_front()
-                    .expect("datagrams.outgoing_total desynchronized");
-                trace!(len = prev.data.len(), "dropping outgoing datagram");
-                self.conn.datagrams.outgoing_total -= prev.data.len();
-            }
-        } else if self.conn.datagrams.outgoing_total + data.len()
-            > self.conn.config.datagram_send_buffer_size
-        {
+            self.drop_oldest_until_fits();
+        } else if !self.has_send_buffer_capacity(data.len()) {
             self.conn.datagrams.send_blocked = true;
             return Err(SendDatagramError::Blocked(data));
         }
         self.conn.datagrams.outgoing_total += data.len();
         self.conn.datagrams.outgoing.push_back(Datagram { data });
         Ok(())
+    }
+
+    /// Queue many unreliable, unordered datagrams for transmission in a single call.
+    ///
+    /// This is the batch analogue of [`send`](Self::send): it applies the peer-support
+    /// and size checks once for the whole batch.
+    ///
+    /// The batch is rejected atomically if any datagram is too large: when any element
+    /// exceeds [`max_size`](Self::max_size) this returns [`TooLarge`] and queues nothing.
+    ///
+    /// `drop` selects the backpressure behaviour, matching [`send`](Self::send):
+    ///
+    /// - `drop = true` drops the oldest queued datagrams to make room, so every element
+    ///   is queued and `Ok(datagrams.len())` is returned.
+    /// - `drop = false` queues elements until the send buffer is full, then stops and
+    ///   returns `Ok(n)` for the `n` elements queued. The remaining elements are the
+    ///   caller's to retry once space frees up.
+    ///
+    /// Returns `Err` if datagrams are unsupported by the peer or disabled locally.
+    ///
+    /// [`TooLarge`]: SendDatagramError::TooLarge
+    pub fn send_many(
+        &mut self,
+        datagrams: &[Bytes],
+        drop: bool,
+    ) -> Result<usize, SendDatagramError> {
+        if self.conn.config.datagram_receive_buffer_size.is_none() {
+            return Err(SendDatagramError::Disabled);
+        }
+        let max = self
+            .max_size()
+            .ok_or(SendDatagramError::UnsupportedByPeer)?;
+        if datagrams.iter().any(|data| data.len() > max) {
+            return Err(SendDatagramError::TooLarge);
+        }
+
+        let mut queued = 0usize;
+        for data in datagrams {
+            if drop {
+                self.drop_oldest_until_fits();
+            } else if !self.has_send_buffer_capacity(data.len()) {
+                self.conn.datagrams.send_blocked = true;
+                break;
+            }
+            self.conn.datagrams.outgoing_total += data.len();
+            self.conn
+                .datagrams
+                .outgoing
+                .push_back(Datagram { data: data.clone() });
+            queued += 1;
+        }
+
+        Ok(queued)
     }
 
     /// Compute the maximum size of datagrams that may be passed to `send_datagram`
@@ -91,6 +133,17 @@ impl Datagrams<'_> {
         self.conn.datagrams.recv()
     }
 
+    /// Drain up to `out.len()` buffered datagrams into `out`, in arrival order.
+    ///
+    /// This is the batch analogue of [`recv`](Self::recv): a single call takes many
+    /// datagrams at once. `out` is filled from the front and overwritten in place;
+    /// pass a slice of empty `Bytes` sized to the batch you want. Returns the number
+    /// of datagrams written, which may be less than `out.len()` if fewer are buffered
+    /// (0 if none). Any remaining datagrams stay queued for the next call.
+    pub fn recv_many(&mut self, out: &mut [Bytes]) -> usize {
+        self.conn.datagrams.recv_many(out)
+    }
+
     /// Bytes available in the outgoing datagram buffer
     ///
     /// When greater than zero, [`send`](Self::send)ing a datagram of at most this size is
@@ -100,6 +153,33 @@ impl Datagrams<'_> {
             .config
             .datagram_send_buffer_size
             .saturating_sub(self.conn.datagrams.outgoing_total)
+    }
+
+    /// Whether the queued datagrams currently exceed the send buffer size.
+    fn is_send_buffer_exceeded(&self) -> bool {
+        self.conn.datagrams.outgoing_total > self.conn.config.datagram_send_buffer_size
+    }
+
+    /// Whether the send buffer has room for a further `len` bytes.
+    fn has_send_buffer_capacity(&self, len: usize) -> bool {
+        self.conn.datagrams.outgoing_total + len <= self.conn.config.datagram_send_buffer_size
+    }
+
+    /// Drop the oldest queued datagrams until the send buffer is no longer exceeded.
+    ///
+    /// Shared by [`send`](Self::send) and [`send_many`](Self::send_many) with
+    /// `drop = true`.
+    fn drop_oldest_until_fits(&mut self) {
+        while self.is_send_buffer_exceeded() {
+            let prev = self
+                .conn
+                .datagrams
+                .outgoing
+                .pop_front()
+                .expect("datagrams.outgoing_total desynchronized");
+            trace!(len = prev.data.len(), "dropping outgoing datagram");
+            self.conn.datagrams.outgoing_total -= prev.data.len();
+        }
     }
 }
 
@@ -197,6 +277,19 @@ impl DatagramState {
         let x = self.incoming.pop_front()?.data;
         self.recv_buffered -= x.len();
         Some(x)
+    }
+
+    /// Drain up to `out.len()` buffered datagrams into `out`, in arrival order.
+    ///
+    /// Returns the number of datagrams written into `out` (which may be less than
+    /// `out.len()` if fewer are buffered). Remaining datagrams stay queued.
+    pub(super) fn recv_many(&mut self, out: &mut [Bytes]) -> usize {
+        let n = out.len().min(self.incoming.len());
+        for (i, d) in self.incoming.drain(..n).enumerate() {
+            self.recv_buffered -= d.data.len();
+            out[i] = d.data;
+        }
+        n
     }
 }
 
