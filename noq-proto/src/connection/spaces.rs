@@ -496,12 +496,9 @@ impl PacketNumberSpace {
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(super) enum OpenStatus {
-    /// A first packet has not been sent using this [`PathId`].
+    /// The application has not yet been informed of this path.
     #[default]
     Pending,
-    /// The first packet has been sent using this [`PathId`]. However, it is not yet deemed good
-    /// enough to be reported to the application.
-    Sent,
     /// The application has been informed of this path.
     Informed,
 }

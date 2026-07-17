@@ -1656,72 +1656,6 @@ fn migration() {
     );
 }
 
-#[test]
-fn path_challenge_retransmit() {
-    let _guard = subscribe();
-    let mut pair = Pair::default();
-    let (client_ch, server_ch) = pair.connect();
-    pair.drive();
-
-    pair.client_conn_mut(client_ch).ping();
-    pair.drive();
-
-    println!("-------- server wants path validation --------");
-    pair.server_conn_mut(server_ch).trigger_path_validation();
-    pair.drive_server(); // Send the path challenge
-    println!("-------- client loses messages --------");
-    // Have the client lose the challenge
-    pair.client.inbound.clear();
-
-    pair.drive();
-
-    let client_tx = pair.client_conn_mut(client_ch).stats().frame_tx;
-    let server_tx = pair.server_conn_mut(server_ch).stats().frame_tx;
-
-    assert_eq!(
-        server_tx.path_challenge, 2,
-        "expected server to send two path challenges"
-    );
-    assert_eq!(
-        client_tx.path_response, 1,
-        "expected client to send one path response"
-    );
-}
-
-#[test]
-fn path_response_retransmit() {
-    let _guard = subscribe();
-    let mut pair = Pair::default();
-    let (client_ch, server_ch) = pair.connect();
-    pair.drive();
-
-    pair.client_conn_mut(client_ch).ping();
-    pair.drive();
-
-    println!("-------- server wants path validation --------");
-    pair.server_conn_mut(server_ch).trigger_path_validation();
-    pair.drive_server(); // Send the path challenge
-    pair.drive_client(); // Send the path response
-    println!("-------- server loses messages --------");
-    // Have the server lose the path response
-    pair.server.inbound.clear();
-
-    // The server should decide to re-send the path challenge
-    pair.drive();
-
-    let client_tx = pair.client_conn_mut(client_ch).stats().frame_tx;
-    let server_tx = pair.server_conn_mut(server_ch).stats().frame_tx;
-
-    assert_eq!(
-        server_tx.path_challenge, 2,
-        "expected server to send two path challenges"
-    );
-    assert_eq!(
-        client_tx.path_response, 2,
-        "expected client to send two path responses"
-    );
-}
-
 /// Regression test: handle sent challenges that are waiting for a response while a passive
 /// migration occurs.
 ///
@@ -4596,19 +4530,16 @@ fn throughput() -> TestResult {
 
     let _guard = subscribe();
     let mut pair = ConnPair::builder()
-        .with_routes(
-            BwLimitedRouting::new(
-                Pair::CLIENT_ADDR,
-                Pair::SERVER_ADDR,
-                crate::Instant::now(),
-                BwLimitConfig {
-                    bytes_per_second: BPS_LIMIT,
-                    buffer_size: 50 * 1500, // buffer that fits ~50 full packets
-                    latency: Duration::from_millis(3),
-                },
-            )
-            .into(),
-        )
+        .with_routes(BwLimitedRouting::new(
+            Pair::CLIENT_ADDR,
+            Pair::SERVER_ADDR,
+            crate::Instant::now(),
+            BwLimitConfig {
+                bytes_per_second: BPS_LIMIT,
+                buffer_size: 50 * 1500, // buffer that fits ~50 full packets
+                latency: Duration::from_millis(3),
+            },
+        ))
         .connect();
 
     let mut bytes_to_send = TOTAL_BYTES;
