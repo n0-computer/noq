@@ -309,6 +309,77 @@ fn stateless_reset_limit() {
     assert!(matches!(event, Some(DatagramEvent::Response(_))));
 }
 
+/// Regression test to ensure a connection that is already `Drained` doesn't emit a
+/// duplicate `Draining` endpoint event when a second stateless-reset datagram is processed.
+#[test]
+fn duplicate_stateless_reset_emits_single_draining() {
+    let _guard = subscribe();
+    let mut key_material = vec![0; 64];
+    let mut rng = rand::rng();
+    rng.fill_bytes(&mut key_material);
+    let reset_key = hmac::Key::new(hmac::HMAC_SHA256, &key_material);
+    rng.fill_bytes(&mut key_material);
+
+    let mut endpoint_config = EndpointConfig::new(Arc::new(reset_key));
+    endpoint_config.cid_generator(Arc::new(move || {
+        Box::new(HashedConnectionIdGenerator::from_key(0))
+    }));
+    let endpoint_config = Arc::new(endpoint_config);
+
+    let mut pair = Pair::new(endpoint_config.clone(), server_config());
+    let (client_ch, _) = pair.connect();
+    pair.drive(); // Flush any post-handshake frames
+
+    // Recreate the server endpoint so it loses all connection state but keeps the same
+    // reset key, causing it to respond to the client's packets with stateless resets.
+    pair.server.endpoint = Endpoint::new(endpoint_config, Some(Arc::new(server_config())), true);
+    // Force the server to generate the smallest possible stateless reset
+    pair.client.connections.get_mut(&client_ch).unwrap().ping();
+    pair.drive_client();
+    pair.drive_server();
+
+    // Capture the stateless reset datagram delivered to the client before it is processed.
+    let (_, captured_stateless_reset) = pair
+        .client
+        .inbound
+        .pop_first()
+        .expect("server should have sent a stateless reset");
+    pair.client.inbound.clear();
+
+    let now = pair.time;
+
+    // Duplicate the captured stateless reset token:
+    pair.client
+        .inbound
+        .push(now, captured_stateless_reset.clone());
+    pair.client.inbound.push(now, captured_stateless_reset);
+
+    // Only call drive_incoming instead of drive_client so we can manually count
+    // endpoint events below.
+    pair.client.drive_incoming(now);
+
+    // Apply the connection events produced by the endpoint and collect all endpoint events
+    // emitted by the connection.
+    let conn = pair.client.connections.get_mut(&client_ch).unwrap();
+    for (_, mut events) in pair.client.conn_events.drain() {
+        for event in events.drain(..) {
+            conn.handle_event(event);
+        }
+    }
+
+    // A drained connection receiving a second stateless reset must not emit a duplicate
+    // `Draining` event.
+    let mut draining = 0;
+    let mut drained = 0;
+    while let Some(event) = conn.poll_endpoint_events() {
+        draining += event.is_draining() as usize;
+        drained += event.is_drained() as usize;
+    }
+
+    assert_eq!(draining, 1, "expected exactly one Draining event");
+    assert_eq!(drained, 1, "expected exactly one Drained event");
+}
+
 #[test]
 fn export_keying_material() {
     let _guard = subscribe();
@@ -4616,4 +4687,39 @@ fn recv_bytes(mut recv_stream: crate::RecvStream<'_>, bytes_received: &mut usize
     }
     // The callee needs to immediately pair.step()
     let _ = chunks.finalize();
+}
+
+/// Regression test for when loss probes were coalesced, causing a `max_size >= min_size`
+/// assert to fail.
+///
+/// This test used to send a bunch of Initial packets coalesced together because we
+/// didn't properly advance the space_id when coalescing.
+///
+/// To trigger the actual assertion, 20-byte CIDs and a retry token in the header were used.
+/// The MIN_PACKET_SIZE check doesn't take the retry token in initial packet headers into
+/// account, thus it doesn't properly decide to not coalesce.
+///
+/// To fix this, we properly advance the space_id when coalescing packets.
+#[test]
+fn regression_initial_coalescing_large_cid() {
+    let _guard = subscribe();
+
+    let mut endpoint_config = EndpointConfig::default();
+    endpoint_config.cid_generator(Arc::new(|| Box::new(RandomConnectionIdGenerator::new(20))));
+
+    let mut pair = Pair::new(Arc::new(endpoint_config), server_config());
+    pair.server.handle_incoming = Box::new(validate_incoming);
+    let _client_ch = pair.begin_connect(client_config());
+
+    pair.drive_client();
+    pair.drive_server();
+    pair.drive_client();
+    pair.advance_time();
+    pair.drive_client();
+    pair.drive_server();
+
+    // Trigger loss probes, thus re-sending packets from the Initial space by moving forward
+    // in time a bit:
+    pair.time += Duration::from_secs(5);
+    pair.drive_client(); // this used to try to build a packet without enough datagram space
 }

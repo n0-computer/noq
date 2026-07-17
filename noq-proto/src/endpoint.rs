@@ -730,6 +730,8 @@ impl Endpoint {
         self.clean_up_incoming(&incoming);
         incoming.improper_drop_warner.dismiss();
 
+        trace!(?incoming.network_path, "refusing incoming");
+
         self.initial_close(
             incoming.packet.header.version,
             incoming.network_path,
@@ -745,8 +747,14 @@ impl Endpoint {
     /// Errors if `incoming.may_retry()` is false.
     pub fn retry(&mut self, incoming: Incoming, buf: &mut Vec<u8>) -> Result<Transmit, RetryError> {
         if !incoming.may_retry() {
+            trace!(
+                ?incoming.network_path,
+                "not responding retry on incoming due to missing src CID"
+            );
             return Err(RetryError(Box::new(incoming)));
         }
+
+        trace!(?incoming.network_path, "responding retry on incoming");
 
         self.clean_up_incoming(&incoming);
         incoming.improper_drop_warner.dismiss();
@@ -799,6 +807,8 @@ impl Endpoint {
     pub fn ignore(&mut self, incoming: Incoming) {
         self.clean_up_incoming(&incoming);
         incoming.improper_drop_warner.dismiss();
+
+        trace!(?incoming.network_path, "ignoring incoming");
     }
 
     /// Clean up endpoint data structures associated with an `Incoming`.
