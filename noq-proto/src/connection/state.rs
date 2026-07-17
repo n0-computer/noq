@@ -2,6 +2,7 @@ use bytes::Bytes;
 use tracing::trace;
 
 use crate::frame::Close;
+use crate::shared::EndpointEventInner;
 use crate::{ApplicationClose, ConnectionClose, ConnectionError, TransportError, TransportErrorCode};
 
 #[allow(unreachable_pub)] // fuzzing only
@@ -67,8 +68,12 @@ impl State {
     ///
     /// Panics if the state was already drained.
     ///
-    /// Returns whether we were in the draining state before.
-    pub(super) fn move_to_drained(&mut self, error: Option<ConnectionError>) -> bool {
+    /// Emits the appropriate `Draining` and `Drained` endpoint events into `events`.
+    pub(super) fn move_to_drained(
+        &mut self,
+        error: Option<ConnectionError>,
+        events: &mut impl Extend<EndpointEventInner>,
+    ) {
         let (error, is_local, was_draining) = if let Some(error) = error {
             (
                 Some(error),
@@ -103,13 +108,23 @@ impl State {
         };
         self.inner = InnerState::Drained { error, is_local };
         trace!("connection state: drained");
-        was_draining
+
+        if !was_draining {
+            events.extend([EndpointEventInner::Draining]);
+        }
+        events.extend([EndpointEventInner::Drained]);
     }
 
     /// Moves to a draining state.
     ///
     /// Panics if the state is already draining or drained.
-    pub(super) fn move_to_draining(&mut self, error: Option<ConnectionError>) {
+    ///
+    /// Emits a `Draining` endpoint event into `events`.
+    pub(super) fn move_to_draining(
+        &mut self,
+        error: Option<ConnectionError>,
+        events: &mut impl Extend<EndpointEventInner>,
+    ) {
         assert!(
             matches!(
                 self.inner,
@@ -139,6 +154,7 @@ impl State {
 
         self.inner = InnerState::Draining { error, is_local };
         trace!("connection state: draining");
+        events.extend([EndpointEventInner::Draining]);
     }
 
     fn is_local_close(&self) -> bool {

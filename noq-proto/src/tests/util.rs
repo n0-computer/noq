@@ -1097,7 +1097,7 @@ pub(super) struct TestEndpoint {
     pub(super) accepted: Option<Result<ConnectionHandle, ConnectionError>>,
     pub(super) connections: HashMap<ConnectionHandle, Connection>,
     pub(super) draining_connections: HashSet<ConnectionHandle>,
-    conn_events: HashMap<ConnectionHandle, VecDeque<ConnectionEvent>>,
+    pub(super) conn_events: HashMap<ConnectionHandle, VecDeque<ConnectionEvent>>,
     pub(super) captured_packets: Vec<Vec<u8>>,
     pub(super) capture_inbound_packets: bool,
     #[debug("handle_incoming")]
@@ -1105,7 +1105,7 @@ pub(super) struct TestEndpoint {
     pub(super) waiting_incoming: Vec<Incoming>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) struct Inbound {
     pub(super) ecn: Option<EcnCodepoint>,
     pub(super) packet: BytesMut,

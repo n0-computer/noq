@@ -4,6 +4,7 @@ default-members = ["noq", "noq-proto", "noq-udp", "bench", "perf"]
 resolver = "2"
 
 [workspace.package]
+version = "1.1.0"
 rust-version = "1.88"
 edition = "2024"
 license = "MIT OR Apache-2.0"
@@ -95,3 +96,21 @@ unreachable_pub = "warn"
 manual_let_else = "warn"
 or_fun_call = "warn"
 use_self = "warn"
+
+[workspace.metadata.cargo-semver-checks.lints]
+enum_struct_variant_field_marked_deprecated = { required-update = "minor" }
+enum_tuple_variant_field_marked_deprecated = { required-update = "minor" }
+enum_variant_marked_deprecated = { required-update = "minor" }
+function_marked_deprecated = { required-update = "minor" }
+global_value_marked_deprecated = { required-update = "minor" }
+macro_marked_deprecated = { required-update = "minor" }
+proc_macro_marked_deprecated = { required-update = "minor" }
+struct_field_marked_deprecated = { required-update = "minor" }
+trait_associated_const_marked_deprecated = { required-update = "minor" }
+trait_associated_type_marked_deprecated = { required-update = "minor" }
+trait_marked_deprecated = { required-update = "minor" }
+trait_method_marked_deprecated = { required-update = "minor" }
+type_associated_const_marked_deprecated = { required-update = "minor" }
+type_marked_deprecated = { required-update = "minor" }
+type_method_marked_deprecated = { required-update = "minor" }
+union_field_marked_deprecated = { required-update = "minor" }
