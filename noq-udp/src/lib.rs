@@ -198,7 +198,7 @@ fn log_sendmsg_error(
     let last_send_error = &mut *last_send_error.lock().expect("poisend lock");
     if now.saturating_duration_since(*last_send_error) > IO_ERROR_LOG_INTERVAL {
         *last_send_error = now;
-        log::warn!(
+        log::debug!(
             "sendmsg error: {:?}, Transmit: {{ destination: {:?}, src_ip: {:?}, ecn: {:?}, len: {:?}, segment_size: {:?} }}",
             err,
             transmit.destination,
