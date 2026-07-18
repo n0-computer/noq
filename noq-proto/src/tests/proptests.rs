@@ -694,11 +694,8 @@ fn regression_path_validation() {
         seed: Seed::Zeroes,
         extensions: Extensions::MultipathOnly,
         routing_setup: RoutingSetup::Complex(ManyToManyRouting::from_routes(
-            vec![("[::ffff:1.1.1.0]:44433".parse().unwrap(), 0)],
-            vec![
-                ("[::ffff:2.2.2.0]:4433".parse().unwrap(), 0),
-                ("[::ffff:2.2.2.1]:4433".parse().unwrap(), 0),
-            ],
+            vec![("[::ffff:1.1.1.0]:44433", 0)],
+            vec![("[::ffff:2.2.2.0]:4433", 0), ("[::ffff:2.2.2.1]:4433", 0)],
         )),
     };
     let interactions = vec![
@@ -1013,11 +1010,8 @@ fn regression_never_idle4() {
         seed: Seed::Zeroes,
         extensions: Extensions::MultipathOnly,
         routing_setup: RoutingSetup::Complex(ManyToManyRouting::from_routes(
-            vec![
-                ("[::ffff:1.1.1.0]:44433".parse().unwrap(), 0),
-                ("[::ffff:1.1.1.1]:44433".parse().unwrap(), 0),
-            ],
-            vec![("[::ffff:2.2.2.0]:4433".parse().unwrap(), 0)],
+            vec![("[::ffff:1.1.1.0]:44433", 0), ("[::ffff:1.1.1.1]:44433", 0)],
+            vec![("[::ffff:2.2.2.0]:4433", 0)],
         )),
     };
     let interactions = vec![
@@ -1285,11 +1279,11 @@ fn regression_challenge_resend_loop() {
         seed: Seed::Zeroes,
         extensions: Extensions::MultipathOnly,
         routing_setup: RoutingSetup::Complex(ManyToManyRouting::from_routes(
-            vec![("[::ffff:1.1.1.0]:44433".parse().unwrap(), 0)],
+            vec![("[::ffff:1.1.1.0]:44433", 0)],
             vec![
-                ("[::ffff:2.2.2.0]:4433".parse().unwrap(), 0),
-                ("[::ffff:2.2.2.1]:4433".parse().unwrap(), 0),
-                ("[::ffff:2.2.2.2]:4433".parse().unwrap(), 0),
+                ("[::ffff:2.2.2.0]:4433", 0),
+                ("[::ffff:2.2.2.1]:4433", 0),
+                ("[::ffff:2.2.2.2]:4433", 0),
             ],
         )),
     };

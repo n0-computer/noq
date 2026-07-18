@@ -67,6 +67,26 @@ jobs:
           noq-udp = { path = "../noq/noq-udp" }
           EOF
 
+          # Patch the version numbers. Note because the output of
+          # cargo-metadata is JSON, these variables will include the
+          # quotes around the version numbers.
+          NOQ_VERSION=$(cargo metadata --manifest-path=../noq/Cargo.toml --format-version=1 --no-deps | jq '.packages[] | select(.name == "noq") | .version')
+          NOQ_PROTO_VERSION=$(cargo metadata --manifest-path=../noq/Cargo.toml --format-version=1 --no-deps | jq '.packages[] | select(.name == "noq-proto") | .version')
+          NOQ_UDP_VERSION=$(cargo metadata --manifest-path=../noq/Cargo.toml --format-version=1 --no-deps | jq '.packages[] | select(.name == "noq-udp") | .version')
+
+          echo noq version: $NOQ_VERSION
+          echo noq-proto version: $NOQ_PROTO_VERSION
+          echo noq-udp version: $NOQ_UDP_VERSION
+
+          sed -i -E "/^noq .*version/s/(version += +)\"[0-9.]+\"/\1 $NOQ_VERSION/" iroh/Cargo.toml
+          sed -i -E "/^noq .*version/s/(version += +)\"[0-9.]+\"/\1 $NOQ_VERSION/" iroh-relay/Cargo.toml
+          sed -i -E "/^noq-proto .*version/s/(version += +)\"[0-9.]+\"/\1 $NOQ_PROTO_VERSION/" iroh/Cargo.toml
+          sed -i -E "/^noq-proto .*version/s/(version += +)\"[0-9.]+\"/\1 $NOQ_PROTO_VERSION/" iroh-relay/Cargo.toml
+          sed -i -E "/^noq-udp .*version/s/(version += +)\"[0-9.]+\"/\1 $NOQ_UDP_VERSION/" iroh/Cargo.toml
+          sed -i -E "/^noq-udp .*version/s/(version += +)\"[0-9.]+\"/\1 $NOQ_UDP_VERSION/" iroh-relay/Cargo.toml
+          sed -i -E "/^noq = \"[0-9.]+\"/s/\"[0-9.]+\"/$NOQ_VERSION/" iroh/bench/Cargo.toml
+
+
       - name: Build patchbay tests
         working-directory: iroh
         run: cargo make patchbay --no-run

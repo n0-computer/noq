@@ -127,7 +127,7 @@ fn ecn_v6_dualstack() {
         eprintln!("Skipping ECN test on Wine (ECN not supported)");
         return;
     }
-    let recv = socket2::Socket::new(
+    let recv = Socket::new(
         socket2::Domain::IPV6,
         socket2::Type::DGRAM,
         Some(socket2::Protocol::UDP),
@@ -177,7 +177,7 @@ fn ecn_v4_mapped_v6() {
         eprintln!("Skipping ECN test on Wine (ECN not supported)");
         return;
     }
-    let send = socket2::Socket::new(
+    let send = Socket::new(
         socket2::Domain::IPV6,
         socket2::Type::DGRAM,
         Some(socket2::Protocol::UDP),
@@ -253,13 +253,13 @@ fn socket_buffers() {
         1 // Everyone else is sane.
     };
 
-    let send = socket2::Socket::new(
+    let send = Socket::new(
         socket2::Domain::IPV4,
         socket2::Type::DGRAM,
         Some(socket2::Protocol::UDP),
     )
     .unwrap();
-    let recv = socket2::Socket::new(
+    let recv = Socket::new(
         socket2::Domain::IPV4,
         socket2::Type::DGRAM,
         Some(socket2::Protocol::UDP),
@@ -471,6 +471,26 @@ fn test_send_recv(send: &Socket, recv: &Socket, transmit: Transmit<'_>) {
             assert_eq!(meta.ecn, None);
         } else {
             assert_eq!(meta.ecn, transmit.ecn);
+        }
+
+        // On Linux and Android, we expect the kernel to provide a receive timestamp
+        // since we explicitly enabled `SO_TIMESTAMPNS`.
+        #[cfg(all(any(target_os = "linux", target_os = "android"), not(posix_minimal)))]
+        {
+            assert!(
+                meta.timestamp.is_some(),
+                "Kernel timestamp should be present on Linux/Android"
+            );
+            assert!(
+                meta.timestamp.unwrap() > std::time::Duration::ZERO,
+                "Kernel timestamp should be non-zero"
+            );
+        }
+
+        // On other platforms, the timestamp should remain `None`.
+        #[cfg(not(any(target_os = "linux", target_os = "android", posix_minimal)))]
+        {
+            assert!(meta.timestamp.is_none());
         }
     }
     assert_eq!(datagrams, expected_datagrams);

@@ -451,7 +451,7 @@ impl Connection {
     /// - a call to `poll_transmit` returned `Some`
     /// - a call was made to `handle_timeout`
     #[must_use]
-    pub fn poll_timeout(&mut self) -> Option<Instant> {
+    pub fn poll_timeout(&self) -> Option<Instant> {
         self.timers.peek()
     }
 
@@ -584,7 +584,7 @@ impl Connection {
             return Err(PathError::RemoteCidsExhausted);
         }
 
-        let path = self.ensure_path(path_id, network_path, now, None);
+        let path = self.create_path(path_id, network_path, now, None);
         path.status.local_update(initial_status);
 
         Ok(path_id)
@@ -706,15 +706,13 @@ impl Connection {
 
         self.abandoned_paths.insert(path_id);
 
-        for timer in timer::PathTimer::VALUES {
+        for timer in PathTimer::VALUES {
             // match for completeness
             let keep_timer = match timer {
                 // These timers deal with sending and receiving PATH_CHALLENGE and
                 // PATH_RESPONSE, but now that the path is abandoned, we no longer care about
                 // these frames or their timing
-                PathTimer::PathValidationFailed
-                | PathTimer::PathChallengeLost
-                | PathTimer::AbandonFromValidation => false,
+                PathTimer::PathValidationFailed | PathTimer::PathChallengeLost => false,
                 // These timers deal with the lifetime of the path. Now that the path is abandoned,
                 // these are not relevant.
                 PathTimer::PathKeepAlive | PathTimer::PathIdle => false,
@@ -861,7 +859,7 @@ impl Connection {
             .paths
             .get_mut(&path_id)
             .ok_or(ClosedPath { _private: () })?;
-        let prev = std::mem::replace(&mut path.data.idle_timeout, timeout);
+        let prev = mem::replace(&mut path.data.idle_timeout, timeout);
 
         // Adjust the PathIdle timer, accounting for already-elapsed idle time.
         if !self.state.is_closed() {
@@ -900,7 +898,7 @@ impl Connection {
             .paths
             .get_mut(&path_id)
             .ok_or(ClosedPath { _private: () })?;
-        Ok(std::mem::replace(&mut path.data.keep_alive, interval))
+        Ok(mem::replace(&mut path.data.keep_alive, interval))
     }
 
     /// Find an open, validated path that's on the same network path as the given network path.
@@ -925,7 +923,7 @@ impl Connection {
     /// Creates the [`PathData`] for a new [`PathId`].
     ///
     /// Called for incoming packets as well as when opening a new path locally.
-    fn ensure_path(
+    fn create_path(
         &mut self,
         path_id: PathId,
         network_path: FourTuple,
@@ -1548,7 +1546,7 @@ impl Connection {
                     // Clamp the datagram to at most the minimum MTU to ensure that loss
                     // probes can get through and enable recovery even if the path MTU
                     // has shrank unexpectedly.
-                    transmit.start_new_datagram_with_size(std::cmp::min(
+                    transmit.start_new_datagram_with_size(cmp::min(
                         usize::from(INITIAL_MTU),
                         transmit.segment_size(),
                     ));
@@ -1728,20 +1726,32 @@ impl Connection {
             // as well.  Because if this is the last packet in the datagram more padding
             // might be needed because of the packet type, or to fill the GSO segment size.
 
+            let max_packet_size = builder
+                .buf
+                .datagram_remaining_mut()
+                .saturating_sub(builder.predict_packet_end());
             // Are we allowed to coalesce AND is there enough space for another *packet* in
             // this datagram AND will we definitely send another packet?
-            if builder.can_coalesce && path_id == PathId::ZERO && {
-                let max_packet_size = builder
-                    .buf
-                    .datagram_remaining_mut()
-                    .saturating_sub(builder.predict_packet_end());
-                max_packet_size > MIN_PACKET_SPACE
-                    && self.has_pending_packet(space_id, max_packet_size, connection_close_pending)
-            } {
+            if builder.can_coalesce
+                && path_id == PathId::ZERO
+                && let Some(next_space_id) = space_id.next()
+                && max_packet_size > MIN_PACKET_SPACE
+                && self
+                    .space_can_send(space_id, path_id, max_packet_size, connection_close_pending)
+                    .is_empty()
+                && self.has_pending_packet(next_space_id, max_packet_size, connection_close_pending)
+            {
                 // We can append/coalesce the next packet into the current
                 // datagram. Finish the current packet without adding extra padding.
                 trace!("will coalesce with next packet");
+                let last_pn = builder.packet_number;
                 builder.finish_and_track(now, self, path_id, PadDatagram::No);
+                // We need to return - this loop would re-try the same SpaceId, which we don't want.
+                // We want to coalesce with the next space_id.
+                return PollPathSpaceStatus::WrotePacket {
+                    last_packet_number: last_pn,
+                    pad_datagram,
+                };
             } else {
                 // We need a new datagram for the next packet.  Finish the current
                 // packet with padding.
@@ -2417,14 +2427,7 @@ impl Connection {
             match timer {
                 Timer::Conn(timer) => match timer {
                     ConnTimer::Close => {
-                        let was_draining = self.state.move_to_drained(None);
-                        if !was_draining {
-                            self.endpoint_events.push_back(EndpointEventInner::Draining);
-                        }
-                        // move_to_drained checks that we weren't in drained before.
-                        // Adding events to endpoint_events is only legal if `Drained` was never
-                        // queued before.
-                        self.endpoint_events.push_back(EndpointEventInner::Drained);
+                        self.state.move_to_drained(None, &mut self.endpoint_events);
                     }
                     ConnTimer::Idle => {
                         self.kill(ConnectionError::TimedOut);
@@ -2542,24 +2545,11 @@ impl Connection {
                             trace!(?path.data.lost_challenge_count, "path challenge deemed lost");
                             path.data.pending_challenge = true;
                             path.data.lost_challenge_count += 1;
-                        }
-                        PathTimer::AbandonFromValidation => {
-                            let Some(path) = self.paths.get_mut(&path_id) else {
-                                continue;
-                            };
-                            path.data.reset_on_path_challenges();
-                            self.timers.stop(
+                            self.timers.set(
                                 Timer::PerPath(path_id, PathTimer::PathChallengeLost),
+                                now + path.data.on_path_challenge_pto(),
                                 self.qlog.with_time(now),
                             );
-                            debug!("new path validation failed");
-                            if let Err(err) = self.close_path_inner(
-                                now,
-                                path_id,
-                                PathAbandonReason::ValidationFailed,
-                            ) {
-                                warn!(?err, "failed closing path");
-                            }
                         }
                         PathTimer::Pacing => {}
                         PathTimer::MaxAckDelay => {
@@ -4367,7 +4357,7 @@ impl Connection {
 
                         if self.side().is_server() && !self.abandoned_paths.contains(&path_id) {
                             // Only the client is allowed to open paths
-                            self.ensure_path(path_id, network_path, now, pn);
+                            self.create_path(path_id, network_path, now, pn);
                         }
                         if self.paths.contains_key(&path_id) {
                             self.on_packet_authenticated(
@@ -4408,9 +4398,9 @@ impl Connection {
                     code: TransportErrorCode::AEAD_LIMIT_REACHED,
                     ..
                 }) => {
-                    let was_draining = self.state.move_to_drained(Some(conn_err));
-                    if !was_draining {
-                        self.endpoint_events.push_back(EndpointEventInner::Draining);
+                    if !self.state.is_drained() {
+                        self.state
+                            .move_to_drained(Some(conn_err), &mut self.endpoint_events);
                     }
                 }
                 ConnectionError::TimedOut => {
@@ -4421,8 +4411,8 @@ impl Connection {
                     self.state.move_to_closed(err);
                 }
                 ConnectionError::VersionMismatch => {
-                    self.state.move_to_draining(Some(conn_err));
-                    self.endpoint_events.push_back(EndpointEventInner::Draining);
+                    self.state
+                        .move_to_draining(Some(conn_err), &mut self.endpoint_events);
                 }
                 ConnectionError::LocallyClosed => {
                     unreachable!("LocallyClosed isn't generated by packet processing");
@@ -4440,7 +4430,6 @@ impl Connection {
             }
         }
         if !was_drained && self.state.is_drained() {
-            self.endpoint_events.push_back(EndpointEventInner::Drained);
             // Close timer may have been started previously, e.g. if we sent a close and got a
             // stateless reset in response
             self.timers
@@ -4538,8 +4527,7 @@ impl Connection {
                     self.path_stats.get_mut(path_id).frame_rx.record(frame.ty());
 
                     if let Frame::Close(_error) = frame {
-                        self.state.move_to_draining(None);
-                        self.endpoint_events.push_back(EndpointEventInner::Draining);
+                        self.state.move_to_draining(None, &mut self.endpoint_events);
                         break;
                     }
                 }
@@ -4863,8 +4851,8 @@ impl Connection {
                     self.on_path_ack_received(now, packet.header.space().into(), ack)?;
                 }
                 Frame::Close(reason) => {
-                    self.state.move_to_draining(Some(reason.into()));
-                    self.endpoint_events.push_back(EndpointEventInner::Draining);
+                    self.state
+                        .move_to_draining(Some(reason.into()), &mut self.endpoint_events);
                     return Ok(());
                 }
                 _ => {
@@ -5551,8 +5539,8 @@ impl Connection {
         self.streams.queue_max_stream_id(pending);
 
         if let Some(reason) = close {
-            self.state.move_to_draining(Some(reason.into()));
-            self.endpoint_events.push_back(EndpointEventInner::Draining);
+            self.state
+                .move_to_draining(Some(reason.into()), &mut self.endpoint_events);
             self.connection_close_pending = true;
         }
 
@@ -5626,10 +5614,6 @@ impl Connection {
                 let qlog = self.qlog.with_time(now);
                 self.timers.stop(
                     Timer::PerPath(path_id, PathTimer::PathValidationFailed),
-                    qlog.clone(),
-                );
-                self.timers.stop(
-                    Timer::PerPath(path_id, PathTimer::AbandonFromValidation),
                     qlog.clone(),
                 );
                 let next_challenge = path
@@ -6185,23 +6169,14 @@ impl Connection {
             let challenge = frame::PathChallenge(token);
             builder.write_frame(challenge, stats);
             builder.require_padding();
-            let pto = self.ack_frequency.max_ack_delay_for_pto() + path.rtt.pto_base();
-            let pns = space.for_path(path_id);
-            match pns.open_status {
-                OpenStatus::Sent | OpenStatus::Informed => {}
-                OpenStatus::Pending => {
-                    pns.open_status = OpenStatus::Sent;
-                    self.timers.set(
-                        Timer::PerPath(path_id, PathTimer::AbandonFromValidation),
-                        now + 3 * pto,
-                        self.qlog.with_time(now),
-                    );
-                }
-            }
 
+            // On-path challenges need a PATH_RESPONSE and not only an ACK which can be
+            // received on any path. So set a timer manually instead of relying on the usual
+            // LossDetection/PTO timer. This timer interval keeps exponentially increasing
+            // with missing responses like the normal PTO interval.
             self.timers.set(
                 Timer::PerPath(path_id, PathTimer::PathChallengeLost),
-                now + path.on_path_challenge_expiry(),
+                now + path.on_path_challenge_pto(),
                 self.qlog.with_time(now),
             );
 
@@ -6315,8 +6290,7 @@ impl Connection {
             && space_id == SpaceId::Data
             && path.pending.observed_address
         {
-            let frame =
-                frame::ObservedAddr::new(path.network_path.remote, self.next_observed_addr_seq_no);
+            let frame = ObservedAddr::new(path.network_path.remote, self.next_observed_addr_seq_no);
             if builder.frame_space_remaining() > frame.size() {
                 builder.write_frame(frame, stats);
 
@@ -6974,13 +6948,8 @@ impl Connection {
     /// Terminate the connection instantly, without sending a close packet
     fn kill(&mut self, reason: ConnectionError) {
         self.close_common();
-        let was_draining = self.state.move_to_drained(Some(reason));
-        if !was_draining {
-            self.endpoint_events.push_back(EndpointEventInner::Draining);
-        }
-        // move_to_drained checks that we were never in drained before, so we
-        // never sent a `Drained` event before (it's illegal to send more events after drained).
-        self.endpoint_events.push_back(EndpointEventInner::Drained);
+        self.state
+            .move_to_drained(Some(reason), &mut self.endpoint_events);
     }
 
     /// Storage size required for the largest packet that can be transmitted on all currently
@@ -7247,7 +7216,7 @@ impl AbandonedPaths {
 }
 
 /// Hints when the caller identifies a network change.
-pub trait NetworkChangeHint: std::fmt::Debug + 'static {
+pub trait NetworkChangeHint: fmt::Debug + 'static {
     /// Inform the connection if a path may recover after a network change.
     ///
     /// After network changes, paths may not be recoverable. In this case, waiting for the path to
