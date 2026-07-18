@@ -1737,214 +1737,207 @@
 <a href=#1737 id=1737 data-nosnippet>1737</a>    }
 <a href=#1738 id=1738 data-nosnippet>1738</a>
 <a href=#1739 id=1739 data-nosnippet>1739</a>    <span class="kw">fn </span>drive_timer(<span class="kw-2">&amp;mut </span><span class="self">self</span>, cx: <span class="kw-2">&amp;mut </span>Context&lt;<span class="lifetime">'_</span>&gt;) -&gt; bool {
-<a href=#1740 id=1740 data-nosnippet>1740</a>        <span class="comment">// Check whether we need to (re)set the timer. If so, we must poll again to ensure the
-<a href=#1741 id=1741 data-nosnippet>1741</a>        // timer is registered with the runtime (and check whether it's already
-<a href=#1742 id=1742 data-nosnippet>1742</a>        // expired).
-<a href=#1743 id=1743 data-nosnippet>1743</a>        </span><span class="kw">match </span><span class="self">self</span>.inner.poll_timeout() {
-<a href=#1744 id=1744 data-nosnippet>1744</a>            <span class="prelude-val">Some</span>(deadline) =&gt; {
-<a href=#1745 id=1745 data-nosnippet>1745</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(delay) = <span class="kw-2">&amp;mut </span><span class="self">self</span>.timer {
-<a href=#1746 id=1746 data-nosnippet>1746</a>                    <span class="comment">// There is no need to reset the tokio timer if the deadline
-<a href=#1747 id=1747 data-nosnippet>1747</a>                    // did not change
-<a href=#1748 id=1748 data-nosnippet>1748</a>                    </span><span class="kw">if </span><span class="self">self
-<a href=#1749 id=1749 data-nosnippet>1749</a>                        </span>.timer_deadline
-<a href=#1750 id=1750 data-nosnippet>1750</a>                        .map(|current_deadline| current_deadline != deadline)
-<a href=#1751 id=1751 data-nosnippet>1751</a>                        .unwrap_or(<span class="bool-val">true</span>)
-<a href=#1752 id=1752 data-nosnippet>1752</a>                    {
-<a href=#1753 id=1753 data-nosnippet>1753</a>                        delay.as_mut().reset(deadline);
-<a href=#1754 id=1754 data-nosnippet>1754</a>                    }
-<a href=#1755 id=1755 data-nosnippet>1755</a>                } <span class="kw">else </span>{
-<a href=#1756 id=1756 data-nosnippet>1756</a>                    <span class="self">self</span>.timer = <span class="prelude-val">Some</span>(<span class="self">self</span>.runtime.new_timer(deadline));
-<a href=#1757 id=1757 data-nosnippet>1757</a>                }
-<a href=#1758 id=1758 data-nosnippet>1758</a>                <span class="comment">// Store the actual expiration time of the timer
-<a href=#1759 id=1759 data-nosnippet>1759</a>                </span><span class="self">self</span>.timer_deadline = <span class="prelude-val">Some</span>(deadline);
-<a href=#1760 id=1760 data-nosnippet>1760</a>            }
-<a href=#1761 id=1761 data-nosnippet>1761</a>            <span class="prelude-val">None </span>=&gt; {
-<a href=#1762 id=1762 data-nosnippet>1762</a>                <span class="self">self</span>.timer_deadline = <span class="prelude-val">None</span>;
-<a href=#1763 id=1763 data-nosnippet>1763</a>                <span class="kw">return </span><span class="bool-val">false</span>;
-<a href=#1764 id=1764 data-nosnippet>1764</a>            }
-<a href=#1765 id=1765 data-nosnippet>1765</a>        }
+<a href=#1740 id=1740 data-nosnippet>1740</a>        <span class="kw">let </span><span class="prelude-val">Some</span>(deadline) = <span class="self">self</span>.inner.poll_timeout() <span class="kw">else </span>{
+<a href=#1741 id=1741 data-nosnippet>1741</a>            <span class="self">self</span>.timer_deadline = <span class="prelude-val">None</span>;
+<a href=#1742 id=1742 data-nosnippet>1742</a>            <span class="kw">return </span><span class="bool-val">false</span>;
+<a href=#1743 id=1743 data-nosnippet>1743</a>        };
+<a href=#1744 id=1744 data-nosnippet>1744</a>
+<a href=#1745 id=1745 data-nosnippet>1745</a>        <span class="comment">// Use the clock rather than the async timer to detect expiry: Sleep::poll
+<a href=#1746 id=1746 data-nosnippet>1746</a>        // respects Tokio's cooperative budget and can return Pending for elapsed
+<a href=#1747 id=1747 data-nosnippet>1747</a>        // deadlines.
+<a href=#1748 id=1748 data-nosnippet>1748</a>        </span><span class="kw">let </span>now = <span class="self">self</span>.runtime.now();
+<a href=#1749 id=1749 data-nosnippet>1749</a>        <span class="kw">if </span>now &gt;= deadline {
+<a href=#1750 id=1750 data-nosnippet>1750</a>            <span class="self">self</span>.inner.handle_timeout(now);
+<a href=#1751 id=1751 data-nosnippet>1751</a>            <span class="self">self</span>.timer_deadline = <span class="prelude-val">None</span>;
+<a href=#1752 id=1752 data-nosnippet>1752</a>            <span class="kw">return </span><span class="bool-val">true</span>;
+<a href=#1753 id=1753 data-nosnippet>1753</a>        }
+<a href=#1754 id=1754 data-nosnippet>1754</a>
+<a href=#1755 id=1755 data-nosnippet>1755</a>        <span class="kw">match </span><span class="kw-2">&amp;mut </span><span class="self">self</span>.timer {
+<a href=#1756 id=1756 data-nosnippet>1756</a>            <span class="comment">// Avoid resetting the timer when the deadline is unchanged.
+<a href=#1757 id=1757 data-nosnippet>1757</a>            </span><span class="prelude-val">Some</span>(delay) <span class="kw">if </span><span class="self">self</span>.timer_deadline != <span class="prelude-val">Some</span>(deadline) =&gt; {
+<a href=#1758 id=1758 data-nosnippet>1758</a>                delay.as_mut().reset(deadline);
+<a href=#1759 id=1759 data-nosnippet>1759</a>            }
+<a href=#1760 id=1760 data-nosnippet>1760</a>            <span class="prelude-val">None </span>=&gt; {
+<a href=#1761 id=1761 data-nosnippet>1761</a>                <span class="self">self</span>.timer = <span class="prelude-val">Some</span>(<span class="self">self</span>.runtime.new_timer(deadline));
+<a href=#1762 id=1762 data-nosnippet>1762</a>            }
+<a href=#1763 id=1763 data-nosnippet>1763</a>            <span class="kw">_ </span>=&gt; {}
+<a href=#1764 id=1764 data-nosnippet>1764</a>        }
+<a href=#1765 id=1765 data-nosnippet>1765</a>        <span class="self">self</span>.timer_deadline = <span class="prelude-val">Some</span>(deadline);
 <a href=#1766 id=1766 data-nosnippet>1766</a>
-<a href=#1767 id=1767 data-nosnippet>1767</a>        <span class="kw">if </span><span class="self">self</span>.timer_deadline.is_none() {
-<a href=#1768 id=1768 data-nosnippet>1768</a>            <span class="kw">return </span><span class="bool-val">false</span>;
-<a href=#1769 id=1769 data-nosnippet>1769</a>        }
-<a href=#1770 id=1770 data-nosnippet>1770</a>
-<a href=#1771 id=1771 data-nosnippet>1771</a>        <span class="kw">let </span>delay = <span class="self">self
-<a href=#1772 id=1772 data-nosnippet>1772</a>            </span>.timer
-<a href=#1773 id=1773 data-nosnippet>1773</a>            .as_mut()
-<a href=#1774 id=1774 data-nosnippet>1774</a>            .expect(<span class="string">"timer must exist in this state"</span>)
-<a href=#1775 id=1775 data-nosnippet>1775</a>            .as_mut();
-<a href=#1776 id=1776 data-nosnippet>1776</a>        <span class="kw">if </span>delay.poll(cx).is_pending() {
-<a href=#1777 id=1777 data-nosnippet>1777</a>            <span class="comment">// Since there wasn't a timeout event, there is nothing new
-<a href=#1778 id=1778 data-nosnippet>1778</a>            // for the connection to do
-<a href=#1779 id=1779 data-nosnippet>1779</a>            </span><span class="kw">return </span><span class="bool-val">false</span>;
-<a href=#1780 id=1780 data-nosnippet>1780</a>        }
+<a href=#1767 id=1767 data-nosnippet>1767</a>        <span class="kw">let </span>delay = <span class="self">self
+<a href=#1768 id=1768 data-nosnippet>1768</a>            </span>.timer
+<a href=#1769 id=1769 data-nosnippet>1769</a>            .as_mut()
+<a href=#1770 id=1770 data-nosnippet>1770</a>            .expect(<span class="string">"timer must exist in this state"</span>)
+<a href=#1771 id=1771 data-nosnippet>1771</a>            .as_mut();
+<a href=#1772 id=1772 data-nosnippet>1772</a>        <span class="kw">if </span>delay.poll(cx).is_pending() {
+<a href=#1773 id=1773 data-nosnippet>1773</a>            <span class="kw">return </span><span class="bool-val">false</span>;
+<a href=#1774 id=1774 data-nosnippet>1774</a>        }
+<a href=#1775 id=1775 data-nosnippet>1775</a>
+<a href=#1776 id=1776 data-nosnippet>1776</a>        <span class="comment">// The deadline elapsed in the window between the clock check and poll.
+<a href=#1777 id=1777 data-nosnippet>1777</a>        </span><span class="self">self</span>.inner.handle_timeout(<span class="self">self</span>.runtime.now());
+<a href=#1778 id=1778 data-nosnippet>1778</a>        <span class="self">self</span>.timer_deadline = <span class="prelude-val">None</span>;
+<a href=#1779 id=1779 data-nosnippet>1779</a>        <span class="bool-val">true
+<a href=#1780 id=1780 data-nosnippet>1780</a>    </span>}
 <a href=#1781 id=1781 data-nosnippet>1781</a>
-<a href=#1782 id=1782 data-nosnippet>1782</a>        <span class="comment">// A timer expired, so the caller needs to check for
-<a href=#1783 id=1783 data-nosnippet>1783</a>        // new transmits, which might cause new timers to be set.
-<a href=#1784 id=1784 data-nosnippet>1784</a>        </span><span class="self">self</span>.inner.handle_timeout(<span class="self">self</span>.runtime.now());
-<a href=#1785 id=1785 data-nosnippet>1785</a>        <span class="self">self</span>.timer_deadline = <span class="prelude-val">None</span>;
-<a href=#1786 id=1786 data-nosnippet>1786</a>        <span class="bool-val">true
-<a href=#1787 id=1787 data-nosnippet>1787</a>    </span>}
+<a href=#1782 id=1782 data-nosnippet>1782</a>    <span class="doccomment">/// Wake up a blocked `Driver` task to process I/O
+<a href=#1783 id=1783 data-nosnippet>1783</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>wake(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
+<a href=#1784 id=1784 data-nosnippet>1784</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(x) = <span class="self">self</span>.driver.take() {
+<a href=#1785 id=1785 data-nosnippet>1785</a>            x.wake();
+<a href=#1786 id=1786 data-nosnippet>1786</a>        }
+<a href=#1787 id=1787 data-nosnippet>1787</a>    }
 <a href=#1788 id=1788 data-nosnippet>1788</a>
-<a href=#1789 id=1789 data-nosnippet>1789</a>    <span class="doccomment">/// Wake up a blocked `Driver` task to process I/O
-<a href=#1790 id=1790 data-nosnippet>1790</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>wake(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
-<a href=#1791 id=1791 data-nosnippet>1791</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(x) = <span class="self">self</span>.driver.take() {
-<a href=#1792 id=1792 data-nosnippet>1792</a>            x.wake();
-<a href=#1793 id=1793 data-nosnippet>1793</a>        }
-<a href=#1794 id=1794 data-nosnippet>1794</a>    }
-<a href=#1795 id=1795 data-nosnippet>1795</a>
-<a href=#1796 id=1796 data-nosnippet>1796</a>    <span class="doccomment">/// Used to wake up all blocked futures when the connection becomes closed for any reason
-<a href=#1797 id=1797 data-nosnippet>1797</a>    </span><span class="kw">fn </span>terminate(<span class="kw-2">&amp;mut </span><span class="self">self</span>, reason: ConnectionError, shared: <span class="kw-2">&amp;</span>Shared) {
-<a href=#1798 id=1798 data-nosnippet>1798</a>        <span class="self">self</span>.error = <span class="prelude-val">Some</span>(reason.clone());
-<a href=#1799 id=1799 data-nosnippet>1799</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(x) = <span class="self">self</span>.on_handshake_data.take() {
-<a href=#1800 id=1800 data-nosnippet>1800</a>            <span class="kw">let _ </span>= x.send(());
-<a href=#1801 id=1801 data-nosnippet>1801</a>        }
-<a href=#1802 id=1802 data-nosnippet>1802</a>        wake_all(<span class="kw-2">&amp;mut </span><span class="self">self</span>.blocked_writers);
-<a href=#1803 id=1803 data-nosnippet>1803</a>        wake_all(<span class="kw-2">&amp;mut </span><span class="self">self</span>.blocked_readers);
-<a href=#1804 id=1804 data-nosnippet>1804</a>        shared.stream_budget_available[Dir::Uni <span class="kw">as </span>usize].notify_waiters();
-<a href=#1805 id=1805 data-nosnippet>1805</a>        shared.stream_budget_available[Dir::Bi <span class="kw">as </span>usize].notify_waiters();
-<a href=#1806 id=1806 data-nosnippet>1806</a>        shared.stream_incoming[Dir::Uni <span class="kw">as </span>usize].notify_waiters();
-<a href=#1807 id=1807 data-nosnippet>1807</a>        shared.stream_incoming[Dir::Bi <span class="kw">as </span>usize].notify_waiters();
-<a href=#1808 id=1808 data-nosnippet>1808</a>        shared.datagram_received.notify_waiters();
-<a href=#1809 id=1809 data-nosnippet>1809</a>        shared.datagrams_unblocked.notify_waiters();
-<a href=#1810 id=1810 data-nosnippet>1810</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(x) = <span class="self">self</span>.on_connected.take() {
-<a href=#1811 id=1811 data-nosnippet>1811</a>            <span class="kw">let _ </span>= x.send(<span class="bool-val">false</span>);
-<a href=#1812 id=1812 data-nosnippet>1812</a>        }
-<a href=#1813 id=1813 data-nosnippet>1813</a>        shared.handshake_confirmed.notify_waiters();
-<a href=#1814 id=1814 data-nosnippet>1814</a>        wake_all_notify(<span class="kw-2">&amp;mut </span><span class="self">self</span>.stopped);
-<a href=#1815 id=1815 data-nosnippet>1815</a>        shared.closed.notify_waiters();
-<a href=#1816 id=1816 data-nosnippet>1816</a>        <span class="comment">// Send to the registered on_closed futures.
-<a href=#1817 id=1817 data-nosnippet>1817</a>        </span><span class="kw">if </span>!<span class="self">self</span>.on_closed.is_empty() {
-<a href=#1818 id=1818 data-nosnippet>1818</a>            <span class="kw">let </span>closed = Closed::new(<span class="self">self</span>, reason);
-<a href=#1819 id=1819 data-nosnippet>1819</a>            <span class="kw">for </span>tx <span class="kw">in </span><span class="self">self</span>.on_closed.drain(..) {
-<a href=#1820 id=1820 data-nosnippet>1820</a>                tx.send(closed.clone()).ok();
-<a href=#1821 id=1821 data-nosnippet>1821</a>            }
-<a href=#1822 id=1822 data-nosnippet>1822</a>        }
-<a href=#1823 id=1823 data-nosnippet>1823</a>        shared.connected.notify_waiters();
-<a href=#1824 id=1824 data-nosnippet>1824</a>    }
-<a href=#1825 id=1825 data-nosnippet>1825</a>
-<a href=#1826 id=1826 data-nosnippet>1826</a>    <span class="kw">fn </span>close(<span class="kw-2">&amp;mut </span><span class="self">self</span>, error_code: VarInt, reason: Bytes, shared: <span class="kw-2">&amp;</span>Shared) {
-<a href=#1827 id=1827 data-nosnippet>1827</a>        <span class="self">self</span>.inner.close(<span class="self">self</span>.runtime.now(), error_code, reason);
-<a href=#1828 id=1828 data-nosnippet>1828</a>        <span class="self">self</span>.terminate(ConnectionError::LocallyClosed, shared);
-<a href=#1829 id=1829 data-nosnippet>1829</a>        <span class="self">self</span>.wake();
-<a href=#1830 id=1830 data-nosnippet>1830</a>    }
-<a href=#1831 id=1831 data-nosnippet>1831</a>
-<a href=#1832 id=1832 data-nosnippet>1832</a>    <span class="doccomment">/// Close for a reason other than the application's explicit request
-<a href=#1833 id=1833 data-nosnippet>1833</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>implicit_close(<span class="kw-2">&amp;mut </span><span class="self">self</span>, shared: <span class="kw-2">&amp;</span>Shared) {
-<a href=#1834 id=1834 data-nosnippet>1834</a>        <span class="self">self</span>.close(<span class="number">0u32</span>.into(), Bytes::new(), shared);
-<a href=#1835 id=1835 data-nosnippet>1835</a>    }
-<a href=#1836 id=1836 data-nosnippet>1836</a>
-<a href=#1837 id=1837 data-nosnippet>1837</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>check_0rtt(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;(), ()&gt; {
-<a href=#1838 id=1838 data-nosnippet>1838</a>        <span class="kw">if </span><span class="self">self</span>.inner.is_handshaking()
-<a href=#1839 id=1839 data-nosnippet>1839</a>            || <span class="self">self</span>.inner.accepted_0rtt()
-<a href=#1840 id=1840 data-nosnippet>1840</a>            || <span class="self">self</span>.inner.side().is_server()
-<a href=#1841 id=1841 data-nosnippet>1841</a>        {
-<a href=#1842 id=1842 data-nosnippet>1842</a>            <span class="prelude-val">Ok</span>(())
-<a href=#1843 id=1843 data-nosnippet>1843</a>        } <span class="kw">else </span>{
-<a href=#1844 id=1844 data-nosnippet>1844</a>            <span class="prelude-val">Err</span>(())
-<a href=#1845 id=1845 data-nosnippet>1845</a>        }
-<a href=#1846 id=1846 data-nosnippet>1846</a>    }
-<a href=#1847 id=1847 data-nosnippet>1847</a>
-<a href=#1848 id=1848 data-nosnippet>1848</a>    <span class="doccomment">/// Returns [`PathStats`] for a path, if available.
-<a href=#1849 id=1849 data-nosnippet>1849</a>    ///
-<a href=#1850 id=1850 data-nosnippet>1850</a>    /// This gets the stats from [`proto::Connection`]. If that returns `None`
-<a href=#1851 id=1851 data-nosnippet>1851</a>    /// it gets them from `Self::final_path_stats` instead.
-<a href=#1852 id=1852 data-nosnippet>1852</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>path_stats(<span class="kw-2">&amp;mut </span><span class="self">self</span>, path_id: PathId) -&gt; <span class="prelude-ty">Option</span>&lt;PathStats&gt; {
-<a href=#1853 id=1853 data-nosnippet>1853</a>        <span class="self">self</span>.inner
-<a href=#1854 id=1854 data-nosnippet>1854</a>            .path_stats(path_id)
-<a href=#1855 id=1855 data-nosnippet>1855</a>            .or_else(|| <span class="self">self</span>.final_path_stats.get(<span class="kw-2">&amp;</span>path_id).copied())
-<a href=#1856 id=1856 data-nosnippet>1856</a>    }
-<a href=#1857 id=1857 data-nosnippet>1857</a>
-<a href=#1858 id=1858 data-nosnippet>1858</a>    <span class="doccomment">/// Acquire a new [`PathRef`] for a path id, bumping its reference counter by 1.
-<a href=#1859 id=1859 data-nosnippet>1859</a>    ///
-<a href=#1860 id=1860 data-nosnippet>1860</a>    /// The returned [`PathRef`] is intended to be stored on a [`Path`] or [`WeakPathHandle`].
-<a href=#1861 id=1861 data-nosnippet>1861</a>    /// Its reference count is automatically increased when cloned. When its owner is dropped,
-<a href=#1862 id=1862 data-nosnippet>1862</a>    /// [`PathRef::on_drop`] must be called to decrement the refcount.
-<a href=#1863 id=1863 data-nosnippet>1863</a>    ///
-<a href=#1864 id=1864 data-nosnippet>1864</a>    /// [`WeakPathHandle`]: crate::path::WeakPathHandle
-<a href=#1865 id=1865 data-nosnippet>1865</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>acquire_path_ref(<span class="kw-2">&amp;mut </span><span class="self">self</span>, path_id: PathId) -&gt; PathRef {
-<a href=#1866 id=1866 data-nosnippet>1866</a>        <span class="self">self</span>.path_refs.entry(path_id).or_default().acquire(path_id)
-<a href=#1867 id=1867 data-nosnippet>1867</a>    }
-<a href=#1868 id=1868 data-nosnippet>1868</a>}
-<a href=#1869 id=1869 data-nosnippet>1869</a>
-<a href=#1870 id=1870 data-nosnippet>1870</a><span class="kw">impl </span>Drop <span class="kw">for </span>State {
-<a href=#1871 id=1871 data-nosnippet>1871</a>    <span class="kw">fn </span>drop(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
-<a href=#1872 id=1872 data-nosnippet>1872</a>        <span class="kw">if </span>!<span class="self">self</span>.inner.is_drained() {
-<a href=#1873 id=1873 data-nosnippet>1873</a>            <span class="comment">// Ensure the endpoint can tidy up
-<a href=#1874 id=1874 data-nosnippet>1874</a>            </span><span class="kw">let _ </span>= <span class="self">self
-<a href=#1875 id=1875 data-nosnippet>1875</a>                </span>.endpoint_events
-<a href=#1876 id=1876 data-nosnippet>1876</a>                .send((<span class="self">self</span>.handle, proto::EndpointEvent::drained()));
-<a href=#1877 id=1877 data-nosnippet>1877</a>        }
-<a href=#1878 id=1878 data-nosnippet>1878</a>
-<a href=#1879 id=1879 data-nosnippet>1879</a>        <span class="kw">if </span>!<span class="self">self</span>.on_closed.is_empty()
-<a href=#1880 id=1880 data-nosnippet>1880</a>            &amp;&amp; <span class="kw">let </span><span class="prelude-val">Some</span>(reason) = <span class="self">self</span>.error.clone()
-<a href=#1881 id=1881 data-nosnippet>1881</a>        {
-<a href=#1882 id=1882 data-nosnippet>1882</a>            <span class="comment">// Ensure that all on_closed oneshot senders are triggered before dropping.
-<a href=#1883 id=1883 data-nosnippet>1883</a>            </span><span class="kw">let </span>closed = Closed::new(<span class="self">self</span>, reason);
-<a href=#1884 id=1884 data-nosnippet>1884</a>            <span class="kw">for </span>tx <span class="kw">in </span><span class="self">self</span>.on_closed.drain(..) {
-<a href=#1885 id=1885 data-nosnippet>1885</a>                tx.send(closed.clone()).ok();
-<a href=#1886 id=1886 data-nosnippet>1886</a>            }
-<a href=#1887 id=1887 data-nosnippet>1887</a>        }
-<a href=#1888 id=1888 data-nosnippet>1888</a>    }
-<a href=#1889 id=1889 data-nosnippet>1889</a>}
-<a href=#1890 id=1890 data-nosnippet>1890</a>
-<a href=#1891 id=1891 data-nosnippet>1891</a><span class="kw">impl </span>fmt::Debug <span class="kw">for </span>State {
-<a href=#1892 id=1892 data-nosnippet>1892</a>    <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; fmt::Result {
-<a href=#1893 id=1893 data-nosnippet>1893</a>        f.debug_struct(<span class="string">"State"</span>).field(<span class="string">"inner"</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.inner).finish()
-<a href=#1894 id=1894 data-nosnippet>1894</a>    }
-<a href=#1895 id=1895 data-nosnippet>1895</a>}
-<a href=#1896 id=1896 data-nosnippet>1896</a>
-<a href=#1897 id=1897 data-nosnippet>1897</a><span class="kw">fn </span>wake_stream(stream_id: StreamId, wakers: <span class="kw-2">&amp;mut </span>FxHashMap&lt;StreamId, Waker&gt;) {
-<a href=#1898 id=1898 data-nosnippet>1898</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(waker) = wakers.remove(<span class="kw-2">&amp;</span>stream_id) {
-<a href=#1899 id=1899 data-nosnippet>1899</a>        waker.wake();
-<a href=#1900 id=1900 data-nosnippet>1900</a>    }
-<a href=#1901 id=1901 data-nosnippet>1901</a>}
-<a href=#1902 id=1902 data-nosnippet>1902</a>
-<a href=#1903 id=1903 data-nosnippet>1903</a><span class="kw">fn </span>wake_all(wakers: <span class="kw-2">&amp;mut </span>FxHashMap&lt;StreamId, Waker&gt;) {
-<a href=#1904 id=1904 data-nosnippet>1904</a>    wakers.drain().for_each(|(<span class="kw">_</span>, waker)| waker.wake())
-<a href=#1905 id=1905 data-nosnippet>1905</a>}
-<a href=#1906 id=1906 data-nosnippet>1906</a>
-<a href=#1907 id=1907 data-nosnippet>1907</a><span class="kw">fn </span>wake_stream_notify(stream_id: StreamId, wakers: <span class="kw-2">&amp;mut </span>FxHashMap&lt;StreamId, Arc&lt;Notify&gt;&gt;) {
-<a href=#1908 id=1908 data-nosnippet>1908</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(notify) = wakers.remove(<span class="kw-2">&amp;</span>stream_id) {
-<a href=#1909 id=1909 data-nosnippet>1909</a>        notify.notify_waiters()
-<a href=#1910 id=1910 data-nosnippet>1910</a>    }
-<a href=#1911 id=1911 data-nosnippet>1911</a>}
-<a href=#1912 id=1912 data-nosnippet>1912</a>
-<a href=#1913 id=1913 data-nosnippet>1913</a><span class="kw">fn </span>wake_all_notify(wakers: <span class="kw-2">&amp;mut </span>FxHashMap&lt;StreamId, Arc&lt;Notify&gt;&gt;) {
-<a href=#1914 id=1914 data-nosnippet>1914</a>    wakers
-<a href=#1915 id=1915 data-nosnippet>1915</a>        .drain()
-<a href=#1916 id=1916 data-nosnippet>1916</a>        .for_each(|(<span class="kw">_</span>, notify)| notify.notify_waiters())
-<a href=#1917 id=1917 data-nosnippet>1917</a>}
-<a href=#1918 id=1918 data-nosnippet>1918</a>
-<a href=#1919 id=1919 data-nosnippet>1919</a><span class="doccomment">/// Errors that can arise when sending a datagram
-<a href=#1920 id=1920 data-nosnippet>1920</a></span><span class="attr">#[derive(Debug, Error, Clone, Eq, PartialEq)]
-<a href=#1921 id=1921 data-nosnippet>1921</a></span><span class="kw">pub enum </span>SendDatagramError {
-<a href=#1922 id=1922 data-nosnippet>1922</a>    <span class="doccomment">/// The peer does not support receiving datagram frames
-<a href=#1923 id=1923 data-nosnippet>1923</a>    </span><span class="attr">#[error(<span class="string">"datagrams not supported by peer"</span>)]
-<a href=#1924 id=1924 data-nosnippet>1924</a>    </span>UnsupportedByPeer,
-<a href=#1925 id=1925 data-nosnippet>1925</a>    <span class="doccomment">/// Datagram support is disabled locally
-<a href=#1926 id=1926 data-nosnippet>1926</a>    </span><span class="attr">#[error(<span class="string">"datagram support disabled"</span>)]
-<a href=#1927 id=1927 data-nosnippet>1927</a>    </span>Disabled,
-<a href=#1928 id=1928 data-nosnippet>1928</a>    <span class="doccomment">/// The datagram is larger than the connection can currently accommodate
-<a href=#1929 id=1929 data-nosnippet>1929</a>    ///
-<a href=#1930 id=1930 data-nosnippet>1930</a>    /// Indicates that the path MTU minus overhead or the limit advertised by the peer has been
-<a href=#1931 id=1931 data-nosnippet>1931</a>    /// exceeded.
-<a href=#1932 id=1932 data-nosnippet>1932</a>    </span><span class="attr">#[error(<span class="string">"datagram too large"</span>)]
-<a href=#1933 id=1933 data-nosnippet>1933</a>    </span>TooLarge,
-<a href=#1934 id=1934 data-nosnippet>1934</a>    <span class="doccomment">/// The connection was lost
-<a href=#1935 id=1935 data-nosnippet>1935</a>    </span><span class="attr">#[error(<span class="string">"connection lost"</span>)]
-<a href=#1936 id=1936 data-nosnippet>1936</a>    </span>ConnectionLost(<span class="attr">#[from] </span>ConnectionError),
-<a href=#1937 id=1937 data-nosnippet>1937</a>}
-<a href=#1938 id=1938 data-nosnippet>1938</a>
-<a href=#1939 id=1939 data-nosnippet>1939</a><span class="doccomment">/// The maximum amount of datagrams which will be produced in a single `drive_transmit` call
-<a href=#1940 id=1940 data-nosnippet>1940</a>///
-<a href=#1941 id=1941 data-nosnippet>1941</a>/// This limits the amount of CPU resources consumed by datagram generation,
-<a href=#1942 id=1942 data-nosnippet>1942</a>/// and allows other tasks (like receiving ACKs) to run in between.
-<a href=#1943 id=1943 data-nosnippet>1943</a></span><span class="kw">const </span>MAX_TRANSMIT_DATAGRAMS: usize = <span class="number">20</span>;
-<a href=#1944 id=1944 data-nosnippet>1944</a>
-<a href=#1945 id=1945 data-nosnippet>1945</a><span class="doccomment">/// The maximum amount of datagrams that are sent in a single transmit
-<a href=#1946 id=1946 data-nosnippet>1946</a>///
-<a href=#1947 id=1947 data-nosnippet>1947</a>/// This can be lower than the maximum platform capabilities, to avoid excessive
-<a href=#1948 id=1948 data-nosnippet>1948</a>/// memory allocations when calling `poll_transmit()`. Benchmarks have shown
-<a href=#1949 id=1949 data-nosnippet>1949</a>/// that numbers around 10 are a good compromise.
-<a href=#1950 id=1950 data-nosnippet>1950</a></span><span class="kw">const </span>MAX_TRANSMIT_SEGMENTS: NonZeroUsize = NonZeroUsize::new(<span class="number">10</span>).expect(<span class="string">"known"</span>);</code></pre></div></section></main></body></html>
+<a href=#1789 id=1789 data-nosnippet>1789</a>    <span class="doccomment">/// Used to wake up all blocked futures when the connection becomes closed for any reason
+<a href=#1790 id=1790 data-nosnippet>1790</a>    </span><span class="kw">fn </span>terminate(<span class="kw-2">&amp;mut </span><span class="self">self</span>, reason: ConnectionError, shared: <span class="kw-2">&amp;</span>Shared) {
+<a href=#1791 id=1791 data-nosnippet>1791</a>        <span class="self">self</span>.error = <span class="prelude-val">Some</span>(reason.clone());
+<a href=#1792 id=1792 data-nosnippet>1792</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(x) = <span class="self">self</span>.on_handshake_data.take() {
+<a href=#1793 id=1793 data-nosnippet>1793</a>            <span class="kw">let _ </span>= x.send(());
+<a href=#1794 id=1794 data-nosnippet>1794</a>        }
+<a href=#1795 id=1795 data-nosnippet>1795</a>        wake_all(<span class="kw-2">&amp;mut </span><span class="self">self</span>.blocked_writers);
+<a href=#1796 id=1796 data-nosnippet>1796</a>        wake_all(<span class="kw-2">&amp;mut </span><span class="self">self</span>.blocked_readers);
+<a href=#1797 id=1797 data-nosnippet>1797</a>        shared.stream_budget_available[Dir::Uni <span class="kw">as </span>usize].notify_waiters();
+<a href=#1798 id=1798 data-nosnippet>1798</a>        shared.stream_budget_available[Dir::Bi <span class="kw">as </span>usize].notify_waiters();
+<a href=#1799 id=1799 data-nosnippet>1799</a>        shared.stream_incoming[Dir::Uni <span class="kw">as </span>usize].notify_waiters();
+<a href=#1800 id=1800 data-nosnippet>1800</a>        shared.stream_incoming[Dir::Bi <span class="kw">as </span>usize].notify_waiters();
+<a href=#1801 id=1801 data-nosnippet>1801</a>        shared.datagram_received.notify_waiters();
+<a href=#1802 id=1802 data-nosnippet>1802</a>        shared.datagrams_unblocked.notify_waiters();
+<a href=#1803 id=1803 data-nosnippet>1803</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(x) = <span class="self">self</span>.on_connected.take() {
+<a href=#1804 id=1804 data-nosnippet>1804</a>            <span class="kw">let _ </span>= x.send(<span class="bool-val">false</span>);
+<a href=#1805 id=1805 data-nosnippet>1805</a>        }
+<a href=#1806 id=1806 data-nosnippet>1806</a>        shared.handshake_confirmed.notify_waiters();
+<a href=#1807 id=1807 data-nosnippet>1807</a>        wake_all_notify(<span class="kw-2">&amp;mut </span><span class="self">self</span>.stopped);
+<a href=#1808 id=1808 data-nosnippet>1808</a>        shared.closed.notify_waiters();
+<a href=#1809 id=1809 data-nosnippet>1809</a>        <span class="comment">// Send to the registered on_closed futures.
+<a href=#1810 id=1810 data-nosnippet>1810</a>        </span><span class="kw">if </span>!<span class="self">self</span>.on_closed.is_empty() {
+<a href=#1811 id=1811 data-nosnippet>1811</a>            <span class="kw">let </span>closed = Closed::new(<span class="self">self</span>, reason);
+<a href=#1812 id=1812 data-nosnippet>1812</a>            <span class="kw">for </span>tx <span class="kw">in </span><span class="self">self</span>.on_closed.drain(..) {
+<a href=#1813 id=1813 data-nosnippet>1813</a>                tx.send(closed.clone()).ok();
+<a href=#1814 id=1814 data-nosnippet>1814</a>            }
+<a href=#1815 id=1815 data-nosnippet>1815</a>        }
+<a href=#1816 id=1816 data-nosnippet>1816</a>        shared.connected.notify_waiters();
+<a href=#1817 id=1817 data-nosnippet>1817</a>    }
+<a href=#1818 id=1818 data-nosnippet>1818</a>
+<a href=#1819 id=1819 data-nosnippet>1819</a>    <span class="kw">fn </span>close(<span class="kw-2">&amp;mut </span><span class="self">self</span>, error_code: VarInt, reason: Bytes, shared: <span class="kw-2">&amp;</span>Shared) {
+<a href=#1820 id=1820 data-nosnippet>1820</a>        <span class="self">self</span>.inner.close(<span class="self">self</span>.runtime.now(), error_code, reason);
+<a href=#1821 id=1821 data-nosnippet>1821</a>        <span class="self">self</span>.terminate(ConnectionError::LocallyClosed, shared);
+<a href=#1822 id=1822 data-nosnippet>1822</a>        <span class="self">self</span>.wake();
+<a href=#1823 id=1823 data-nosnippet>1823</a>    }
+<a href=#1824 id=1824 data-nosnippet>1824</a>
+<a href=#1825 id=1825 data-nosnippet>1825</a>    <span class="doccomment">/// Close for a reason other than the application's explicit request
+<a href=#1826 id=1826 data-nosnippet>1826</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>implicit_close(<span class="kw-2">&amp;mut </span><span class="self">self</span>, shared: <span class="kw-2">&amp;</span>Shared) {
+<a href=#1827 id=1827 data-nosnippet>1827</a>        <span class="self">self</span>.close(<span class="number">0u32</span>.into(), Bytes::new(), shared);
+<a href=#1828 id=1828 data-nosnippet>1828</a>    }
+<a href=#1829 id=1829 data-nosnippet>1829</a>
+<a href=#1830 id=1830 data-nosnippet>1830</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>check_0rtt(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;(), ()&gt; {
+<a href=#1831 id=1831 data-nosnippet>1831</a>        <span class="kw">if </span><span class="self">self</span>.inner.is_handshaking()
+<a href=#1832 id=1832 data-nosnippet>1832</a>            || <span class="self">self</span>.inner.accepted_0rtt()
+<a href=#1833 id=1833 data-nosnippet>1833</a>            || <span class="self">self</span>.inner.side().is_server()
+<a href=#1834 id=1834 data-nosnippet>1834</a>        {
+<a href=#1835 id=1835 data-nosnippet>1835</a>            <span class="prelude-val">Ok</span>(())
+<a href=#1836 id=1836 data-nosnippet>1836</a>        } <span class="kw">else </span>{
+<a href=#1837 id=1837 data-nosnippet>1837</a>            <span class="prelude-val">Err</span>(())
+<a href=#1838 id=1838 data-nosnippet>1838</a>        }
+<a href=#1839 id=1839 data-nosnippet>1839</a>    }
+<a href=#1840 id=1840 data-nosnippet>1840</a>
+<a href=#1841 id=1841 data-nosnippet>1841</a>    <span class="doccomment">/// Returns [`PathStats`] for a path, if available.
+<a href=#1842 id=1842 data-nosnippet>1842</a>    ///
+<a href=#1843 id=1843 data-nosnippet>1843</a>    /// This gets the stats from [`proto::Connection`]. If that returns `None`
+<a href=#1844 id=1844 data-nosnippet>1844</a>    /// it gets them from `Self::final_path_stats` instead.
+<a href=#1845 id=1845 data-nosnippet>1845</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>path_stats(<span class="kw-2">&amp;mut </span><span class="self">self</span>, path_id: PathId) -&gt; <span class="prelude-ty">Option</span>&lt;PathStats&gt; {
+<a href=#1846 id=1846 data-nosnippet>1846</a>        <span class="self">self</span>.inner
+<a href=#1847 id=1847 data-nosnippet>1847</a>            .path_stats(path_id)
+<a href=#1848 id=1848 data-nosnippet>1848</a>            .or_else(|| <span class="self">self</span>.final_path_stats.get(<span class="kw-2">&amp;</span>path_id).copied())
+<a href=#1849 id=1849 data-nosnippet>1849</a>    }
+<a href=#1850 id=1850 data-nosnippet>1850</a>
+<a href=#1851 id=1851 data-nosnippet>1851</a>    <span class="doccomment">/// Acquire a new [`PathRef`] for a path id, bumping its reference counter by 1.
+<a href=#1852 id=1852 data-nosnippet>1852</a>    ///
+<a href=#1853 id=1853 data-nosnippet>1853</a>    /// The returned [`PathRef`] is intended to be stored on a [`Path`] or [`WeakPathHandle`].
+<a href=#1854 id=1854 data-nosnippet>1854</a>    /// Its reference count is automatically increased when cloned. When its owner is dropped,
+<a href=#1855 id=1855 data-nosnippet>1855</a>    /// [`PathRef::on_drop`] must be called to decrement the refcount.
+<a href=#1856 id=1856 data-nosnippet>1856</a>    ///
+<a href=#1857 id=1857 data-nosnippet>1857</a>    /// [`WeakPathHandle`]: crate::path::WeakPathHandle
+<a href=#1858 id=1858 data-nosnippet>1858</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>acquire_path_ref(<span class="kw-2">&amp;mut </span><span class="self">self</span>, path_id: PathId) -&gt; PathRef {
+<a href=#1859 id=1859 data-nosnippet>1859</a>        <span class="self">self</span>.path_refs.entry(path_id).or_default().acquire(path_id)
+<a href=#1860 id=1860 data-nosnippet>1860</a>    }
+<a href=#1861 id=1861 data-nosnippet>1861</a>}
+<a href=#1862 id=1862 data-nosnippet>1862</a>
+<a href=#1863 id=1863 data-nosnippet>1863</a><span class="kw">impl </span>Drop <span class="kw">for </span>State {
+<a href=#1864 id=1864 data-nosnippet>1864</a>    <span class="kw">fn </span>drop(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
+<a href=#1865 id=1865 data-nosnippet>1865</a>        <span class="kw">if </span>!<span class="self">self</span>.inner.is_drained() {
+<a href=#1866 id=1866 data-nosnippet>1866</a>            <span class="comment">// Ensure the endpoint can tidy up
+<a href=#1867 id=1867 data-nosnippet>1867</a>            </span><span class="kw">let _ </span>= <span class="self">self
+<a href=#1868 id=1868 data-nosnippet>1868</a>                </span>.endpoint_events
+<a href=#1869 id=1869 data-nosnippet>1869</a>                .send((<span class="self">self</span>.handle, EndpointEvent::drained()));
+<a href=#1870 id=1870 data-nosnippet>1870</a>        }
+<a href=#1871 id=1871 data-nosnippet>1871</a>
+<a href=#1872 id=1872 data-nosnippet>1872</a>        <span class="kw">if </span>!<span class="self">self</span>.on_closed.is_empty()
+<a href=#1873 id=1873 data-nosnippet>1873</a>            &amp;&amp; <span class="kw">let </span><span class="prelude-val">Some</span>(reason) = <span class="self">self</span>.error.clone()
+<a href=#1874 id=1874 data-nosnippet>1874</a>        {
+<a href=#1875 id=1875 data-nosnippet>1875</a>            <span class="comment">// Ensure that all on_closed oneshot senders are triggered before dropping.
+<a href=#1876 id=1876 data-nosnippet>1876</a>            </span><span class="kw">let </span>closed = Closed::new(<span class="self">self</span>, reason);
+<a href=#1877 id=1877 data-nosnippet>1877</a>            <span class="kw">for </span>tx <span class="kw">in </span><span class="self">self</span>.on_closed.drain(..) {
+<a href=#1878 id=1878 data-nosnippet>1878</a>                tx.send(closed.clone()).ok();
+<a href=#1879 id=1879 data-nosnippet>1879</a>            }
+<a href=#1880 id=1880 data-nosnippet>1880</a>        }
+<a href=#1881 id=1881 data-nosnippet>1881</a>    }
+<a href=#1882 id=1882 data-nosnippet>1882</a>}
+<a href=#1883 id=1883 data-nosnippet>1883</a>
+<a href=#1884 id=1884 data-nosnippet>1884</a><span class="kw">impl </span>fmt::Debug <span class="kw">for </span>State {
+<a href=#1885 id=1885 data-nosnippet>1885</a>    <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; fmt::Result {
+<a href=#1886 id=1886 data-nosnippet>1886</a>        f.debug_struct(<span class="string">"State"</span>).field(<span class="string">"inner"</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.inner).finish()
+<a href=#1887 id=1887 data-nosnippet>1887</a>    }
+<a href=#1888 id=1888 data-nosnippet>1888</a>}
+<a href=#1889 id=1889 data-nosnippet>1889</a>
+<a href=#1890 id=1890 data-nosnippet>1890</a><span class="kw">fn </span>wake_stream(stream_id: StreamId, wakers: <span class="kw-2">&amp;mut </span>FxHashMap&lt;StreamId, Waker&gt;) {
+<a href=#1891 id=1891 data-nosnippet>1891</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(waker) = wakers.remove(<span class="kw-2">&amp;</span>stream_id) {
+<a href=#1892 id=1892 data-nosnippet>1892</a>        waker.wake();
+<a href=#1893 id=1893 data-nosnippet>1893</a>    }
+<a href=#1894 id=1894 data-nosnippet>1894</a>}
+<a href=#1895 id=1895 data-nosnippet>1895</a>
+<a href=#1896 id=1896 data-nosnippet>1896</a><span class="kw">fn </span>wake_all(wakers: <span class="kw-2">&amp;mut </span>FxHashMap&lt;StreamId, Waker&gt;) {
+<a href=#1897 id=1897 data-nosnippet>1897</a>    wakers.drain().for_each(|(<span class="kw">_</span>, waker)| waker.wake())
+<a href=#1898 id=1898 data-nosnippet>1898</a>}
+<a href=#1899 id=1899 data-nosnippet>1899</a>
+<a href=#1900 id=1900 data-nosnippet>1900</a><span class="kw">fn </span>wake_stream_notify(stream_id: StreamId, wakers: <span class="kw-2">&amp;mut </span>FxHashMap&lt;StreamId, Arc&lt;Notify&gt;&gt;) {
+<a href=#1901 id=1901 data-nosnippet>1901</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(notify) = wakers.remove(<span class="kw-2">&amp;</span>stream_id) {
+<a href=#1902 id=1902 data-nosnippet>1902</a>        notify.notify_waiters()
+<a href=#1903 id=1903 data-nosnippet>1903</a>    }
+<a href=#1904 id=1904 data-nosnippet>1904</a>}
+<a href=#1905 id=1905 data-nosnippet>1905</a>
+<a href=#1906 id=1906 data-nosnippet>1906</a><span class="kw">fn </span>wake_all_notify(wakers: <span class="kw-2">&amp;mut </span>FxHashMap&lt;StreamId, Arc&lt;Notify&gt;&gt;) {
+<a href=#1907 id=1907 data-nosnippet>1907</a>    wakers
+<a href=#1908 id=1908 data-nosnippet>1908</a>        .drain()
+<a href=#1909 id=1909 data-nosnippet>1909</a>        .for_each(|(<span class="kw">_</span>, notify)| notify.notify_waiters())
+<a href=#1910 id=1910 data-nosnippet>1910</a>}
+<a href=#1911 id=1911 data-nosnippet>1911</a>
+<a href=#1912 id=1912 data-nosnippet>1912</a><span class="doccomment">/// Errors that can arise when sending a datagram
+<a href=#1913 id=1913 data-nosnippet>1913</a></span><span class="attr">#[derive(Debug, Error, Clone, Eq, PartialEq)]
+<a href=#1914 id=1914 data-nosnippet>1914</a></span><span class="kw">pub enum </span>SendDatagramError {
+<a href=#1915 id=1915 data-nosnippet>1915</a>    <span class="doccomment">/// The peer does not support receiving datagram frames
+<a href=#1916 id=1916 data-nosnippet>1916</a>    </span><span class="attr">#[error(<span class="string">"datagrams not supported by peer"</span>)]
+<a href=#1917 id=1917 data-nosnippet>1917</a>    </span>UnsupportedByPeer,
+<a href=#1918 id=1918 data-nosnippet>1918</a>    <span class="doccomment">/// Datagram support is disabled locally
+<a href=#1919 id=1919 data-nosnippet>1919</a>    </span><span class="attr">#[error(<span class="string">"datagram support disabled"</span>)]
+<a href=#1920 id=1920 data-nosnippet>1920</a>    </span>Disabled,
+<a href=#1921 id=1921 data-nosnippet>1921</a>    <span class="doccomment">/// The datagram is larger than the connection can currently accommodate
+<a href=#1922 id=1922 data-nosnippet>1922</a>    ///
+<a href=#1923 id=1923 data-nosnippet>1923</a>    /// Indicates that the path MTU minus overhead or the limit advertised by the peer has been
+<a href=#1924 id=1924 data-nosnippet>1924</a>    /// exceeded.
+<a href=#1925 id=1925 data-nosnippet>1925</a>    </span><span class="attr">#[error(<span class="string">"datagram too large"</span>)]
+<a href=#1926 id=1926 data-nosnippet>1926</a>    </span>TooLarge,
+<a href=#1927 id=1927 data-nosnippet>1927</a>    <span class="doccomment">/// The connection was lost
+<a href=#1928 id=1928 data-nosnippet>1928</a>    </span><span class="attr">#[error(<span class="string">"connection lost"</span>)]
+<a href=#1929 id=1929 data-nosnippet>1929</a>    </span>ConnectionLost(<span class="attr">#[from] </span>ConnectionError),
+<a href=#1930 id=1930 data-nosnippet>1930</a>}
+<a href=#1931 id=1931 data-nosnippet>1931</a>
+<a href=#1932 id=1932 data-nosnippet>1932</a><span class="doccomment">/// The maximum amount of datagrams which will be produced in a single `drive_transmit` call
+<a href=#1933 id=1933 data-nosnippet>1933</a>///
+<a href=#1934 id=1934 data-nosnippet>1934</a>/// This limits the amount of CPU resources consumed by datagram generation,
+<a href=#1935 id=1935 data-nosnippet>1935</a>/// and allows other tasks (like receiving ACKs) to run in between.
+<a href=#1936 id=1936 data-nosnippet>1936</a></span><span class="kw">const </span>MAX_TRANSMIT_DATAGRAMS: usize = <span class="number">20</span>;
+<a href=#1937 id=1937 data-nosnippet>1937</a>
+<a href=#1938 id=1938 data-nosnippet>1938</a><span class="doccomment">/// The maximum amount of datagrams that are sent in a single transmit
+<a href=#1939 id=1939 data-nosnippet>1939</a>///
+<a href=#1940 id=1940 data-nosnippet>1940</a>/// This can be lower than the maximum platform capabilities, to avoid excessive
+<a href=#1941 id=1941 data-nosnippet>1941</a>/// memory allocations when calling `poll_transmit()`. Benchmarks have shown
+<a href=#1942 id=1942 data-nosnippet>1942</a>/// that numbers around 10 are a good compromise.
+<a href=#1943 id=1943 data-nosnippet>1943</a></span><span class="kw">const </span>MAX_TRANSMIT_SEGMENTS: NonZeroUsize = NonZeroUsize::new(<span class="number">10</span>).expect(<span class="string">"known"</span>);</code></pre></div></section></main></body></html>
