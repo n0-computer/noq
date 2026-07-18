@@ -5207,7 +5207,9 @@ impl Connection {
                         return Err(TransportError::FRAME_ENCODING_ERROR("empty token"));
                     }
                     trace!("got new token");
-                    token_store.insert(server_name, token);
+                    if let Some(token_store) = token_store {
+                        token_store.insert(server_name, token);
+                    }
                 }
                 Frame::Datagram(datagram) => {
                     if self
@@ -7319,7 +7321,7 @@ enum ConnectionSide {
     Client {
         /// Sent in every outgoing Initial packet. Always empty after Initial keys are discarded
         token: Bytes,
-        token_store: Arc<dyn TokenStore>,
+        token_store: Option<Arc<dyn TokenStore>>,
         server_name: String,
     },
     Server {
@@ -7351,7 +7353,10 @@ impl From<SideArgs> for ConnectionSide {
                 token_store,
                 server_name,
             } => Self::Client {
-                token: token_store.take(&server_name).unwrap_or_default(),
+                token: token_store
+                    .as_ref()
+                    .and_then(|token_store| token_store.take(&server_name))
+                    .unwrap_or_default(),
                 token_store,
                 server_name,
             },
@@ -7367,7 +7372,7 @@ impl From<SideArgs> for ConnectionSide {
 /// Parameters to `Connection::new` specific to it being client-side or server-side
 pub(crate) enum SideArgs {
     Client {
-        token_store: Arc<dyn TokenStore>,
+        token_store: Option<Arc<dyn TokenStore>>,
         server_name: String,
     },
     Server {
