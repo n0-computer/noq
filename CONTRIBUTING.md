@@ -34,7 +34,7 @@ The codebase has a deliberate two-tier split:
 
 - An issue linked to it. Discuss solutions with maintainers in the linked issue
   before diving in. This helps keep contributors and maintainers aligned.
-- A tittle following this pattern: `<type>(<scope>): <description>`. If the
+- A title following this pattern: `<type>(<scope>): <description>`. If the
   change is a breaking change it must also include a `!`: `<type>(<scope>)!: <description>`.
   - Types: 
        | **`type`** | **When to use** |
