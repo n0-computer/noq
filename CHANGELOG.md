@@ -25,6 +25,7 @@ All notable changes to noq will be documented in this file.
 - *(proto)* Drop Initials silently when saturated - ([f2968cf](https://github.com/n0-computer/noq/commit/f2968cf8861c09f2a8b5aa1cb6452c95bb5c15ae))
 - *(readme)* Use correct crates.io badge link in README.md ([#756](https://github.com/n0-computer/noq/issues/756)) - ([ab91554](https://github.com/n0-computer/noq/commit/ab91554446488cbf6bf5122b15bf05867c81c283))
 - *(udp)* Log sendmsg errors on debug ([#759](https://github.com/n0-computer/noq/issues/759)) - ([603c5e6](https://github.com/n0-computer/noq/commit/603c5e64cd7ac86efc55f3dc53be8dccbf466038))
+- *(proto)* Deprecate UdpStats::ios as io-operations can't be measured from this crate ([#725](https://github.com/n0-computer/noq/issues/725)) - ([d6e525d41](https://github.com/n0-computer/noq/commit/d6e525d41))
 - Patches for Redox targets - ([5c05d21](https://github.com/n0-computer/noq/commit/5c05d21002096d5b824a850dae32c03f869f06b1))
 
 ### 🚜 Refactor
