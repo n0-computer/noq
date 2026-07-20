@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"struct":["Bbr3","Bbr3Config","ControllerMetrics","Cubic","CubicConfig","NewReno","NewRenoConfig"],"trait":["Controller","ControllerFactory"]};

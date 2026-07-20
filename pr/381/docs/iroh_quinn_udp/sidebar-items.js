@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"constant":["BATCH_SIZE"],"enum":["EcnCodepoint"],"struct":["ReceivedDatagram","ReceivedDatagrams","RecvMeta","Transmit","UdpSockRef","UdpSocketState"]};
