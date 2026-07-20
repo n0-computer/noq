@@ -29,4 +29,5 @@ skip = [
     { crate = "getrandom", reason = "ring depends on 0.2, newer ecosystem uses 0.3" },
     # various transitive deps require different windows-sys versions
     { crate = "windows-sys", reason = "transitive deps require different versions" },
+    { crate = "shlex", "transitive deps require different versions" }
 ]
