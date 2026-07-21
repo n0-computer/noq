@@ -741,6 +741,33 @@ impl Connection {
             .map(|c| c.clone_box())
     }
 
+    /// Succeeds when an incoming connection is proven not to be a replay attack.
+    ///
+    /// Only interesting for `Connection`s obtained from [`Connecting::into_0rtt`]. On 1-RTT
+    /// connections, always completes immediately. Contrast
+    /// [`handshake_confirmed`](Self::handshake_confirmed), which waits longer on clients e.g. to
+    /// confirm client authentication.
+    ///
+    /// For incoming connections, reads from [`RecvStream`]s are guaranteed not to arise from replay
+    /// attacks after this succeeds, even for streams accepted or read during 0-RTT. For outgoing
+    /// connections, streams opened after this succeeds will never be discarded by the server due to
+    /// 0-RTT rejection.
+    pub async fn authenticated(&self) -> Result<(), ConnectionError> {
+        let notified = {
+            let conn = self.0.state.lock("connected");
+            if let Some(e) = &conn.error {
+                return Err(e.clone());
+            }
+            if conn.connected {
+                return Ok(());
+            }
+            self.0.shared.connected.notified()
+        };
+        notified.await;
+        let conn = self.0.state.lock("connected");
+        conn.error.clone().map_or(Ok(()), Err)
+    }
+
     /// Parameters negotiated during the handshake
     ///
     /// Guaranteed to return `Some` on fully established connections or after
@@ -1396,6 +1423,7 @@ pub(crate) struct Shared {
     datagram_received: Notify,
     datagrams_unblocked: Notify,
     closed: Notify,
+    connected: Notify,
     /// Number of live handles that can be used to initiate or handle I/O; excludes the driver
     ref_count: AtomicUsize,
 }
@@ -1598,6 +1626,7 @@ impl State {
                 }
                 Connected => {
                     self.connected = true;
+                    shared.connected.notify_waiters();
                     if let Some(x) = self.on_connected.take() {
                         // We don't care if the on-connected future was dropped
                         let _ = x.send(self.inner.accepted_0rtt());
@@ -1698,36 +1727,32 @@ impl State {
     }
 
     fn drive_timer(&mut self, cx: &mut Context<'_>) -> bool {
-        // Check whether we need to (re)set the timer. If so, we must poll again to ensure the
-        // timer is registered with the runtime (and check whether it's already
-        // expired).
-        match self.inner.poll_timeout() {
-            Some(deadline) => {
-                if let Some(delay) = &mut self.timer {
-                    // There is no need to reset the tokio timer if the deadline
-                    // did not change
-                    if self
-                        .timer_deadline
-                        .map(|current_deadline| current_deadline != deadline)
-                        .unwrap_or(true)
-                    {
-                        delay.as_mut().reset(deadline);
-                    }
-                } else {
-                    self.timer = Some(self.runtime.new_timer(deadline));
-                }
-                // Store the actual expiration time of the timer
-                self.timer_deadline = Some(deadline);
-            }
-            None => {
-                self.timer_deadline = None;
-                return false;
-            }
+        let Some(deadline) = self.inner.poll_timeout() else {
+            self.timer_deadline = None;
+            return false;
+        };
+
+        // Use the clock rather than the async timer to detect expiry: Sleep::poll
+        // respects Tokio's cooperative budget and can return Pending for elapsed
+        // deadlines.
+        let now = self.runtime.now();
+        if now >= deadline {
+            self.inner.handle_timeout(now);
+            self.timer_deadline = None;
+            return true;
         }
 
-        if self.timer_deadline.is_none() {
-            return false;
+        match &mut self.timer {
+            // Avoid resetting the timer when the deadline is unchanged.
+            Some(delay) if self.timer_deadline != Some(deadline) => {
+                delay.as_mut().reset(deadline);
+            }
+            None => {
+                self.timer = Some(self.runtime.new_timer(deadline));
+            }
+            _ => {}
         }
+        self.timer_deadline = Some(deadline);
 
         let delay = self
             .timer
@@ -1735,13 +1760,10 @@ impl State {
             .expect("timer must exist in this state")
             .as_mut();
         if delay.poll(cx).is_pending() {
-            // Since there wasn't a timeout event, there is nothing new
-            // for the connection to do
             return false;
         }
 
-        // A timer expired, so the caller needs to check for
-        // new transmits, which might cause new timers to be set.
+        // The deadline elapsed in the window between the clock check and poll.
         self.inner.handle_timeout(self.runtime.now());
         self.timer_deadline = None;
         true
@@ -1774,7 +1796,6 @@ impl State {
         shared.handshake_confirmed.notify_waiters();
         wake_all_notify(&mut self.stopped);
         shared.closed.notify_waiters();
-
         // Send to the registered on_closed futures.
         if !self.on_closed.is_empty() {
             let closed = Closed::new(self, reason);
@@ -1782,6 +1803,7 @@ impl State {
                 tx.send(closed.clone()).ok();
             }
         }
+        shared.connected.notify_waiters();
     }
 
     fn close(&mut self, error_code: VarInt, reason: Bytes, shared: &Shared) {
@@ -1834,7 +1856,7 @@ impl Drop for State {
             // Ensure the endpoint can tidy up
             let _ = self
                 .endpoint_events
-                .send((self.handle, proto::EndpointEvent::drained()));
+                .send((self.handle, EndpointEvent::drained()));
         }
 
         if !self.on_closed.is_empty()

@@ -496,12 +496,9 @@ impl PacketNumberSpace {
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(super) enum OpenStatus {
-    /// A first packet has not been sent using this [`PathId`].
+    /// The application has not yet been informed of this path.
     #[default]
     Pending,
-    /// The first packet has been sent using this [`PathId`]. However, it is not yet deemed good
-    /// enough to be reported to the application.
-    Sent,
     /// The application has been informed of this path.
     Informed,
 }
@@ -752,7 +749,7 @@ impl PendingNewCids {
 
     /// Pops the next issued CID to transmit from the queue.
     pub(super) fn pop(&mut self) -> Option<IssuedCid> {
-        if !std::mem::replace(&mut self.sorted, true) {
+        if !mem::replace(&mut self.sorted, true) {
             self.cids
                 .sort_by_key(|cid| cmp::Reverse((cid.path_id, cid.sequence)));
         }
@@ -897,15 +894,6 @@ pub(super) struct Dedup {
     next: u64,
 }
 
-/// Inner bitfield type.
-///
-/// Because QUIC never reuses packet numbers, this only needs to be large enough to deal with
-/// packets that are reordered but still delivered in a timely manner.
-type Window = u128;
-
-/// Number of packets tracked by `Dedup`.
-const WINDOW_SIZE: u64 = 1 + mem::size_of::<Window>() as u64 * 8;
-
 impl Dedup {
     /// Construct an empty window positioned at the start.
     #[cfg(test)]
@@ -953,7 +941,7 @@ impl Dedup {
     fn smallest_missing_in_interval(&self, lower_bound: u64, upper_bound: u64) -> Option<u64> {
         debug_assert!(lower_bound <= upper_bound);
         debug_assert!(upper_bound <= self.highest());
-        const BITFIELD_SIZE: u64 = (mem::size_of::<Window>() * 8) as u64;
+        const BITFIELD_SIZE: u64 = Window::BITS as u64;
 
         // Since we already know the packets at the boundaries have been received, we only need to
         // check those in between them (this removes the necessity of extra logic to deal with the
@@ -1009,7 +997,15 @@ impl Dedup {
     }
 }
 
-/// Indicates which data is available for sending.
+/// Inner bitfield type.
+///
+/// Because QUIC never reuses packet numbers, this only needs to be large enough to deal with
+/// packets that are reordered but still delivered in a timely manner.
+type Window = u128;
+
+/// Number of packets tracked by `Dedup`.
+const WINDOW_SIZE: u64 = 1 + size_of::<Window>() as u64 * 8;
+/// Indicates which data is available for sending
 ///
 /// This applies to a particular space ID that was queried and all refers to on-path data.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -1578,7 +1574,7 @@ mod test {
     fn sent_packet_size() {
         // The tracking state of sent packets should be minimal, and not grow
         // over time.
-        assert!(std::mem::size_of::<SentPacket>() <= 128);
+        assert!(size_of::<SentPacket>() <= 128);
     }
 
     #[test]

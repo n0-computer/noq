@@ -40,12 +40,12 @@ impl UdpSocketState {
     pub fn new(socket: UdpSockRef<'_>) -> io::Result<Self> {
         assert!(
             CMSG_LEN
-                >= WinSock::CMSGHDR::cmsg_space(mem::size_of::<WinSock::IN6_PKTINFO>())
-                    + WinSock::CMSGHDR::cmsg_space(mem::size_of::<c_int>())
-                    + WinSock::CMSGHDR::cmsg_space(mem::size_of::<u32>())
+                >= WinSock::CMSGHDR::cmsg_space(size_of::<WinSock::IN6_PKTINFO>())
+                    + WinSock::CMSGHDR::cmsg_space(size_of::<c_int>())
+                    + WinSock::CMSGHDR::cmsg_space(size_of::<u32>())
         );
         assert!(
-            mem::align_of::<WinSock::CMSGHDR>() <= mem::align_of::<cmsg::Aligned<[u8; 0]>>(),
+            align_of::<WinSock::CMSGHDR>() <= align_of::<cmsg::Aligned<[u8; 0]>>(),
             "control message buffers will be misaligned"
         );
 
@@ -81,7 +81,7 @@ impl UdpSocketState {
         let is_ipv4 = if is_ipv6 {
             let v6only = unsafe {
                 let mut result: u32 = 0;
-                let mut len = mem::size_of_val(&result) as i32;
+                let mut len = size_of_val(&result) as i32;
                 let rc = WinSock::getsockopt(
                     socket.0.as_raw_socket() as _,
                     WinSock::IPPROTO_IPV6,
@@ -291,7 +291,7 @@ impl UdpSocketState {
 
         let mut wsa_msg = WinSock::WSAMSG {
             name: &mut source as *mut _ as *mut _,
-            namelen: mem::size_of_val(&source) as _,
+            namelen: size_of_val(&source) as _,
             lpBuffers: &mut data,
             Control: ctrl,
             dwBufferCount: 1,
@@ -314,7 +314,7 @@ impl UdpSocketState {
 
         let addr = unsafe {
             let (_, addr) = socket2::SockAddr::try_init(|addr_storage, len| {
-                *len = mem::size_of_val(&source) as _;
+                *len = size_of_val(&source) as _;
                 ptr::copy_nonoverlapping(&source, addr_storage as _, 1);
                 Ok(())
             })?;
@@ -379,6 +379,7 @@ impl UdpSocketState {
             ecn: EcnCodepoint::from_bits(ecn_bits as u8),
             dst_ip,
             interface_index,
+            timestamp: None,
         };
         Ok(1)
     }
@@ -568,7 +569,7 @@ fn disable_udp_ioctl(socket: &impl AsRawSocket, control_code: u32) -> io::Result
             socket.as_raw_socket() as usize,
             control_code,
             &disabled as *const _ as *const _,
-            mem::size_of_val(&disabled) as u32,
+            size_of_val(&disabled) as u32,
             ptr::null_mut(),
             0,
             &mut bytes_returned,
@@ -595,7 +596,7 @@ fn set_socket_option(
             level,
             name,
             &value as *const _ as _,
-            mem::size_of_val(&value) as _,
+            size_of_val(&value) as _,
         )
     };
 
@@ -632,9 +633,9 @@ static WSARECVMSG_PTR: LazyLock<WinSock::LPFN_WSARECVMSG> = LazyLock::new(|| {
             s as _,
             WinSock::SIO_GET_EXTENSION_FUNCTION_POINTER,
             &guid as *const _ as *const _,
-            mem::size_of_val(&guid) as u32,
+            size_of_val(&guid) as u32,
             &mut wsa_recvmsg_ptr as *mut _ as *mut _,
-            mem::size_of_val(&wsa_recvmsg_ptr) as u32,
+            size_of_val(&wsa_recvmsg_ptr) as u32,
             &mut len,
             ptr::null_mut(),
             None,
@@ -646,7 +647,7 @@ static WSARECVMSG_PTR: LazyLock<WinSock::LPFN_WSARECVMSG> = LazyLock::new(|| {
             "ignoring WSARecvMsg function pointer due to ioctl error: {}",
             io::Error::last_os_error()
         );
-    } else if len as usize != mem::size_of::<WinSock::LPFN_WSARECVMSG>() {
+    } else if len as usize != size_of::<WinSock::LPFN_WSARECVMSG>() {
         debug!("ignoring WSARecvMsg function pointer due to pointer size mismatch");
         wsa_recvmsg_ptr = None;
     }

@@ -248,6 +248,9 @@ impl SendStream {
     /// For a variety of reasons, the peer may not send acknowledgements immediately upon receiving
     /// data. As such, relying on `stopped` to know when the peer has read a stream to completion
     /// may introduce more latency than using an application-level response of some sort.
+    ///
+    /// Clients may wish to await this after finishing a unidirectional 0-RTT stream to reliably
+    /// determine whether the stream was rejected.
     pub fn stopped(&self) -> Stopped {
         let notified = {
             // Create an `OwnedNotified` to move into the future. By creating it before the first poll,
