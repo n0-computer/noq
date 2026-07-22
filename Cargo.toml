@@ -18,7 +18,7 @@ anyhow = "1.0.22"
 arbitrary = { version = "1.0.1", features = ["derive"] }
 assert_matches = "1.1"
 async-io = "2"
-aws-lc-rs = { version = "=1.16.2", default-features = false }
+aws-lc-rs = { version = "1.9", default-features = false }
 bytes = "1"
 cfg_aliases = "0.2.2"
 clap = { version = "4.5", features = ["derive"] }
@@ -68,8 +68,8 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_
 async-executor = "1.13.0"
 async-fs = "2.1"
 async-global-executor = "2.4.1"
-aws-lc-fips-sys = "=0.13.13"
-aws-lc-sys = "=0.39.0"
+aws-lc-fips-sys = "0.13.10"
+aws-lc-sys = "0.39.0"
 gcc = "0.3.55"
 http = "1.1.0"
 lazy_static = "1.5.0"
