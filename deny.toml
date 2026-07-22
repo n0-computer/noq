@@ -27,17 +27,7 @@ skip = [
     { crate = "cpufeatures", reason = "rand 0.10 pulls in newer chacha (which depends on this), but aes-gcm hasn't updated yet" },
     # ring uses getrandom 0.2, newer crates use 0.3
     { crate = "getrandom", reason = "ring depends on 0.2, newer ecosystem uses 0.3" },
-    { crate = "r-efi", reason = "proptest dev-dependency pulls in old getrandom" },
     # various transitive deps require different windows-sys versions
     { crate = "windows-sys", reason = "transitive deps require different versions" },
-    { crate = "windows-targets", reason = "follows windows-sys" },
-    { crate = "windows_aarch64_gnullvm", reason = "follows windows-sys" },
-    { crate = "windows_aarch64_msvc", reason = "follows windows-sys" },
-    { crate = "windows_i686_gnu", reason = "follows windows-sys" },
-    { crate = "windows_i686_gnullvm", reason = "follows windows-sys" },
-    { crate = "windows_i686_msvc", reason = "follows windows-sys" },
-    { crate = "windows_x86_64_gnu", reason = "follows windows-sys" },
-    { crate = "windows_x86_64_gnullvm", reason = "follows windows-sys" },
-    { crate = "windows_x86_64_msvc", reason = "follows windows-sys" },
-    { crate = "wit-bindgen", reason = "proptest dev-dependency pulls in old getrandom" },
+    { crate = "shlex", reason = "transitive deps require different versions" }
 ]
