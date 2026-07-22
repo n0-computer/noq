@@ -283,7 +283,6 @@ pub(super) struct PacketNumberSpace {
 
     //
     // Loss Detection
-    //
     /// The time the most recently sent retransmittable packet was sent.
     pub(super) time_of_last_ack_eliciting_packet: Option<Instant>,
     /// Earliest time when we might declare a packet lost.
@@ -506,13 +505,14 @@ pub(super) enum OpenStatus {
 /// Represents one or more packets subject to retransmission
 #[derive(Debug, Clone)]
 pub(super) struct SentPacket {
-    /// [`PathData::generation`](super::PathData::generation) of the path on which this packet was sent
+    /// [`PathData::generation`](super::PathData::generation) of the path on which this packet was
+    /// sent
     pub(super) path_generation: u64,
     /// The time the packet was sent.
     pub(super) time_sent: Instant,
-    /// The number of bytes sent in the packet, not including UDP or IP overhead, but including QUIC
-    /// framing overhead. Zero if this packet is not counted towards congestion control, i.e. not an
-    /// "in flight" packet.
+    /// The number of bytes sent in the packet, not including UDP or IP overhead, but including
+    /// QUIC framing overhead. Zero if this packet is not counted towards congestion control,
+    /// i.e. not an "in flight" packet.
     pub(super) size: u16,
     /// Whether an acknowledgement is expected directly in response to this packet.
     pub(super) ack_eliciting: bool,
@@ -561,8 +561,8 @@ pub struct Retransmits {
     ///
     /// Stores the remote_max_path_id at the time this was generated.
     /// This frame is entirely informational, so when it's retransmitted, the remote_max_path_id is
-    /// intentionally not updated to preserve the fact that this was the state of the client at some
-    /// point.
+    /// intentionally not updated to preserve the fact that this was the state of the client at
+    /// some point.
     pub(super) paths_blocked: Option<PathId>,
     /// For each enqueued NEW_TOKEN frame, a copy of the path's remote address
     ///
@@ -583,12 +583,13 @@ pub struct Retransmits {
     pub(super) new_tokens: Vec<FourTuple>,
     /// Paths which need to be abandoned
     pub(super) path_abandon: BTreeMap<PathId, TransportErrorCode>,
-    /// If a [`frame::PathStatusAvailable`] and [`frame::PathStatusBackup`] need to be sent for a path
+    /// If a [`frame::PathStatusAvailable`] and [`frame::PathStatusBackup`] need to be sent for a
+    /// path
     pub(super) path_status: BTreeSet<PathId>,
     /// Whether a PATH_CIDS_BLOCKED frame needs to be sent for a path.
     ///
-    /// Stores the next_seq number for the blocked path. This number can be "outdated" at the time of
-    /// sending when this is a retransmission. This is intentional, as this frame is purely
+    /// Stores the next_seq number for the blocked path. This number can be "outdated" at the time
+    /// of sending when this is a retransmission. This is intentional, as this frame is purely
     /// informational, and this would preserve this information.
     pub(super) path_cids_blocked: BTreeMap<PathId, VarInt>,
 
@@ -1099,7 +1100,8 @@ pub(super) struct PendingAcks {
     ///
     /// * `0`: no special action is taken
     /// * `1`: an ACK is immediately sent if it is out-of-order according to RFC 9000
-    /// * `>1`: an ACK is immediately sent if it is out-of-order according to the ACK frequency draft
+    /// * `>1`: an ACK is immediately sent if it is out-of-order according to the ACK frequency
+    ///   draft
     reordering_threshold: u64,
     /// The earliest ack-eliciting packet since the last ACK was sent, used to calculate the moment
     /// upon which `max_ack_delay` elapses

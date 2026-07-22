@@ -136,9 +136,9 @@ impl MtuDiscovery {
 
     /// Notifies the [`MtuDiscovery`] that a non-probe packet was lost
     ///
-    /// When done notifying of lost packets, [`MtuDiscovery::black_hole_detected`] must be called, to
-    /// ensure the last loss burst is properly processed and to trigger black hole recovery logic if
-    /// necessary.
+    /// When done notifying of lost packets, [`MtuDiscovery::black_hole_detected`] must be called,
+    /// to ensure the last loss burst is properly processed and to trigger black hole recovery
+    /// logic if necessary.
     pub(crate) fn on_non_probe_lost(&mut self, pn: u64, len: u16) {
         self.black_hole_detector.on_non_probe_lost(pn, len);
     }
@@ -185,8 +185,8 @@ impl EnabledMtuDiscovery {
     ///
     /// - There is no current in-flight probe.
     /// - A search for a new MTU is in progress.
-    /// - The MTU discovery was completed but the [`MtuDiscoveryConfig::interval`] expired,
-    ///   this re-starts a n MTU search.
+    /// - The MTU discovery was completed but the [`MtuDiscoveryConfig::interval`] expired, this
+    ///   re-starts a n MTU search.
     fn poll_transmit(&mut self, now: Instant, current_mtu: u16, next_pn: u64) -> Option<u16> {
         if let Phase::Initial = &self.phase {
             // Start the first search
@@ -376,8 +376,8 @@ struct BlackHoleDetector {
     /// Packet number of the biggest packet larger than `min_mtu` which we've received
     /// acknowledgment of more recently than any suspicious loss burst, if any
     largest_post_loss_packet: u64,
-    /// The maximum of `min_mtu` and the size of `largest_post_loss_packet`, or exactly `min_mtu` if
-    /// no larger packets have been received since the most recent loss burst.
+    /// The maximum of `min_mtu` and the size of `largest_post_loss_packet`, or exactly `min_mtu`
+    /// if no larger packets have been received since the most recent loss burst.
     acked_mtu: u16,
     /// The UDP payload size guaranteed to be supported by the network
     min_mtu: u16,

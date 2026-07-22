@@ -24,7 +24,8 @@ async fn client() -> Result<(), Box<dyn Error>> {
     // Bind this endpoint to a UDP socket on the given client address.
     let endpoint = Endpoint::client(CLIENT_ADDR)?;
 
-    // Connect to the server passing in the server name which is supposed to be in the server certificate.
+    // Connect to the server passing in the server name which is supposed to be in the server
+    // certificate.
     let connection = endpoint.connect(SERVER_ADDR, SERVER_NAME)?.await?;
 
     // Start transferring, receiving data, see data transfer page.

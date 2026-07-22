@@ -132,8 +132,7 @@ use state::StateType;
 ///   refer to this as "performing I/O" below, however as per the design of this library none of the
 ///   functions actually perform system-level I/O. For example, [`read`](RecvStream::read) and
 ///   [`write`](SendStream::write), but also things like [`reset`](SendStream::reset).
-/// - D. Polling functions for outgoing events or actions for the caller to
-///   take, named `poll_*`.
+/// - D. Polling functions for outgoing events or actions for the caller to take, named `poll_*`.
 ///
 /// The simplest way to use this API correctly is to call (B) and (C) whenever
 /// appropriate, then after each of those calls, as soon as feasible call all
@@ -215,18 +214,15 @@ pub struct Connection {
 
     //
     // Queued non-retransmittable 1-RTT data
-    //
     /// If the CONNECTION_CLOSE frame needs to be sent
     connection_close_pending: bool,
 
     //
     // ACK frequency
-    //
     ack_frequency: AckFrequencyState,
 
     //
     // Congestion Control
-    //
     /// Whether the most recently received packet had an ECN codepoint set
     receiving_ecn: bool,
     /// Number of packets authenticated
@@ -234,7 +230,6 @@ pub struct Connection {
 
     //
     // ObservedAddr
-    //
     /// Sequence number for the next observed address frame sent to the peer.
     next_observed_addr_seq_no: VarInt,
 
@@ -267,7 +262,6 @@ pub struct Connection {
 
     //
     // Multipath
-    //
     /// Maximum number of concurrent paths
     ///
     /// Initially set from the [`TransportConfig::max_concurrent_multipath_paths`]. Even
@@ -686,7 +680,8 @@ impl Connection {
         pending_space.new_cids.retain(|cid| cid.path_id != path_id);
         pending_space.path_status.retain(|&id| id != path_id);
 
-        // Cleanup retransmits across ALL paths (CIDs for path_id may have been transmitted on other paths)
+        // Cleanup retransmits across ALL paths (CIDs for path_id may have been transmitted on other
+        // paths)
         for space in self.spaces[SpaceId::Data].iter_paths_mut() {
             for sent_packet in space.sent_packets.values_mut() {
                 if let Some(retransmits) = sent_packet.retransmits.get_mut() {
@@ -921,7 +916,8 @@ impl Connection {
         })
         // TODO(@divma): we might want to ensure the path has been recently active to consider the
         // address validated
-        // matheus23: Perhaps looking at !self.abandoned_paths.contains(path_id) is enough, given keep-alives?
+        // matheus23: Perhaps looking at !self.abandoned_paths.contains(path_id) is enough, given
+        // keep-alives?
     }
 
     /// Creates the [`PathData`] for a new [`PathId`].
@@ -1433,9 +1429,9 @@ impl Connection {
         // - If not coalescing, complete the datagram:
         //   - Finish packet with padding.
         //   - Set the transmit segment size if this is the first datagram.
-        // - Loop: next iteration will exit the loop if nothing more to send in this
-        //   space. The TransmitBuf will contain a started datagram with space if
-        //   coalescing, or completely filled datagram if not coalescing.
+        // - Loop: next iteration will exit the loop if nothing more to send in this space. The
+        //   TransmitBuf will contain a started datagram with space if coalescing, or completely
+        //   filled datagram if not coalescing.
         loop {
             // Determine if anything can be sent in this packet number space.
             let max_packet_size = if transmit.datagram_remaining_mut() > 0 {
@@ -2841,9 +2837,10 @@ impl Connection {
 
     /// Current number of remotely initiated streams that may be concurrently open
     ///
-    /// If the target for this limit is reduced using [`set_max_concurrent_streams`](Self::set_max_concurrent_streams),
-    /// it will not change immediately, even if fewer streams are open. Instead, it will
-    /// decrement by one for each time a remotely initiated stream of matching directionality is closed.
+    /// If the target for this limit is reduced using
+    /// [`set_max_concurrent_streams`](Self::set_max_concurrent_streams), it will not change
+    /// immediately, even if fewer streams are open. Instead, it will decrement by one for each
+    /// time a remotely initiated stream of matching directionality is closed.
     pub fn max_concurrent_streams(&self, dir: Dir) -> u64 {
         self.streams.max_concurrent(dir)
     }
@@ -2985,7 +2982,8 @@ impl Connection {
                         .on_mtu_update(path_data.mtud.current_mtu());
                 }
 
-                // Notify ack frequency that a packet was acked, because it might contain an ACK_FREQUENCY frame
+                // Notify ack frequency that a packet was acked, because it might contain an
+                // ACK_FREQUENCY frame
                 self.ack_frequency.on_acked(path, packet);
 
                 self.on_packet_acked(now, path, packet, info);
@@ -3042,10 +3040,10 @@ impl Connection {
         // find a way to make this work without two lookups
         if self.path_data(path).sending_ecn {
             if let Some(ecn) = ack.ecn {
-                // We only examine ECN counters from ACKs that we are certain we received in transmit
-                // order, allowing us to compute an increase in ECN counts to compare against the number
-                // of newly acked packets that remains well-defined in the presence of arbitrary packet
-                // reordering.
+                // We only examine ECN counters from ACKs that we are certain we received in
+                // transmit order, allowing us to compute an increase in ECN counts
+                // to compare against the number of newly acked packets that remains
+                // well-defined in the presence of arbitrary packet reordering.
                 if let Some(largest_sent_pn) = new_largest_pn {
                     let sent = self.spaces[space]
                         .for_path(path)
@@ -3061,7 +3059,8 @@ impl Connection {
                     );
                 }
             } else {
-                // We always start out sending ECN, so any ack that doesn't acknowledge it disables it.
+                // We always start out sending ECN, so any ack that doesn't acknowledge it disables
+                // it.
                 debug!("ECN not acknowledged by peer");
                 self.path_data_mut(path).sending_ecn = false;
             }
@@ -3248,9 +3247,9 @@ impl Connection {
     /// There are two cases in which we detects lost packets:
     ///
     /// - We received an ACK packet.
-    /// - The [`PathTimer::LossDetection`] timer expired. So there is an un-acknowledged packet
-    ///   that was followed by an acknowledged packet. The loss timer for this
-    ///   un-acknowledged packet expired and we need to detect that packet as lost.
+    /// - The [`PathTimer::LossDetection`] timer expired. So there is an un-acknowledged packet that
+    ///   was followed by an acknowledged packet. The loss timer for this un-acknowledged packet
+    ///   expired and we need to detect that packet as lost.
     ///
     /// Packets are lost if they are both (See RFC9002 §6.1):
     ///
@@ -3800,7 +3799,8 @@ impl Connection {
                 if self.crypto_state.has_keys(EncryptionLevel::Initial)
                     && space_id == SpaceKind::Handshake
                 {
-                    // A server stops sending and processing Initial packets when it receives its first Handshake packet.
+                    // A server stops sending and processing Initial packets when it receives its
+                    // first Handshake packet.
                     self.discard_space(now, SpaceKind::Initial);
                 }
                 if self.crypto_state.has_keys(EncryptionLevel::ZeroRtt) && is_1rtt {
@@ -4564,13 +4564,11 @@ impl Connection {
                             || !is_valid_retry
                 {
                     trace!("discarding invalid Retry");
-                    // - After the client has received and processed an Initial or Retry
-                    //   packet from the server, it MUST discard any subsequent Retry
-                    //   packets that it receives.
-                    // - A client MUST discard a Retry packet with a zero-length Retry Token
-                    //   field.
-                    // - Clients MUST discard Retry packets that have a Retry Integrity Tag
-                    //   that cannot be validated
+                    // - After the client has received and processed an Initial or Retry packet from
+                    //   the server, it MUST discard any subsequent Retry packets that it receives.
+                    // - A client MUST discard a Retry packet with a zero-length Retry Token field.
+                    // - Clients MUST discard Retry packets that have a Retry Integrity Tag that
+                    //   cannot be validated
                     return Ok(());
                 }
 
@@ -5387,9 +5385,10 @@ impl Connection {
                     }
                 }
                 Frame::PathsBlocked(frame::PathsBlocked(max_path_id)) => {
-                    // Receipt of a value of Maximum Path Identifier or Path Identifier that is higher than the local maximum value MUST
-                    // be treated as a connection error of type PROTOCOL_VIOLATION.
-                    // Ref <https://www.ietf.org/archive/id/draft-ietf-quic-multipath-14.html#name-paths_blocked-and-path_cids>
+                    // Receipt of a value of Maximum Path Identifier or Path Identifier that
+                    // is higher than the local maximum value MUST be treated as a
+                    // connection error of type PROTOCOL_VIOLATION. Ref
+                    // <https://www.ietf.org/archive/id/draft-ietf-quic-multipath-14.html#name-paths_blocked-and-path_cids>
                     if self.is_multipath_negotiated() {
                         if max_path_id > self.local_max_path_id {
                             return Err(TransportError::PROTOCOL_VIOLATION(
@@ -5407,9 +5406,10 @@ impl Connection {
                     // always issue all CIDs we're allowed to issue, so either this is an
                     // impatient peer or a bug on our side.
 
-                    // Receipt of a value of Maximum Path Identifier or Path Identifier that is higher than the local maximum value MUST
-                    // be treated as a connection error of type PROTOCOL_VIOLATION.
-                    // Ref <https://www.ietf.org/archive/id/draft-ietf-quic-multipath-14.html#name-paths_blocked-and-path_cids>
+                    // Receipt of a value of Maximum Path Identifier or Path Identifier that
+                    // is higher than the local maximum value MUST be treated as a
+                    // connection error of type PROTOCOL_VIOLATION. Ref
+                    // <https://www.ietf.org/archive/id/draft-ietf-quic-multipath-14.html#name-paths_blocked-and-path_cids>
                     if self.is_multipath_negotiated() {
                         if path_id > self.local_max_path_id {
                             return Err(TransportError::PROTOCOL_VIOLATION(
@@ -5419,8 +5419,9 @@ impl Connection {
                         if self
                             .local_cid_state
                             .get(&path_id)
-                            // The PATH_CIDS_BLOCKED frame may arrive after we've discarded the path state.
-                            // In that case, we can't check for the protocol violation.
+                            // The PATH_CIDS_BLOCKED frame may arrive after we've discarded the path
+                            // state. In that case, we can't check for
+                            // the protocol violation.
                             .is_some_and(|cid_state| next_seq.0 > cid_state.active_seq().1 + 1)
                         {
                             return Err(TransportError::PROTOCOL_VIOLATION(
@@ -7066,8 +7067,8 @@ impl Connection {
 
     /// Returns whether this connection has a socket that supports IPv6.
     ///
-    /// TODO(matheus23): This is related to noq endpoint state's `ipv6` bool. We should move that info
-    /// here instead of trying to hack around not knowing it exactly.
+    /// TODO(matheus23): This is related to noq endpoint state's `ipv6` bool. We should move that
+    /// info here instead of trying to hack around not knowing it exactly.
     pub(crate) fn is_ipv6(&self) -> bool {
         self.paths
             .values()
@@ -7695,13 +7696,17 @@ impl SentFrames {
     }
 }
 
-/// Compute the negotiated idle timeout based on local and remote max_idle_timeout transport parameters.
+/// Computes the negotiated idle timeout based on the transport parameters.
 ///
-/// According to the definition of max_idle_timeout, a value of `0` means the timeout is disabled; see <https://www.rfc-editor.org/rfc/rfc9000#section-18.2-4.4.1.>
+/// According to the definition of max_idle_timeout, a value of `0` means the timeout is
+/// disabled; see <https://www.rfc-editor.org/rfc/rfc9000#section-18.2-4.4.1.>
 ///
-/// According to the negotiation procedure, either the minimum of the timeouts or one specified is used as the negotiated value; see <https://www.rfc-editor.org/rfc/rfc9000#section-10.1-2.>
+/// According to the negotiation procedure, either the minimum of the timeouts or one
+/// specified is used as the negotiated value; see
+/// <https://www.rfc-editor.org/rfc/rfc9000#section-10.1-2.>
 ///
-/// Returns the negotiated idle timeout as a `Duration`, or `None` when both endpoints have opted out of idle timeout.
+/// Returns the negotiated idle timeout as a `Duration`, or `None` when both endpoints have
+/// opted out of idle timeout.
 fn negotiate_max_idle_timeout(x: Option<VarInt>, y: Option<VarInt>) -> Option<Duration> {
     match (x, y) {
         (Some(VarInt(0)) | None, Some(VarInt(0)) | None) => None,

@@ -60,8 +60,8 @@ mod token;
 use wasm_bindgen_test::wasm_bindgen_test as test;
 
 // Enable this if you want to run these tests in the browser.
-// Unfortunately it's either-or: Enable this and you can run in the browser, disable to run in nodejs.
-// #[cfg(all(target_family = "wasm", target_os = "unknown"))]
+// Unfortunately it's either-or: Enable this and you can run in the browser, disable to run in
+// nodejs. #[cfg(all(target_family = "wasm", target_os = "unknown"))]
 // wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
 #[test]
@@ -3418,7 +3418,8 @@ fn ack_frequency_ack_sent_after_reordered_packets_above_threshold() {
         pair.drive_client();
     }
 
-    // Restore the default MTU and send another ping, which will arrive earlier than the dropped ones
+    // Restore the default MTU and send another ping, which will arrive earlier than the dropped
+    // ones
     pair.mtu = DEFAULT_MTU;
     pair.client_conn_mut(client_ch).ping();
     pair.drive_client();
@@ -3668,7 +3669,8 @@ fn datagram_gso() {
     let final_transmit_count = pair.client_conn_mut(client_ch).stats().transmits_tx;
     let final_bytes = pair.client_conn_mut(client_ch).stats().udp_tx.bytes;
     assert_eq!(final_transmit_count - initial_transmit_count, 1);
-    // Expected overhead: flags + CID + PN + tag + frame type + frame length = 1 + 8 + 1 + 16 + 1 + 2 = 29
+    // Expected overhead:
+    //    flags + CID + PN + tag + frame type + frame length = 1 + 8 + 1 + 16 + 1 + 2 = 29
     assert_eq!(
         final_bytes - initial_bytes,
         ((29 + DATAGRAM_LEN) * DATAGRAMS) as u64
@@ -3730,7 +3732,8 @@ fn pad_to_mtu() {
     pair.server.capture_inbound_packets = true;
 
     info!("sending");
-    // Send two datagrams significantly smaller than MTU, but large enough to require two UDP datagrams.
+    // Send two datagrams significantly smaller than MTU, but large enough to require two UDP
+    // datagrams.
     const LEN_1: usize = 800;
     const LEN_2: usize = 600;
     pair.client_datagrams(client_ch)
@@ -4433,12 +4436,11 @@ fn regression_maybe_frame_roundtrip() {
 
 /// Regression test simulating a situation that would trigger an unreachable! in noq.
 ///
-/// - noq expects that there always is a `ConnectionError` set at the end of draining
-///   a connection.
-/// - When the connection close is generated within noq-proto (or received remotely),
-///   then this error in noq is populated via connection events.
-/// - This test simulates a situation in which noq-proto would not generate a
-///   `ConnectionLost` event for a connection that has drained.
+/// - noq expects that there always is a `ConnectionError` set at the end of draining a connection.
+/// - When the connection close is generated within noq-proto (or received remotely), then this
+///   error in noq is populated via connection events.
+/// - This test simulates a situation in which noq-proto would not generate a `ConnectionLost` event
+///   for a connection that has drained.
 ///
 /// The issue is a race condition between `move_to_closed` and `move_to_draining(None)`.
 /// The latter overwrites the error from the former, making it impossible to generate a

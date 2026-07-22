@@ -266,7 +266,8 @@ impl TransportConfig {
         self
     }
 
-    /// Number of consecutive PTOs after which network is considered to be experiencing persistent congestion.
+    /// Number of consecutive PTOs after which network is considered to be experiencing persistent
+    /// congestion.
     pub fn persistent_congestion_threshold(&mut self, value: u32) -> &mut Self {
         self.persistent_congestion_threshold = value;
         self
@@ -276,9 +277,9 @@ impl TransportConfig {
     ///
     /// Keep-alive packets prevent an inactive but otherwise healthy connection from timing out.
     ///
-    /// `None` to disable, which is the default. Only one side of any given connection needs keep-alive
-    /// enabled for the connection to be preserved. Must be set lower than the idle_timeout of both
-    /// peers to be effective.
+    /// `None` to disable, which is the default. Only one side of any given connection needs
+    /// keep-alive enabled for the connection to be preserved. Must be set lower than the
+    /// idle_timeout of both peers to be effective.
     pub fn keep_alive_interval(&mut self, value: Option<Duration>) -> &mut Self {
         self.keep_alive_interval = value;
         self
@@ -561,7 +562,8 @@ impl Default for TransportConfig {
 
             packet_threshold: 3,
             time_threshold: 9.0 / 8.0,
-            initial_rtt: Duration::from_millis(333), // per spec, intentionally distinct from EXPECTED_RTT
+            initial_rtt: Duration::from_millis(333), /* per spec, intentionally distinct from
+                                                      * EXPECTED_RTT */
             initial_mtu: INITIAL_MTU,
             min_mtu: INITIAL_MTU,
             mtu_discovery_config: Some(MtuDiscoveryConfig::default()),

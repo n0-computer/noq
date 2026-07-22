@@ -242,9 +242,9 @@ impl SendBuffer {
     ///
     /// The method returns a tuple:
     /// - The first return value indicates the range of data to send
-    /// - The second return value indicates whether the length needs to be encoded
-    ///   in the STREAM frames metadata (`true`), or whether it can be omitted
-    ///   since the selected range will fill the whole packet.
+    /// - The second return value indicates whether the length needs to be encoded in the STREAM
+    ///   frames metadata (`true`), or whether it can be omitted since the selected range will fill
+    ///   the whole packet.
     pub(super) fn poll_transmit(&mut self, mut max_len: usize) -> (Range<u64>, bool) {
         debug_assert!(max_len >= 8 + 8);
         let mut encode_length = false;

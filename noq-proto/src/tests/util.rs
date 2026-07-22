@@ -42,7 +42,9 @@ pub(super) struct Pair {
     pub(super) epoch: Instant,
     /// Current time
     pub(super) time: Instant,
-    /// Simulates the maximum size allowed for UDP payloads by the link (packets exceeding this size will be dropped)
+    /// Simulates the maximum size allowed for UDP payloads by the link.
+    ///
+    /// Packets exceeding this size will be dropped.
     pub(super) mtu: usize,
     /// Simulates explicit congestion notification
     pub(super) congestion_experienced: bool,
@@ -1864,8 +1866,9 @@ impl ManyToManyRouting {
 
     fn route_client_to_server(&mut self, transmit: &Transmit, now: Instant) -> RoutingDecision {
         if let Some(client_interface_ip) = transmit.src_ip {
-            // If we have a client interface IP, then we use that to build the packet coming in on the other side.
-            // But we need to check if that is even connected to the server.
+            // If we have a client interface IP, then we use that to build the packet coming in on
+            // the other side. But we need to check if that is even connected to the
+            // server.
             let Some(&(client_addr, _)) = self
                 .server_routes
                 .iter()
@@ -1904,8 +1907,9 @@ impl ManyToManyRouting {
 
     fn route_server_to_client(&mut self, transmit: &Transmit, now: Instant) -> RoutingDecision {
         if let Some(server_interface_ip) = transmit.src_ip {
-            // If we have a server interface IP, then we use that to build the packet coming in on the other side.
-            // But we need to check if that is even connected to the client.
+            // If we have a server interface IP, then we use that to build the packet coming in on
+            // the other side. But we need to check if that is even connected to the
+            // client.
             let Some(&(server_addr, _)) = self
                 .client_routes
                 .iter()
@@ -2023,13 +2027,13 @@ impl ManyToManyRouting {
         }
     }
 
-    /// Adds a new route from an existing server address (identified by index) to a new client address.
+    /// Adds a new route from an existing server address to a new client address.
     pub(super) fn add_client_route(&mut self, client_addr: SocketAddr, server_addr_idx: usize) {
         assert!(server_addr_idx < self.server_routes.len());
         self.client_routes.push((client_addr, server_addr_idx));
     }
 
-    /// Adds a new route from an existing client address (identified by index) to a new server address.
+    /// Adds a new route from an existing client address to a new server address.
     pub(super) fn add_server_route(&mut self, server_addr: SocketAddr, client_addr_idx: usize) {
         assert!(client_addr_idx < self.client_routes.len());
         self.server_routes.push((server_addr, client_addr_idx));
@@ -2086,9 +2090,8 @@ impl ManyToManyRouting {
 /// The client and server both have 2 interfaces:
 ///
 /// 1. One "direct" interface, which has a link to the peer's "direct" interface.
-/// 2. One "nat" interface, which has a link to the peer's "nat" interface. This link
-///    however does not allow an incoming packet unless it has seen an outgoing packet
-///    first.
+/// 2. One "nat" interface, which has a link to the peer's "nat" interface. This link however does
+///    not allow an incoming packet unless it has seen an outgoing packet first.
 ///
 /// When an outgoing transmit has no `src_ip` is set, the source IP is set based on the
 /// destination. This is the same as the kernel selecting the correct outbound interface. If

@@ -13,7 +13,9 @@ pub(super) struct Send {
     pub(super) state: SendState,
     pub(super) pending: SendBuffer,
     pub(super) priority: i32,
-    /// Whether a frame containing a FIN bit must be transmitted, even if we don't have any new data
+    /// Whether a frame containing a FIN bit must be transmitted.
+    ///
+    /// Even if we don't have any new data.
     pub(super) fin_pending: bool,
     /// Whether this stream is in the `connection_blocked` list of `Streams`
     pub(super) connection_blocked: bool,
@@ -244,12 +246,11 @@ pub(super) trait BytesSource<'a> {
     /// Calling it will yield `Bytes` elements up to the configured `limit`.
     ///
     /// The method returns a tuple:
-    /// - The first item is the yielded `Bytes` element. The element will be
-    ///   empty if the limit is zero or no more data is available.
-    /// - The second item returns how many complete chunks inside the source had
-    ///   had been consumed. This can be less than 1, if a chunk inside the
-    ///   source had been truncated in order to adhere to the limit. It can also
-    ///   be more than 1, if zero-length chunks had been skipped.
+    /// - The first item is the yielded `Bytes` element. The element will be empty if the limit is
+    ///   zero or no more data is available.
+    /// - The second item returns how many complete chunks inside the source had had been consumed.
+    ///   This can be less than 1, if a chunk inside the source had been truncated in order to
+    ///   adhere to the limit. It can also be more than 1, if zero-length chunks had been skipped.
     fn pop_chunk<'b>(&'b mut self, limit: usize) -> (impl BytesOrSlice<'b>, usize)
     where
         'a: 'b;

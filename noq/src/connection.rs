@@ -355,9 +355,10 @@ impl Connection {
 
     /// Accept the next incoming bidirectional stream
     ///
-    /// **Important Note**: The `Connection` that calls [`open_bi()`] must write to its [`SendStream`]
-    /// before the other `Connection` is able to `accept_bi()`. Calling [`open_bi()`] then
-    /// waiting on the [`RecvStream`] without writing anything to [`SendStream`] will never succeed.
+    /// **Important Note**: The `Connection` that calls [`open_bi()`] must write to its
+    /// [`SendStream`] before the other `Connection` is able to `accept_bi()`. Calling
+    /// [`open_bi()`] then waiting on the [`RecvStream`] without writing anything to
+    /// [`SendStream`] will never succeed.
     ///
     /// [`accept_bi()`]: crate::Connection::accept_bi
     /// [`open_bi()`]: crate::Connection::open_bi
@@ -476,11 +477,13 @@ impl Connection {
 
     /// A stream of [`PathEvent`]s for all paths in this connection.
     ///
-    /// The stream will yield a [`PathEvent`] whenever there is a change in the state of any path in this connection.
-    /// The events need to be processed immediately, since there isn't an unbounded buffer for them.
+    /// The stream will yield a [`PathEvent`] whenever there is a change in the state of any path in
+    /// this connection. The events need to be processed immediately, since there isn't an
+    /// unbounded buffer for them.
     ///
-    /// If processing of events lags behind too much, you will get an error of type [`crate::Lagged`] indicating
-    /// how many events were lost. The stream continues after a lag, delivering the oldest retained message next.
+    /// If processing of events lags behind too much, you will get an error of type
+    /// [`crate::Lagged`] indicating how many events were lost. The stream continues after a
+    /// lag, delivering the oldest retained message next.
     pub fn path_events(&self) -> crate::PathEvents {
         crate::PathEvents::new(
             self.0
@@ -494,8 +497,9 @@ impl Connection {
     ///
     /// The events need to be processed immediately, since there isn't an unbounded buffer for them.
     ///
-    /// If processing of events lags behind too much, you will get an error of type [`crate::Lagged`] indicating
-    /// how many events were lost. The stream continues after a lag, delivering the oldest retained message next.
+    /// If processing of events lags behind too much, you will get an error of type
+    /// [`crate::Lagged`] indicating how many events were lost. The stream continues after a
+    /// lag, delivering the oldest retained message next.
     pub fn nat_traversal_updates(&self) -> crate::NatTraversalUpdates {
         crate::NatTraversalUpdates::new(
             self.0
@@ -535,10 +539,11 @@ impl Connection {
     /// Returns a future that resolves, once the connection is closed, to a [`Closed`] struct
     /// describing the close reason and final connection and per-path statistics.
     ///
-    /// Calling [`Self::closed`] keeps the connection alive until it is either closed locally via [`Connection::close`]
-    /// or closed by the remote peer. This function instead does not keep the connection itself alive,
-    /// so if all *other* clones of the connection are dropped, the connection will be closed implicitly even
-    /// if there are futures returned from this function still being awaited.
+    /// Calling [`Self::closed`] keeps the connection alive until it is either closed locally via
+    /// [`Connection::close`] or closed by the remote peer. This function instead does not keep
+    /// the connection itself alive, so if all *other* clones of the connection are dropped, the
+    /// connection will be closed implicitly even if there are futures returned from this
+    /// function still being awaited.
     pub fn on_closed(&self) -> OnClosed {
         let (tx, rx) = oneshot::channel();
         let mut state = self.0.lock_without_waking("on_closed");
@@ -562,7 +567,8 @@ impl Connection {
     /// an internal error (such as an idle timeout or the peer closing the
     /// connection).
     ///
-    /// Note: when the connection is closed, `connection.close_reason().is_some()` will always be true.
+    /// Note: when the connection is closed, `connection.close_reason().is_some()` will always be
+    /// true.
     pub fn close_reason(&self) -> Option<ConnectionError> {
         self.0.lock_without_waking("close_reason").error.clone()
     }
@@ -1340,8 +1346,8 @@ pub(crate) struct ConnectionInner {
 impl ConnectionInner {
     /// Lock the state and return a guard that wakes the connection driver on drop.
     ///
-    /// Use this for operations that may queue frames. The wake ensures the driver sends queued frames.
-    /// If that's not needed, use [`Self::lock_without_waking`].
+    /// Use this for operations that may queue frames. The wake ensures the driver sends queued
+    /// frames. If that's not needed, use [`Self::lock_without_waking`].
     pub(crate) fn lock_and_wake(&self, purpose: &'static str) -> WakeGuard<'_> {
         WakeGuard {
             guard: self.state.lock(purpose),
@@ -1458,8 +1464,9 @@ pub(crate) struct State {
     pub(crate) path_refs: FxHashMap<PathId, PathRefOwner>,
     /// Final path stats for discarded paths.
     ///
-    /// We only insert entries if the discarded path has a non-zero reference count in [`Self::path_refs`].
-    /// When the last reference to a path is dropped its entry is removed from both maps.
+    /// We only insert entries if the discarded path has a non-zero reference count in
+    /// [`Self::path_refs`]. When the last reference to a path is dropped its entry is removed
+    /// from both maps.
     pub(crate) final_path_stats: FxHashMap<PathId, PathStats>,
     pub(crate) path_events: tokio::sync::broadcast::Sender<PathEvent>,
     sender: Pin<Box<dyn UdpSender>>,
@@ -1694,13 +1701,16 @@ impl State {
                 }
                 Path(ref evt @ PathEvent::Abandoned { id, .. }) => {
                     if let Some(sender) = self.open_path.remove(&id) {
-                        // We don't care for the reason why this path was closed here, because semantically
-                        // all close reasons for a path that has not yet been opened equals to `ValidationFailed`.
-                        // With the noq API, there is no way to application-close a not-yet-opened path, so
-                        // `ApplicationClosed` cannot occur. And all other variants will only occur for paths
-                        // that have already been opened.
-                        // The previous iteration of this code had another event `PathEvent::LocallyClosed` which
-                        // contained a `PathError`, but that was only ever set to `ValidationFailed`.
+                        // We don't care for the reason why this path was closed here, because
+                        // semantically all close reasons for a path that
+                        // has not yet been opened equals to `ValidationFailed`.
+                        // With the noq API, there is no way to application-close a not-yet-opened
+                        // path, so `ApplicationClosed` cannot occur. And
+                        // all other variants will only occur for paths that
+                        // have already been opened. The previous iteration
+                        // of this code had another event `PathEvent::LocallyClosed` which
+                        // contained a `PathError`, but that was only ever set to
+                        // `ValidationFailed`.
                         let error = PathError::ValidationFailed;
                         sender.send_modify(|value| *value = Err(error));
                     }

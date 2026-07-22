@@ -9,7 +9,6 @@ use super::PathId;
 pub(super) struct AckFrequencyState {
     //
     // Sending ACK_FREQUENCY frames
-    //
     /// The path ID, packet number and value of the in-flight ACK_FREQUENCY frame
     in_flight_ack_frequency_frame: Option<(PathId, u64, Duration)>,
     next_outgoing_sequence_number: VarInt,
@@ -17,7 +16,6 @@ pub(super) struct AckFrequencyState {
 
     //
     // Receiving ACK_FREQUENCY frames
-    //
     /// The sequence number of the most recently received ACK_FREQUENCY frame
     last_ack_frequency_frame: Option<u64>,
     pub(super) max_ack_delay: Duration,
