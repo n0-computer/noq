@@ -239,6 +239,22 @@ pub(super) struct PathData {
     ///
     /// [`LossDetection`]: super::timer::PathTimer::LossDetection
     pub(super) pto_count: u32,
+    /// The Data-space packet number that was about to be sent when this path became
+    /// suspected dead, or `None` when it is not suspect.
+    ///
+    /// Set when [`Self::pto_count`] reaches [`SUSPECT_PTO_THRESHOLD`] and cleared when
+    /// an acknowledgement arrives again, so [`PathEvent::Suspect`] and
+    /// [`PathEvent::Recovered`] are emitted once per transition.
+    ///
+    /// Multipath QUIC lets an ACK for one path be coalesced onto any other path's
+    /// outgoing packet (`PathAck` names the path explicitly, independent of the
+    /// path that carries the frame). A path that has genuinely gone dead can still
+    /// have older, honestly-delivered packets whose ACK was pending and only goes
+    /// out once some other path becomes available. Without this watermark such a
+    /// late, pre-suspect ACK would clear suspect status on a path that will never
+    /// carry anything again. Only an ACK covering a packet sent at or after this
+    /// watermark counts as evidence the path is actually working again.
+    pub(super) suspect_since_pn: Option<u64>,
 
     //
     // Per-path idle & keep alive
@@ -339,6 +355,7 @@ impl PathData {
             status: Default::default(),
             first_packet: None,
             pto_count: 0,
+            suspect_since_pn: None,
             idle_timeout: config.default_path_max_idle_timeout,
             keep_alive: config.default_path_keep_alive_interval,
             permit_idle_reset: true,
@@ -387,6 +404,7 @@ impl PathData {
             status: prev.status.clone(),
             first_packet: None,
             pto_count: 0,
+            suspect_since_pn: None,
             idle_timeout: prev.idle_timeout,
             keep_alive: prev.keep_alive,
             permit_idle_reset: true,
@@ -1040,6 +1058,12 @@ pub enum PathStatus {
     Backup,
 }
 
+/// Number of consecutive PTOs without an acknowledgement after which a path is suspect.
+///
+/// PTO durations back off exponentially, so this reports a dead path within a few
+/// round trips while tolerating a single lost tail-loss probe.
+pub(super) const SUSPECT_PTO_THRESHOLD: u32 = 2;
+
 /// Application events about paths
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -1048,6 +1072,26 @@ pub enum PathEvent {
     #[non_exhaustive]
     Established {
         /// The path which can now be used for application data.
+        id: PathId,
+    },
+    /// The path stopped acknowledging data and is suspected dead.
+    ///
+    /// Emitted when [`SUSPECT_PTO_THRESHOLD`] consecutive PTOs fire on the path without
+    /// an acknowledgement. The path is not abandoned: it either recovers (followed by
+    /// [`Self::Recovered`]) or runs into its idle timeout (followed by
+    /// [`Self::Abandoned`]). Applications can use this to steer traffic away from the
+    /// path early and to start looking for alternatives.
+    #[non_exhaustive]
+    Suspect {
+        /// The path that stopped acknowledging data.
+        id: PathId,
+    },
+    /// A suspect path acknowledged data again.
+    ///
+    /// Only emitted after [`Self::Suspect`].
+    #[non_exhaustive]
+    Recovered {
+        /// The path that recovered.
         id: PathId,
     },
     /// A path was abandoned and is no longer usable.
