@@ -848,8 +848,10 @@ impl Connection {
 
     /// Sets the max_idle_timeout for a specific path.
     ///
-    /// The PathIdle timer is immediately re-armed accounting for already-elapsed
-    /// idle time. Setting `None` disables the timeout and stops the timer.
+    /// The path idle timer is immediately re-armed. If there was a timer previously set, re-arming
+    /// will account for elapsed idle time.
+    ///
+    /// Setting `None` disables the timeout and stops the timer.
     ///
     /// See [`TransportConfig::default_path_max_idle_timeout`] for details.
     ///

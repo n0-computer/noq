@@ -398,7 +398,7 @@ impl TransportConfig {
         self
     }
 
-    /// Sets a default per-path maximum idle timeout
+    /// Sets a default per-path maximum idle timeout.
     ///
     /// If the path is idle for this long the path will be abandoned. Bear in mind this will
     /// interact with the [`TransportConfig::max_idle_timeout`], if the last path is
@@ -406,6 +406,9 @@ impl TransportConfig {
     ///
     /// You can also change this using [`Connection::set_path_max_idle_timeout`] for
     /// existing paths.
+    ///
+    /// The idle timeout will only apply to paths of a multipath-negotiated connection. Before
+    /// multipath is negotiated, only the connection-wide max idle timeout is in effect.   
     ///
     /// [`Connection::set_path_max_idle_timeout`]: crate::Connection::set_path_max_idle_timeout
     pub fn default_path_max_idle_timeout(&mut self, timeout: Option<Duration>) -> &mut Self {
