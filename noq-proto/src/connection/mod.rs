@@ -2656,6 +2656,7 @@ impl Connection {
         stats.rtt = path.data.rtt.get();
         stats.cwnd = path.data.congestion.window();
         stats.current_mtu = path.data.mtud.current_mtu();
+        stats.suspect = path.data.suspect_since_pn.is_some();
         Some(stats)
     }
 
@@ -3033,7 +3034,22 @@ impl Connection {
         // exponential backoff from the PTO timer and would result in too many tail-loss
         // probes being sent.
         if self.peer_completed_handshake_address_validation() {
-            self.path_data_mut(path).pto_count = 0;
+            let path_data = self.path_data_mut(path);
+            path_data.pto_count = 0;
+            // A coalesced ACK can confirm packets sent well before the path went
+            // suspect (see `PathData::suspect_since_pn`); only treat this as
+            // recovery if it also covers something sent since then.
+            if let Some(since) = path_data.suspect_since_pn
+                && newly_acked
+                    .max()
+                    .expect("newly_acked checked non-empty above")
+                    >= since
+            {
+                path_data.suspect_since_pn = None;
+                debug!(%path, "path recovered: ACK received on suspect path");
+                self.events
+                    .push_back(Event::Path(PathEvent::Recovered { id: path }));
+            }
         }
 
         // Explicit congestion notification
@@ -3238,8 +3254,36 @@ impl Connection {
         };
         let pns = self.spaces[space].for_path(path_id);
         pns.loss_probes = pns.loss_probes.saturating_add(count);
-        let path_data = self.path_data_mut(path_id);
-        path_data.pto_count = path_data.pto_count.saturating_add(1);
+        // Handshake-time PTOs include anti-deadlock probes that do not expect
+        // ACKs, and a path that never validated fails via its validation
+        // timeout instead. Only a validated path on an established connection
+        // can become suspect.
+        let established = self.state.is_established();
+        let (validated, pto_count, currently_suspect) = {
+            let path_data = self.path_data_mut(path_id);
+            path_data.pto_count = path_data.pto_count.saturating_add(1);
+            (
+                path_data.validated,
+                path_data.pto_count,
+                path_data.suspect_since_pn.is_some(),
+            )
+        };
+        let became_suspect = established
+            && validated
+            && pto_count >= paths::SUSPECT_PTO_THRESHOLD
+            && !currently_suspect;
+        if became_suspect {
+            // Only an ACK for a packet sent from here on counts as recovery; see
+            // `PathData::suspect_since_pn`.
+            let next_pn = self.spaces[SpaceId::Data]
+                .for_path(path_id)
+                .next_packet_number;
+            let path_data = self.path_data_mut(path_id);
+            path_data.suspect_since_pn = Some(next_pn);
+            debug!(%path_id, "path suspect: consecutive PTOs without an ACK");
+            self.events
+                .push_back(Event::Path(PathEvent::Suspect { id: path_id }));
+        }
         self.set_loss_detection_timer(now, path_id);
     }
 

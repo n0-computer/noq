@@ -869,8 +869,17 @@ fn test_zero_rtt_incoming_limit<F: FnOnce(&mut ServerConfig)>(configure_server: 
         pair.server_conn_mut(server_ch).poll(),
         Some(Event::Connected)
     );
+    // The deferred accept and the buffering limit leave data unacknowledged
+    // for long stretches, so the path oscillates between suspect and
+    // recovered; those events are not what is under test here.
+    let event = loop {
+        match pair.server_conn_mut(server_ch).poll() {
+            Some(Event::Path(PathEvent::Suspect { .. } | PathEvent::Recovered { .. })) => continue,
+            event => break event,
+        }
+    };
     assert_matches!(
-        pair.server_conn_mut(server_ch).poll(),
+        event,
         Some(Event::Stream(StreamEvent::Opened { dir: Dir::Uni }))
     );
 
@@ -1526,6 +1535,12 @@ fn idle_timeout() {
     }
 
     assert!(pair.time - start < Duration::from_millis(2 * IDLE_TIMEOUT));
+    // The ping went unacknowledged, so the path goes suspect before the
+    // connection times out.
+    assert_matches!(
+        pair.client_conn_mut(client_ch).poll(),
+        Some(Event::Path(PathEvent::Suspect { .. }))
+    );
     assert_matches!(
         pair.client_conn_mut(client_ch).poll(),
         Some(Event::ConnectionLost {

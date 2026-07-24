@@ -248,6 +248,13 @@ pub struct PathStats {
     pub black_holes_detected: u64,
     /// Largest UDP payload size the path currently supports.
     pub current_mtu: u16,
+    /// Whether the path is currently suspected dead.
+    ///
+    /// Set after consecutive PTOs without an acknowledgement, cleared when the path
+    /// acknowledges data again. See [`PathEvent::Suspect`].
+    ///
+    /// [`PathEvent::Suspect`]: crate::PathEvent::Suspect
+    pub suspect: bool,
 }
 
 /// Connection statistics.
@@ -283,6 +290,7 @@ impl std::ops::Add<PathStats> for ConnectionStats {
         // rtt, cwnd and current_mtu fields.
         let PathStats {
             rtt: _,
+            suspect: _,
             udp_tx,
             udp_rx,
             frame_tx,
@@ -316,6 +324,7 @@ impl std::ops::AddAssign<PathStats> for ConnectionStats {
         // rtt, cwnd and current_mtu fields.
         let PathStats {
             rtt: _,
+            suspect: _,
             udp_tx: path_udp_tx,
             udp_rx: path_udp_rx,
             frame_tx: path_frame_tx,
