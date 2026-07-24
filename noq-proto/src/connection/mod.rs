@@ -727,9 +727,9 @@ impl Connection {
                 // This timer should not be set, for completeness it's not kept as it's set when
                 // the PATH_ABANDON frame is sent.
                 PathTimer::PathDrained => false,
-                // Sent packets still need to be identified as lost to trigger timely
-                // retransmission.
-                PathTimer::LossDetection => true,
+                // In-flight packets are declared lost below, so loss detection is no
+                // longer needed on this path.
+                PathTimer::LossDetection => false,
                 // This path should not be used for sending after the PATH_ABANDON frame is sent.
                 // However, any outstanding data that should be sent before PATH_ABANDON, should
                 // still respect pacing.
@@ -742,11 +742,46 @@ impl Connection {
             }
         }
 
-        // Set the loss detection timer again, as now it should only be set
-        // for time-based loss detection, not tail-loss probes, but currently it
-        // could still be set to a tail-loss probe.
-        // This will reset it to the next time-based loss time, if applicable.
-        self.set_loss_detection_timer(now, path_id);
+        // Immediately declare all in-flight packets on this path as lost so their
+        // retransmittable frames are queued for retransmission on another path.
+        // Without this, the data would sit in the abandoned path's sent_packets
+        // until something else frees it: normally the PathDrained timer, which
+        // only arms once we receive the peer's own PATH_ABANDON frame for this
+        // path (see the incoming PATH_ABANDON handler), 3*PTO after that - and
+        // that in turn needs some live path to carry that frame at all. Absent
+        // one, the path's own idle timeout eventually forces the issue instead,
+        // but that can take far longer than a few PTOs.
+        let in_flight_mtu_probe = self.path_data(path_id).mtud.in_flight_mtu_probe();
+        let mut size_of_lost_packets = 0u64;
+        let lost_pns: Vec<_> = self.spaces[SpaceId::Data]
+            .for_path(path_id)
+            .sent_packets
+            .iter()
+            .filter(|(pn, _info)| Some(*pn) != in_flight_mtu_probe)
+            .map(|(pn, info)| {
+                size_of_lost_packets += info.size as u64;
+                pn
+            })
+            .collect();
+
+        if !lost_pns.is_empty() {
+            trace!(
+                %path_id,
+                count = lost_pns.len(),
+                lost_bytes = size_of_lost_packets,
+                "declaring in-flight packets lost on abandoned path"
+            );
+            self.handle_lost_packets(
+                SpaceId::Data,
+                path_id,
+                now,
+                lost_pns,
+                in_flight_mtu_probe,
+                Duration::ZERO,
+                false,
+                size_of_lost_packets,
+            );
+        }
 
         // Emit event to the application.
         self.events.push_back(Event::Path(PathEvent::Abandoned {
