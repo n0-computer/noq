@@ -3258,18 +3258,29 @@ impl Connection {
         // ACKs, and a path that never validated fails via its validation
         // timeout instead. Only a validated path on an established connection
         // can become suspect.
+        //
+        // Also gated on the path currently being Available: a Backup path
+        // that stops carrying new data (e.g. once a better path takes over)
+        // can still have older in-flight packets whose PTOs keep firing with
+        // nothing sent since to compare against, and keep-alive only covers
+        // gaps going forward from when it's armed, not data already inflight
+        // at the moment the path became idle. None of that reflects the
+        // path's own health, so it must not affect a path we are not
+        // currently relying on.
         let established = self.state.is_established();
-        let (validated, pto_count, currently_suspect) = {
+        let (validated, pto_count, currently_suspect, is_available) = {
             let path_data = self.path_data_mut(path_id);
             path_data.pto_count = path_data.pto_count.saturating_add(1);
             (
                 path_data.validated,
                 path_data.pto_count,
                 path_data.suspect_since_pn.is_some(),
+                path_data.local_status() == PathStatus::Available,
             )
         };
         let became_suspect = established
             && validated
+            && is_available
             && pto_count >= paths::SUSPECT_PTO_THRESHOLD
             && !currently_suspect;
         if became_suspect {
