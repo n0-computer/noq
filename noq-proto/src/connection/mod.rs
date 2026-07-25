@@ -727,9 +727,9 @@ impl Connection {
                 // This timer should not be set, for completeness it's not kept as it's set when
                 // the PATH_ABANDON frame is sent.
                 PathTimer::PathDrained => false,
-                // In-flight packets are declared lost below, so loss detection is no
-                // longer needed on this path.
-                PathTimer::LossDetection => false,
+                // Repurposed below: on an abandoned path this timer declares
+                // the remaining in-flight packets lost.
+                PathTimer::LossDetection => true,
                 // This path should not be used for sending after the PATH_ABANDON frame is sent.
                 // However, any outstanding data that should be sent before PATH_ABANDON, should
                 // still respect pacing.
@@ -742,46 +742,28 @@ impl Connection {
             }
         }
 
-        // Immediately declare all in-flight packets on this path as lost so their
-        // retransmittable frames are queued for retransmission on another path.
-        // Without this, the data would sit in the abandoned path's sent_packets
-        // until something else frees it: normally the PathDrained timer, which
-        // only arms once we receive the peer's own PATH_ABANDON frame for this
-        // path (see the incoming PATH_ABANDON handler), 3*PTO after that - and
-        // that in turn needs some live path to carry that frame at all. Absent
-        // one, the path's own idle timeout eventually forces the issue instead,
-        // but that can take far longer than a few PTOs.
-        let in_flight_mtu_probe = self.path_data(path_id).mtud.in_flight_mtu_probe();
-        let mut size_of_lost_packets = 0u64;
-        let lost_pns: Vec<_> = self.spaces[SpaceId::Data]
-            .for_path(path_id)
-            .sent_packets
-            .iter()
-            .filter(|(pn, _info)| Some(*pn) != in_flight_mtu_probe)
-            .map(|(pn, info)| {
-                size_of_lost_packets += info.size as u64;
-                pn
-            })
-            .collect();
-
-        if !lost_pns.is_empty() {
-            trace!(
-                %path_id,
-                count = lost_pns.len(),
-                lost_bytes = size_of_lost_packets,
-                "declaring in-flight packets lost on abandoned path"
-            );
-            self.handle_lost_packets(
-                SpaceId::Data,
-                path_id,
-                now,
-                lost_pns,
-                in_flight_mtu_probe,
-                Duration::ZERO,
-                false,
-                size_of_lost_packets,
-            );
-        }
+        // Schedule the path's remaining in-flight packets to be declared lost
+        // in 2*PTO. Without this, the data would sit in the abandoned path's
+        // sent_packets until something else frees it: normally the PathDrained
+        // timer, which only arms once we receive the peer's own PATH_ABANDON
+        // frame for this path (see the incoming PATH_ABANDON handler), 3*PTO
+        // after that - and that in turn needs some live path to carry that
+        // frame at all. Absent one, the path's own idle timeout eventually
+        // forces the issue instead, but that can take far longer than a few
+        // PTOs.
+        //
+        // The delay exists because the in-flight packets may well have been
+        // delivered: their ACKs can still arrive, coalesced onto other paths
+        // (PathAck names the acked path explicitly, independent of the path
+        // carrying the frame). Declaring everything lost immediately would
+        // retransmit data the peer already has. 2*PTO is comfortably enough
+        // for any such ACK to make it back; only what is still unacknowledged
+        // then gets requeued onto the remaining paths.
+        self.timers.set(
+            Timer::PerPath(path_id, PathTimer::LossDetection),
+            now + 2 * self.pto(SpaceKind::Data, path_id),
+            self.qlog.with_time(now),
+        );
 
         // Emit event to the application.
         self.events.push_back(Event::Path(PathEvent::Abandoned {
@@ -3231,9 +3213,11 @@ impl Connection {
 
     /// Handle a [`PathTimer::LossDetection`] timeout.
     ///
-    /// This timer expires for two reasons:
+    /// This timer expires for three reasons:
     /// - An ACK-eliciting packet we sent should be considered lost.
     /// - The PTO may have expired and a tail-loss probe needs to be scheduled.
+    /// - The path was abandoned 2*PTO ago and its remaining in-flight packets
+    ///   should now be declared lost (see [`Connection::abandon_path`]).
     ///
     /// The former needs us to schedule re-transmission of the lost data.
     ///
@@ -3242,6 +3226,10 @@ impl Connection {
     /// packet, to try and elicit new acknowledgements. These new acknowledgements will
     /// indicate whether the previously sent packets were lost or not.
     fn on_loss_detection_timeout(&mut self, now: Instant, path_id: PathId) {
+        if self.abandoned_paths.contains(&path_id) {
+            self.declare_abandoned_in_flight_lost(now, path_id);
+            return;
+        }
         if let Some((_, pn_space)) = self.loss_time_and_space(path_id) {
             // Time threshold loss Detection
             self.detect_lost_packets(now, pn_space, path_id, false);
@@ -3276,6 +3264,52 @@ impl Connection {
         let path_data = self.path_data_mut(path_id);
         path_data.pto_count = path_data.pto_count.saturating_add(1);
         self.set_loss_detection_timer(now, path_id);
+    }
+
+    /// Declares an abandoned path's remaining in-flight packets lost.
+    ///
+    /// Runs when the [`PathTimer::LossDetection`] timer armed by
+    /// [`Connection::abandon_path`] fires, 2*PTO after the abandon. Whatever
+    /// the peer had acknowledged in the meantime (ACKs for this path keep
+    /// arriving over other paths) is already gone from `sent_packets`; the
+    /// rest will never be acknowledged and is requeued for retransmission on
+    /// the remaining paths.
+    fn declare_abandoned_in_flight_lost(&mut self, now: Instant, path_id: PathId) {
+        let in_flight_mtu_probe = self.path_data(path_id).mtud.in_flight_mtu_probe();
+        let mut size_of_lost_packets = 0u64;
+        let lost_pns: Vec<_> = self.spaces[SpaceId::Data]
+            .for_path(path_id)
+            .sent_packets
+            .iter()
+            .filter(|(pn, _info)| Some(*pn) != in_flight_mtu_probe)
+            .map(|(pn, info)| {
+                size_of_lost_packets += info.size as u64;
+                pn
+            })
+            .collect();
+
+        if !lost_pns.is_empty() {
+            trace!(
+                %path_id,
+                count = lost_pns.len(),
+                lost_bytes = size_of_lost_packets,
+                "declaring in-flight packets lost on abandoned path"
+            );
+            self.handle_lost_packets(
+                SpaceId::Data,
+                path_id,
+                now,
+                lost_pns,
+                in_flight_mtu_probe,
+                Duration::ZERO,
+                false,
+                size_of_lost_packets,
+            );
+        }
+        self.timers.stop(
+            Timer::PerPath(path_id, PathTimer::LossDetection),
+            self.qlog.with_time(now),
+        );
     }
 
     /// Detect any lost packets
@@ -3709,6 +3743,16 @@ impl Connection {
             // No loss detection takes place on closed connections, and `close_common` already
             // stopped time timer. Ensure we don't restart it inadvertently, e.g. in response to a
             // reordered packet being handled by state-insensitive code.
+            return;
+        }
+
+        if self.abandoned_paths.contains(&path_id) {
+            // On abandoned paths this timer holds the declare-in-flight-lost
+            // deadline armed by `abandon_path` (2*PTO after the abandon).
+            // Leave it be: ACKs arriving for the path in the meantime would
+            // otherwise stop the timer here (no PTO gets armed for abandoned
+            // paths, and no loss time is set without newer sent packets),
+            // stranding whatever remains unacknowledged.
             return;
         }
 
