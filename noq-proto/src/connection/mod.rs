@@ -3980,7 +3980,7 @@ impl Connection {
                         initial_max_path_id: None,
                         ..params
                     };
-                    self.set_peer_params(now, params);
+                    self.set_peer_params(params);
                     self.qlog.emit_peer_transport_params_restored(self, now);
                 }
                 Err(e) => {
@@ -4714,6 +4714,7 @@ impl Connection {
                 // Multipath can only be enabled after the state has reached Established.
                 // So this can not happen any earlier.
                 self.issue_first_path_cids(now);
+                self.sync_path_max_idle_timer(now, self.highest_space, path_id);
                 Ok(())
             }
             Header::Initial(InitialHeader {
@@ -6617,13 +6618,13 @@ impl Connection {
             ));
         }
 
-        self.set_peer_params(now, params);
+        self.set_peer_params(params);
         self.qlog.emit_peer_transport_params_received(self, now);
 
         Ok(())
     }
 
-    fn set_peer_params(&mut self, now: Instant, params: TransportParameters) {
+    fn set_peer_params(&mut self, params: TransportParameters) {
         self.streams.set_params(&params);
         self.idle_timeout =
             negotiate_max_idle_timeout(self.config.max_idle_timeout, Some(params.max_idle_timeout));
@@ -6693,7 +6694,6 @@ impl Connection {
         path.pending.observed_address = address_discovery_negotiated;
         path.mtud
             .on_peer_max_udp_payload_size_received(peer_max_udp_payload_size);
-        self.sync_path_max_idle_timer(now, self.highest_space, PathId::ZERO);
     }
 
     /// Decrypts a packet, returning the packet number on success
