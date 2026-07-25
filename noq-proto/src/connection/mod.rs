@@ -848,10 +848,8 @@ impl Connection {
 
     /// Sets the max_idle_timeout for a specific path.
     ///
-    /// The path idle timer is immediately re-armed. If there was a timer previously set, re-arming
-    /// will account for elapsed idle time.
-    ///
-    /// Setting `None` disables the timeout and stops the timer.
+    /// If `Some`, the path idle timer is immediately re-armed. Setting `None` disables the timeout
+    /// and stops the timer.
     ///
     /// See [`TransportConfig::default_path_max_idle_timeout`] for details.
     ///
@@ -866,29 +864,30 @@ impl Connection {
             .paths
             .get_mut(&path_id)
             .ok_or(ClosedPath { _private: () })?;
-        let prev = mem::replace(&mut path.data.idle_timeout, timeout);
+        let prev_timeout = mem::replace(&mut path.data.idle_timeout, timeout);
 
-        // Adjust the PathIdle timer, accounting for already-elapsed idle time.
-        if !self.state.is_closed() {
-            if let Some(new_timeout) = timeout {
-                let timer = Timer::PerPath(path_id, PathTimer::PathIdle);
-                let deadline = match (prev, self.timers.get(timer)) {
-                    (Some(old_timeout), Some(old_deadline)) => {
-                        let last_activity = old_deadline.checked_sub(old_timeout).unwrap_or(now);
-                        last_activity + new_timeout
-                    }
-                    _ => now + new_timeout,
-                };
-                self.timers.set(timer, deadline, self.qlog.with_time(now));
-            } else {
-                self.timers.stop(
-                    Timer::PerPath(path_id, PathTimer::PathIdle),
-                    self.qlog.with_time(now),
-                );
-            }
+        self.sync_path_max_idle_timer(now, self.highest_space, path_id);
+
+        Ok(prev_timeout)
+    }
+
+    /// Rearms or stops the state of the [`PathTimer::PathIdle`] based on the configured value in
+    /// [`PathData::idle_timeout`].
+    ///
+    /// The timer only applies for non-closed, multiplath-negotiated connections.
+    fn sync_path_max_idle_timer(&mut self, now: Instant, space: SpaceKind, path_id: PathId) {
+        let timer = Timer::PerPath(path_id, PathTimer::PathIdle);
+
+        if self.state.is_closed() || !self.is_multipath_negotiated() {
+            return self.timers.stop(timer, self.qlog.with_time(now));
         }
 
-        Ok(prev)
+        if let Some(timeout) = self.path_data(path_id).idle_timeout {
+            let dt = cmp::max(timeout, 3 * self.pto(space, path_id));
+            self.timers.set(timer, now + dt, self.qlog.with_time(now));
+        } else {
+            self.timers.stop(timer, self.qlog.with_time(now));
+        }
     }
 
     /// Sets the keep_alive_interval for a specific path
@@ -3824,7 +3823,7 @@ impl Connection {
         }
     }
 
-    /// Resets the idle timeout timers
+    /// Resets the idle timeout timers.
     ///
     /// Without multipath there is only the connection-wide idle timeout. When multipath is
     /// enabled there is an additional per-path idle timeout.
@@ -3844,22 +3843,8 @@ impl Connection {
             }
         }
 
-        // Now handle the per-path state
-        if let Some(timeout) = self.path_data(path_id).idle_timeout {
-            if self.state.is_closed() {
-                self.timers.stop(
-                    Timer::PerPath(path_id, PathTimer::PathIdle),
-                    self.qlog.with_time(now),
-                );
-            } else {
-                let dt = cmp::max(timeout, 3 * self.pto(space, path_id));
-                self.timers.set(
-                    Timer::PerPath(path_id, PathTimer::PathIdle),
-                    now + dt,
-                    self.qlog.with_time(now),
-                );
-            }
-        }
+        // Now handle the per-path state.
+        self.sync_path_max_idle_timer(now, space, path_id);
     }
 
     /// Resets both the [`ConnTimer::KeepAlive`] and [`PathTimer::PathKeepAlive`] timers
@@ -3995,7 +3980,7 @@ impl Connection {
                         initial_max_path_id: None,
                         ..params
                     };
-                    self.set_peer_params(params);
+                    self.set_peer_params(now, params);
                     self.qlog.emit_peer_transport_params_restored(self, now);
                 }
                 Err(e) => {
@@ -6632,13 +6617,13 @@ impl Connection {
             ));
         }
 
-        self.set_peer_params(params);
+        self.set_peer_params(now, params);
         self.qlog.emit_peer_transport_params_received(self, now);
 
         Ok(())
     }
 
-    fn set_peer_params(&mut self, params: TransportParameters) {
+    fn set_peer_params(&mut self, now: Instant, params: TransportParameters) {
         self.streams.set_params(&params);
         self.idle_timeout =
             negotiate_max_idle_timeout(self.config.max_idle_timeout, Some(params.max_idle_timeout));
@@ -6708,6 +6693,7 @@ impl Connection {
         path.pending.observed_address = address_discovery_negotiated;
         path.mtud
             .on_peer_max_udp_payload_size_received(peer_max_udp_payload_size);
+        self.sync_path_max_idle_timer(now, self.highest_space, PathId::ZERO);
     }
 
     /// Decrypts a packet, returning the packet number on success

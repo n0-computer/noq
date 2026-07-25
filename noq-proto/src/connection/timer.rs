@@ -294,6 +294,7 @@ impl TimerTable {
         qlog.emit_timer_set(timer, time);
     }
 
+    #[allow(unused)]
     pub(super) fn get(&self, timer: Timer) -> Option<Instant> {
         match timer {
             Timer::Conn(timer) => self.generic[timer as usize],
