@@ -36,13 +36,15 @@ pub use transport::{AckFrequencyConfig, IdleTimeout, MtuDiscoveryConfig, Transpo
 /// Global configuration for the endpoint, affecting all connections
 ///
 /// Default values should be suitable for most internet applications.
-#[derive(Clone)]
+#[derive(Clone, derive_more::Debug)]
 pub struct EndpointConfig {
+    #[debug("HmacKey")]
     pub(crate) reset_key: Arc<dyn HmacKey>,
     pub(crate) max_udp_payload_size: VarInt,
     /// CID generator factory
     ///
     /// Create a cid generator for local cid in Endpoint struct
+    #[debug("ConnectionIdGenerator")]
     pub(crate) connection_id_generator_factory:
         Arc<dyn Fn() -> Box<dyn ConnectionIdGenerator> + Send + Sync>,
     pub(crate) supported_versions: Vec<u32>,
@@ -51,6 +53,7 @@ pub struct EndpointConfig {
     pub(crate) min_reset_interval: Duration,
     /// Optional seed to be used internally for random number generation
     pub(crate) rng_seed: Option<[u8; 32]>,
+    pub(crate) reset_stream_at: bool,
 }
 
 impl EndpointConfig {
@@ -66,6 +69,7 @@ impl EndpointConfig {
             grease_quic_bit: true,
             min_reset_interval: Duration::from_millis(20),
             rng_seed: None,
+            reset_stream_at: true,
         }
     }
 
@@ -162,18 +166,13 @@ impl EndpointConfig {
         self.rng_seed = seed;
         self
     }
-}
 
-impl fmt::Debug for EndpointConfig {
-    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt.debug_struct("EndpointConfig")
-            // reset_key not debug
-            .field("max_udp_payload_size", &self.max_udp_payload_size)
-            // cid_generator_factory not debug
-            .field("supported_versions", &self.supported_versions)
-            .field("grease_quic_bit", &self.grease_quic_bit)
-            .field("rng_seed", &self.rng_seed)
-            .finish_non_exhaustive()
+    /// Enables the QUIC Stream Resets with Partial Delivery draft-07 extentsion.
+    ///
+    /// <https://datatracker.ietf.org/doc/html/draft-ietf-quic-reliable-stream-reset>
+    pub fn reliable_stream_reset(&mut self, value: bool) -> &mut Self {
+        self.reset_stream_at = value;
+        self
     }
 }
 

@@ -58,6 +58,7 @@ fn encode_frame<B: BufMut>(frame: &Frame, buf: &mut B) {
         Frame::AddAddress(aa) => aa.encode(buf),
         Frame::ReachOut(ro) => ro.encode(buf),
         Frame::RemoveAddress(ra) => ra.encode(buf),
+        Frame::ResetStreamAt(f) => f.encode(buf),
     }
 }
 

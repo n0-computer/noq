@@ -122,6 +122,9 @@ macro_rules! make_struct {
 
             /// Nat traversal draft
             pub max_remote_nat_traversal_addresses: Option<NonZeroU8>,
+
+            /// QUIC Stream Resets with Partial Delivery
+            pub(crate) reset_stream_at: bool,
         }
 
         // We deliberately don't implement the `Default` trait, since that would be public, and
@@ -148,6 +151,7 @@ macro_rules! make_struct {
                     address_discovery_role: address_discovery::Role::default(),
                     initial_max_path_id: None,
                     max_remote_nat_traversal_addresses: None,
+                    reset_stream_at: false,
                 }
             }
         }
@@ -198,6 +202,7 @@ impl TransportParameters {
             address_discovery_role: config.address_discovery_role,
             initial_max_path_id: config.get_initial_max_path_id(),
             max_remote_nat_traversal_addresses: config.max_remote_nat_traversal_addresses,
+            reset_stream_at: endpoint_config.reset_stream_at,
             ..Self::default()
         }
     }
@@ -216,6 +221,7 @@ impl TransportParameters {
             || cached.grease_quic_bit && !self.grease_quic_bit
             || cached.address_discovery_role != self.address_discovery_role
             || cached.max_remote_nat_traversal_addresses != self.max_remote_nat_traversal_addresses
+            || cached.reset_stream_at != self.reset_stream_at
         {
             return Err(TransportError::PROTOCOL_VIOLATION(
                 "0-RTT accepted with incompatible transport parameters",
@@ -423,6 +429,12 @@ impl TransportParameters {
                         w.write(val.get());
                     }
                 }
+                TransportParameterId::ResetStreamAt => {
+                    if self.reset_stream_at {
+                        w.write_var(id as u64);
+                        w.write_var(0);
+                    }
+                }
                 id => {
                     macro_rules! write_params {
                         {$($(#[$doc:meta])* $name:ident ($id:ident) = $default:expr,)*} => {
@@ -558,6 +570,12 @@ impl TransportParameters {
                     let value = NonZeroU8::new(value).ok_or(Error::IllegalValue)?;
 
                     params.max_remote_nat_traversal_addresses = Some(value);
+                }
+                TransportParameterId::ResetStreamAt => {
+                    if len != 0 || params.reset_stream_at {
+                        return Err(Error::Malformed);
+                    }
+                    params.reset_stream_at = true;
                 }
                 _ => {
                     macro_rules! parse {
@@ -731,11 +749,14 @@ pub(crate) enum TransportParameterId {
     // inspired by https://www.ietf.org/archive/id/draft-seemann-quic-nat-traversal-02.html,
     // simplified to n0's own protocol.
     N0NatTraversal = 0x3d7f91120401,
+
+    // https://datatracker.ietf.org/doc/html/draft-ietf-quic-reliable-stream-reset
+    ResetStreamAt = 0x17f7586d2cb571,
 }
 
 impl TransportParameterId {
     /// Array with all supported transport parameter IDs
-    const SUPPORTED: [Self; 24] = [
+    const SUPPORTED: [Self; 25] = [
         Self::MaxIdleTimeout,
         Self::MaxUdpPayloadSize,
         Self::InitialMaxData,
@@ -760,6 +781,7 @@ impl TransportParameterId {
         Self::ObservedAddr,
         Self::InitialMaxPathId,
         Self::N0NatTraversal,
+        Self::ResetStreamAt,
     ];
 }
 
@@ -802,6 +824,7 @@ impl TryFrom<u64> for TransportParameterId {
             id if Self::ObservedAddr == id => Self::ObservedAddr,
             id if Self::InitialMaxPathId == id => Self::InitialMaxPathId,
             id if Self::N0NatTraversal == id => Self::N0NatTraversal,
+            id if Self::ResetStreamAt == id => Self::ResetStreamAt,
             _ => return Err(()),
         };
         Ok(param)
@@ -843,6 +866,7 @@ mod test {
             address_discovery_role: address_discovery::Role::send_only(),
             initial_max_path_id: Some(PathId::MAX),
             max_remote_nat_traversal_addresses: Some(5u8.try_into().unwrap()),
+            reset_stream_at: true,
             ..TransportParameters::default()
         };
         params.write(&mut buf);

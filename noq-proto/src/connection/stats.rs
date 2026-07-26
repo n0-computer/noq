@@ -36,47 +36,95 @@ impl UdpStats {
 }
 
 /// Number of frames transmitted or received of each frame type.
-#[derive(Default, Copy, Clone, PartialEq, Eq, derive_more::Add, derive_more::AddAssign)]
+#[derive(
+    Default,
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    derive_more::Debug,
+    derive_more::Add,
+    derive_more::AddAssign,
+)]
 #[non_exhaustive]
 #[allow(missing_docs)]
 pub struct FrameStats {
+    #[debug("ACK")]
     pub acks: u64,
+    #[debug("PATH_ACK")]
     pub path_acks: u64,
+    #[debug("ACK_FREQUENCY")]
     pub ack_frequency: u64,
+    #[debug("CRYPTO")]
     pub crypto: u64,
+    #[debug("CONNECTION_CLOSE")]
     pub connection_close: u64,
+    #[debug("DATA_BLOCKED")]
     pub data_blocked: u64,
+    #[debug("DATAGRAM")]
     pub datagram: u64,
+    #[debug("HANDSHAKE_DONE")]
     pub handshake_done: u8,
+    #[debug("IMMEDIATE_ACK")]
     pub immediate_ack: u64,
+    #[debug("MAX_DATA")]
     pub max_data: u64,
+    #[debug("MAX_STREAM_DATA")]
     pub max_stream_data: u64,
+    #[debug("MAX_STREAMS_BIDI")]
     pub max_streams_bidi: u64,
+    #[debug("MAX_STREAMS_UNI")]
     pub max_streams_uni: u64,
+    #[debug("NEW_CONNECTION_ID")]
     pub new_connection_id: u64,
+    #[debug("PATH_NEW_CONNECTION_ID")]
     pub path_new_connection_id: u64,
+    #[debug("NEW_TOKEN")]
     pub new_token: u64,
+    #[debug("PATH_CHALLENGE")]
     pub path_challenge: u64,
+    #[debug("PATH_RESPONSE")]
     pub path_response: u64,
+    #[debug("PING")]
     pub ping: u64,
+    #[debug("RESET_STREAM")]
     pub reset_stream: u64,
+    #[debug("RETIRE_CONNECTION_ID")]
     pub retire_connection_id: u64,
+    #[debug("PATH_RETIRE_CONNECTION_ID")]
     pub path_retire_connection_id: u64,
+    #[debug("STREAM_DATA_BLOCKED")]
     pub stream_data_blocked: u64,
+    #[debug("STREAMS_BLOCKED_BIDI")]
     pub streams_blocked_bidi: u64,
+    #[debug("STREAMS_BLOCKED_UNI")]
     pub streams_blocked_uni: u64,
+    #[debug("STOP_SENDING")]
     pub stop_sending: u64,
+    #[debug("STREAM")]
     pub stream: u64,
+    #[debug("OBSERVED_ADDR")]
     pub observed_addr: u64,
+    #[debug("PATH_ABANDON")]
     pub path_abandon: u64,
+    #[debug("PATH_STATUS_AVAILABLE")]
     pub path_status_available: u64,
+    #[debug("PATH_STATUS_BACKUP")]
     pub path_status_backup: u64,
+    #[debug("MAX_PATH_ID")]
     pub max_path_id: u64,
+    #[debug("PATHS_BLOCKED")]
     pub paths_blocked: u64,
+    #[debug("PATH_CIDS_BLOCKED")]
     pub path_cids_blocked: u64,
+    #[debug("ADD_ADDRESS")]
     pub add_address: u64,
+    #[debug("REACH_OUT")]
     pub reach_out: u64,
+    #[debug("REMOVE_ADDRESS")]
     pub remove_address: u64,
+    #[debug("RESET_STREAM_AT")]
+    pub reset_stream_at: u64,
 }
 
 impl FrameStats {
@@ -125,90 +173,8 @@ impl FrameStats {
             AddIpv4Address | AddIpv6Address => inc!(add_address),
             ReachOutAtIpv4 | ReachOutAtIpv6 => inc!(reach_out),
             RemoveAddress => inc!(remove_address),
+            ResetStreamAt => inc!(reset_stream_at),
         };
-    }
-}
-
-impl std::fmt::Debug for FrameStats {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let Self {
-            acks,
-            path_acks,
-            ack_frequency,
-            crypto,
-            connection_close,
-            data_blocked,
-            datagram,
-            handshake_done,
-            immediate_ack,
-            max_data,
-            max_stream_data,
-            max_streams_bidi,
-            max_streams_uni,
-            new_connection_id,
-            path_new_connection_id,
-            new_token,
-            path_challenge,
-            path_response,
-            ping,
-            reset_stream,
-            retire_connection_id,
-            path_retire_connection_id,
-            stream_data_blocked,
-            streams_blocked_bidi,
-            streams_blocked_uni,
-            stop_sending,
-            stream,
-            observed_addr,
-            path_abandon,
-            path_status_available,
-            path_status_backup,
-            max_path_id,
-            paths_blocked,
-            path_cids_blocked,
-            add_address,
-            reach_out,
-            remove_address,
-        } = self;
-        f.debug_struct("FrameStats")
-            .field("ACK", acks)
-            .field("ACK_FREQUENCY", ack_frequency)
-            .field("CONNECTION_CLOSE", connection_close)
-            .field("CRYPTO", crypto)
-            .field("DATA_BLOCKED", data_blocked)
-            .field("DATAGRAM", datagram)
-            .field("HANDSHAKE_DONE", handshake_done)
-            .field("IMMEDIATE_ACK", immediate_ack)
-            .field("MAX_DATA", max_data)
-            .field("MAX_PATH_ID", max_path_id)
-            .field("MAX_STREAM_DATA", max_stream_data)
-            .field("MAX_STREAMS_BIDI", max_streams_bidi)
-            .field("MAX_STREAMS_UNI", max_streams_uni)
-            .field("NEW_CONNECTION_ID", new_connection_id)
-            .field("NEW_TOKEN", new_token)
-            .field("PATHS_BLOCKED", paths_blocked)
-            .field("PATH_ABANDON", path_abandon)
-            .field("PATH_ACK", path_acks)
-            .field("PATH_STATUS_AVAILABLE", path_status_available)
-            .field("PATH_STATUS_BACKUP", path_status_backup)
-            .field("PATH_CHALLENGE", path_challenge)
-            .field("PATH_CIDS_BLOCKED", path_cids_blocked)
-            .field("PATH_NEW_CONNECTION_ID", path_new_connection_id)
-            .field("PATH_RESPONSE", path_response)
-            .field("PATH_RETIRE_CONNECTION_ID", path_retire_connection_id)
-            .field("PING", ping)
-            .field("RESET_STREAM", reset_stream)
-            .field("RETIRE_CONNECTION_ID", retire_connection_id)
-            .field("STREAM_DATA_BLOCKED", stream_data_blocked)
-            .field("STREAMS_BLOCKED_BIDI", streams_blocked_bidi)
-            .field("STREAMS_BLOCKED_UNI", streams_blocked_uni)
-            .field("STOP_SENDING", stop_sending)
-            .field("STREAM", stream)
-            .field("OBSERVED_ADDRESS", observed_addr)
-            .field("ADD_ADDRESS", add_address)
-            .field("REACH_OUT", reach_out)
-            .field("REMOVE_ADDRESS", remove_address)
-            .finish()
     }
 }
 
