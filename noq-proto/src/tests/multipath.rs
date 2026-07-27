@@ -12,7 +12,7 @@ use tracing::info;
 use crate::{
     ClientConfig, ConnectionId, ConnectionIdGenerator, Endpoint, EndpointConfig, FourTuple,
     LOCAL_CID_COUNT, NetworkChangeHint, PathId, PathStatus, RandomConnectionIdGenerator,
-    ServerConfig, Side::*, TransportConfig, cid_queue::CidQueue,
+    ServerConfig, Side::*, StreamId, TransportConfig, cid_queue::CidQueue,
 };
 use crate::{
     ClosePathError, Dir, Event, PathAbandonReason, PathEvent, StreamEvent, TransportErrorCode,

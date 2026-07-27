@@ -727,9 +727,15 @@ impl Connection {
                 // This timer should not be set, for completeness it's not kept as it's set when
                 // the PATH_ABANDON frame is sent.
                 PathTimer::PathDrained => false,
-                // Repurposed below: on an abandoned path this timer declares
-                // the remaining in-flight packets lost.
-                PathTimer::LossDetection => true,
+                // Stopped so that `set_loss_detection_timer` below arms the
+                // declare-in-flight-lost deadline in its place: it only arms
+                // when the timer is unarmed. A leftover PTO or loss time
+                // would fire earlier, and on an abandoned path firing means
+                // declaring everything in flight lost, recreating the
+                // immediate retransmission the 2*PTO window avoids. The wait
+                // costs nothing: per-packet loss detection does not need this
+                // timer, it reruns on every ACK arriving during the window.
+                PathTimer::LossDetection => false,
                 // This path should not be used for sending after the PATH_ABANDON frame is sent.
                 // However, any outstanding data that should be sent before PATH_ABANDON, should
                 // still respect pacing.
@@ -742,28 +748,10 @@ impl Connection {
             }
         }
 
-        // Schedule the path's remaining in-flight packets to be declared lost
-        // in 2*PTO. Without this, the data would sit in the abandoned path's
-        // sent_packets until something else frees it: normally the PathDrained
-        // timer, which only arms once we receive the peer's own PATH_ABANDON
-        // frame for this path (see the incoming PATH_ABANDON handler), 3*PTO
-        // after that - and that in turn needs some live path to carry that
-        // frame at all. Absent one, the path's own idle timeout eventually
-        // forces the issue instead, but that can take far longer than a few
-        // PTOs.
-        //
-        // The delay exists because the in-flight packets may well have been
-        // delivered: their ACKs can still arrive, coalesced onto other paths
-        // (PathAck names the acked path explicitly, independent of the path
-        // carrying the frame). Declaring everything lost immediately would
-        // retransmit data the peer already has. 2*PTO is comfortably enough
-        // for any such ACK to make it back; only what is still unacknowledged
-        // then gets requeued onto the remaining paths.
-        self.timers.set(
-            Timer::PerPath(path_id, PathTimer::LossDetection),
-            now + 2 * self.pto(SpaceKind::Data, path_id),
-            self.qlog.with_time(now),
-        );
+        // Re-arm the loss detection timer: on the now-abandoned path it
+        // becomes the declare-in-flight-lost deadline (see
+        // `set_loss_detection_timer`).
+        self.set_loss_detection_timer(now, path_id);
 
         // Emit event to the application.
         self.events.push_back(Event::Path(PathEvent::Abandoned {
@@ -3213,15 +3201,15 @@ impl Connection {
 
     /// Handle a [`PathTimer::LossDetection`] timeout.
     ///
-    /// This timer expires for three reasons:
+    /// This timer expires for one of three reasons:
     /// - An ACK-eliciting packet we sent should be considered lost.
     /// - The PTO may have expired and a tail-loss probe needs to be scheduled.
     /// - The path was abandoned 2*PTO ago and its remaining in-flight packets
     ///   should now be declared lost (see [`Connection::abandon_path`]).
     ///
-    /// The former needs us to schedule re-transmission of the lost data.
+    /// The first needs us to schedule re-transmission of the lost data.
     ///
-    /// The latter means we have not received an ACK for an ack-eliciting packet we sent
+    /// The second means we have not received an ACK for an ack-eliciting packet we sent
     /// within the PTO time-window. We need to schedule a tail-loss probe, an ack-eliciting
     /// packet, to try and elicit new acknowledgements. These new acknowledgements will
     /// indicate whether the previously sent packets were lost or not.
@@ -3268,12 +3256,12 @@ impl Connection {
 
     /// Declares an abandoned path's remaining in-flight packets lost.
     ///
-    /// Runs when the [`PathTimer::LossDetection`] timer armed by
-    /// [`Connection::abandon_path`] fires, 2*PTO after the abandon. Whatever
-    /// the peer had acknowledged in the meantime (ACKs for this path keep
-    /// arriving over other paths) is already gone from `sent_packets`; the
-    /// rest will never be acknowledged and is requeued for retransmission on
-    /// the remaining paths.
+    /// Runs when the declare-in-flight-lost deadline fires, 2*PTO after the
+    /// abandon (see [`Connection::set_loss_detection_timer`]). Whatever the
+    /// peer acknowledged in the meantime (ACKs for this path keep arriving
+    /// over other paths) is already gone from `sent_packets`; the rest will
+    /// never be acknowledged and is requeued for retransmission on the
+    /// remaining paths.
     fn declare_abandoned_in_flight_lost(&mut self, now: Instant, path_id: PathId) {
         let in_flight_mtu_probe = self.path_data(path_id).mtud.in_flight_mtu_probe();
         let mut size_of_lost_packets = 0u64;
@@ -3747,12 +3735,39 @@ impl Connection {
         }
 
         if self.abandoned_paths.contains(&path_id) {
-            // On abandoned paths this timer holds the declare-in-flight-lost
-            // deadline armed by `abandon_path` (2*PTO after the abandon).
-            // Leave it be: ACKs arriving for the path in the meantime would
-            // otherwise stop the timer here (no PTO gets armed for abandoned
-            // paths, and no loss time is set without newer sent packets),
-            // stranding whatever remains unacknowledged.
+            // On an abandoned path the timer is repurposed: it declares the
+            // path's remaining in-flight packets lost once 2*PTO have passed
+            // since the abandon (see `declare_abandoned_in_flight_lost`).
+            // Without it, that data would sit in `sent_packets` until
+            // something else frees it: normally the PathDrained timer, which
+            // only arms once the peer's own PATH_ABANDON for this path
+            // arrives, 3*PTO after that, and which needs some live path to
+            // carry the frame at all. Failing that, the path's idle timeout
+            // eventually frees the data, far later than a few PTOs.
+            //
+            // The delay exists because the in-flight packets may well have
+            // been delivered: their ACKs can still arrive, coalesced onto
+            // other paths (PathAck names the acked path explicitly,
+            // independent of the path carrying the frame). Declaring
+            // everything lost immediately would retransmit data the peer
+            // already has. 2*PTO is comfortably enough for any such ACK to
+            // make it back; only what is still unacknowledged then gets
+            // requeued onto the remaining paths.
+            //
+            // The deadline is armed by the `abandon_path` call ending up here
+            // and then left alone: a later call, such as one triggered by an
+            // ACK arriving during the window, must neither move nor stop it.
+            if self
+                .timers
+                .get(Timer::PerPath(path_id, PathTimer::LossDetection))
+                .is_none()
+            {
+                self.timers.set(
+                    Timer::PerPath(path_id, PathTimer::LossDetection),
+                    now + 2 * self.pto(SpaceKind::Data, path_id),
+                    self.qlog.with_time(now),
+                );
+            }
             return;
         }
 
