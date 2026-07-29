@@ -705,9 +705,6 @@ impl Connection {
         // Note: remote CIDs are NOT removed here. They are removed when the PATH_ABANDON
         // frame is actually written to a packet (in populate_packet). This allows sending
         // PATH_ABANDON on the abandoned path itself when no other path exists (#509).
-        debug_assert!(!self.state.is_drained()); // requirement for endpoint_events, checked in `close_path_inner`
-        self.endpoint_events
-            .push_back(EndpointEventInner::RetireResetToken(path_id));
 
         self.abandoned_paths.insert(path_id);
 
@@ -2564,20 +2561,6 @@ impl Connection {
                                 .on_max_ack_delay_timeout()
                         }
                         PathTimer::PathDrained => {
-                            // The path was abandoned and 3*PTO has expired since.  Clean up all
-                            // remaining state and install stateless reset token.
-                            self.timers.stop_per_path(path_id, self.qlog.with_time(now));
-                            if let Some(local_cid_state) = self.local_cid_state.remove(&path_id) {
-                                debug_assert!(!self.state.is_drained()); // requirement for endpoint_events. All timers should be cleared in drained connections.
-                                let (min_seq, max_seq) = local_cid_state.active_seq();
-                                for seq in min_seq..=max_seq {
-                                    self.endpoint_events.push_back(
-                                        EndpointEventInner::RetireConnectionId(
-                                            now, path_id, seq, false,
-                                        ),
-                                    );
-                                }
-                            }
                             self.discard_path(path_id, now);
                         }
                     }
@@ -3363,6 +3346,26 @@ impl Connection {
     /// Drops the path state, declaring any remaining in-flight packets as lost
     fn discard_path(&mut self, path_id: PathId, now: Instant) {
         trace!(%path_id, "dropping path state");
+
+        // The path was abandoned and 3*PTO has expired since.  Clean up all
+        // remaining state and install stateless reset token.
+        self.timers.stop_per_path(path_id, self.qlog.with_time(now));
+
+        debug_assert!(!self.state.is_drained()); // requirement for endpoint_events. All timers should be cleared in drained connections.
+
+        if let Some(local_cid_state) = self.local_cid_state.remove(&path_id) {
+            let (min_seq, max_seq) = local_cid_state.active_seq();
+            for seq in min_seq..=max_seq {
+                self.endpoint_events
+                    .push_back(EndpointEventInner::RetireConnectionId(
+                        now, path_id, seq, false,
+                    ));
+            }
+        }
+
+        self.endpoint_events
+            .push_back(EndpointEventInner::RetireResetToken(path_id));
+
         let path = self.path_data(path_id);
         let in_flight_mtu_probe = path.mtud.in_flight_mtu_probe();
 
