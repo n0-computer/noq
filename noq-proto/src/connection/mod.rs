@@ -873,7 +873,7 @@ impl Connection {
         // it's likely that the computed value was in the future, and instead of accounting for
         // elapsed idle time, it further extended the timer. Then, for consistency, we simply choose
         // to compute the timer expiration in the same way as if the path had been immediately used.
-        self.sync_path_max_idle_timer(now, self.highest_space, path_id);
+        self.rearm_path_max_idle_timer(now, self.highest_space, path_id);
 
         Ok(prev_timeout)
     }
@@ -885,7 +885,7 @@ impl Connection {
     /// applying the guidance of RFC9000 §10.1 to multipaths.
     ///
     /// The timer only applies for non-closed, multiplath-negotiated connections.
-    fn sync_path_max_idle_timer(&mut self, now: Instant, space: SpaceKind, path_id: PathId) {
+    fn rearm_path_max_idle_timer(&mut self, now: Instant, space: SpaceKind, path_id: PathId) {
         let timer = Timer::PerPath(path_id, PathTimer::PathIdle);
 
         if self.state.is_closed() || !self.is_multipath_negotiated() {
@@ -3854,7 +3854,7 @@ impl Connection {
         }
 
         // Now handle the per-path state.
-        self.sync_path_max_idle_timer(now, space, path_id);
+        self.rearm_path_max_idle_timer(now, space, path_id);
     }
 
     /// Resets both the [`ConnTimer::KeepAlive`] and [`PathTimer::PathKeepAlive`] timers
@@ -4724,7 +4724,7 @@ impl Connection {
                 // Multipath can only be enabled after the state has reached Established.
                 // So this can not happen any earlier.
                 self.issue_first_path_cids(now);
-                self.sync_path_max_idle_timer(now, self.highest_space, path_id);
+                self.rearm_path_max_idle_timer(now, self.highest_space, path_id);
                 Ok(())
             }
             Header::Initial(InitialHeader {
