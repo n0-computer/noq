@@ -18,7 +18,6 @@ use super::{CMsgHdr, Encoder, MsgHdr};
 #[repr(C)]
 #[allow(dead_code)] // the fields are here for their size, nothing reads them
 pub(crate) union Payload {
-    hdr: WinSock::CMSGHDR,
     ecn: c_int,
     segment_size: u32,
     pktinfo_v4: WinSock::IN_PKTINFO,
@@ -75,7 +74,8 @@ pub(crate) const RECV_LEN: usize = 3 * MESSAGE_LEN;
 #[derive(Copy, Clone)]
 #[repr(C)]
 pub(crate) struct ControlBuf<const N: usize> {
-    /// Aligns the buffer like the `usize` `WSA_CMSGDATA_ALIGN` rounds to.
+    /// Aligns the buffer like the `usize` `WSA_CMSGDATA_ALIGN` rounds to, which covers
+    /// the headers too: `CMSGHDR` is a `SIZE_T` and two `INT`s.
     /// Zero sized: `repr(align)` takes a literal, not an expression.
     _align: [usize; 0],
     bytes: [MaybeUninit<u8>; N],

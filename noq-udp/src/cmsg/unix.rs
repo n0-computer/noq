@@ -15,7 +15,6 @@ use crate::imp::IpTosTy;
 #[repr(C)]
 #[allow(dead_code)] // the fields are here for their size, nothing reads them
 pub(crate) union Payload {
-    hdr: libc::cmsghdr,
     #[cfg(not(target_os = "netbsd"))]
     ecn_v4: IpTosTy,
     ecn_v6: c_int,
@@ -75,7 +74,8 @@ pub(crate) const RECV_LEN: usize = 4 * MESSAGE_LEN;
 #[derive(Copy, Clone)]
 #[repr(C)]
 pub(crate) struct ControlBuf<const N: usize> {
-    /// Aligns the buffer like the `size_t` the `CMSG_*` macros round offsets to.
+    /// Aligns the buffer like the `size_t` the `CMSG_*` macros round offsets to, which
+    /// covers the headers too: no platform aligns `cmsghdr` more strictly than that.
     /// Zero sized: `repr(align)` takes a literal, not an expression.
     _align: [usize; 0],
     bytes: [MaybeUninit<u8>; N],
