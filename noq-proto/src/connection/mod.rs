@@ -866,6 +866,13 @@ impl Connection {
             .ok_or(ClosedPath { _private: () })?;
         let prev_timeout = mem::replace(&mut path.data.idle_timeout, timeout);
 
+        // The expiration instant of the timer should generally be computed from the last time the
+        // path was active. This reference instance is, however, not possible to be recovered.
+        // Previous attempts used the expiration instant and previous setting to get a "last
+        // activity" instant. Since the timer is extended to 3*PTO to prevent very small timeouts,
+        // it's likely that the computed value was in the future, and instead of accounting for
+        // elapsed idle time, it further extended the timer. Then, for consistency, we simply choose
+        // to compute the timer expiration in the same way as if the path had been immediately used.
         self.sync_path_max_idle_timer(now, self.highest_space, path_id);
 
         Ok(prev_timeout)
@@ -873,6 +880,9 @@ impl Connection {
 
     /// Rearms or stops the state of the [`PathTimer::PathIdle`] based on the configured value in
     /// [`PathData::idle_timeout`].
+    ///
+    /// The timer is extended to 3*PTO if such value is greater than the configured timeout,
+    /// applying the guidance of RFC9000 §10.1 to multipaths.
     ///
     /// The timer only applies for non-closed, multiplath-negotiated connections.
     fn sync_path_max_idle_timer(&mut self, now: Instant, space: SpaceKind, path_id: PathId) {
