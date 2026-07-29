@@ -398,58 +398,59 @@
 <a href=#398 id=398 data-nosnippet>398</a>    </span>Established,
 <a href=#399 id=399 data-nosnippet>399</a>    <span class="doccomment">/// See [`StateType::Closed`].
 <a href=#400 id=400 data-nosnippet>400</a>    </span>Closed {
-<a href=#401 id=401 data-nosnippet>401</a>        <span class="doccomment">/// The reason the remote closed the connection, or the reason we are sending to the remote.
-<a href=#402 id=402 data-nosnippet>402</a>        </span>remote_reason: CloseReason,
-<a href=#403 id=403 data-nosnippet>403</a>        <span class="doccomment">/// Set to true if we closed the connection locally.
-<a href=#404 id=404 data-nosnippet>404</a>        </span>is_local: bool,
-<a href=#405 id=405 data-nosnippet>405</a>        <span class="doccomment">/// Did we read this as error already?
-<a href=#406 id=406 data-nosnippet>406</a>        </span>error_read: bool,
-<a href=#407 id=407 data-nosnippet>407</a>    },
-<a href=#408 id=408 data-nosnippet>408</a>    <span class="doccomment">/// See [`StateType::Draining`].
-<a href=#409 id=409 data-nosnippet>409</a>    </span>Draining {
-<a href=#410 id=410 data-nosnippet>410</a>        <span class="doccomment">/// Why the connection was lost, if it has been.
-<a href=#411 id=411 data-nosnippet>411</a>        </span>error: <span class="prelude-ty">Option</span>&lt;ConnectionError&gt;,
-<a href=#412 id=412 data-nosnippet>412</a>        <span class="doccomment">/// Set to true if we closed the connection locally.
-<a href=#413 id=413 data-nosnippet>413</a>        </span>is_local: bool,
-<a href=#414 id=414 data-nosnippet>414</a>    },
-<a href=#415 id=415 data-nosnippet>415</a>    <span class="doccomment">/// See [`StateType::Drained`].
-<a href=#416 id=416 data-nosnippet>416</a>    /// Waiting for application to call close so we can dispose of the resources.
-<a href=#417 id=417 data-nosnippet>417</a>    </span>Drained {
-<a href=#418 id=418 data-nosnippet>418</a>        <span class="doccomment">/// Why the connection was lost, if it has been.
-<a href=#419 id=419 data-nosnippet>419</a>        </span>error: <span class="prelude-ty">Option</span>&lt;ConnectionError&gt;,
-<a href=#420 id=420 data-nosnippet>420</a>        <span class="doccomment">/// Set to true if we closed the connection locally.
-<a href=#421 id=421 data-nosnippet>421</a>        </span>is_local: bool,
-<a href=#422 id=422 data-nosnippet>422</a>    },
-<a href=#423 id=423 data-nosnippet>423</a>}
-<a href=#424 id=424 data-nosnippet>424</a>
-<a href=#425 id=425 data-nosnippet>425</a><span class="attr">#[allow(unreachable_pub)] </span><span class="comment">// fuzzing only
-<a href=#426 id=426 data-nosnippet>426</a></span><span class="attr">#[derive(Debug, Clone)]
-<a href=#427 id=427 data-nosnippet>427</a></span><span class="kw">pub struct </span>Handshake {
-<a href=#428 id=428 data-nosnippet>428</a>    <span class="doccomment">/// Whether the remote CID has been set by the peer yet.
-<a href=#429 id=429 data-nosnippet>429</a>    ///
-<a href=#430 id=430 data-nosnippet>430</a>    /// Always set for servers.
-<a href=#431 id=431 data-nosnippet>431</a>    </span><span class="kw">pub</span>(<span class="kw">super</span>) remote_cid_set: bool,
-<a href=#432 id=432 data-nosnippet>432</a>    <span class="doccomment">/// Stateless retry token received in the first Initial by a server.
-<a href=#433 id=433 data-nosnippet>433</a>    ///
-<a href=#434 id=434 data-nosnippet>434</a>    /// Must be present in every Initial. Always empty for clients.
-<a href=#435 id=435 data-nosnippet>435</a>    </span><span class="kw">pub</span>(<span class="kw">super</span>) expected_token: Bytes,
-<a href=#436 id=436 data-nosnippet>436</a>    <span class="doccomment">/// First cryptographic message.
-<a href=#437 id=437 data-nosnippet>437</a>    ///
-<a href=#438 id=438 data-nosnippet>438</a>    /// Only set for clients.
-<a href=#439 id=439 data-nosnippet>439</a>    </span><span class="kw">pub</span>(<span class="kw">super</span>) client_hello: <span class="prelude-ty">Option</span>&lt;Bytes&gt;,
-<a href=#440 id=440 data-nosnippet>440</a>    <span class="doccomment">/// Whether the server address is allowed to migrate.
-<a href=#441 id=441 data-nosnippet>441</a>    ///
-<a href=#442 id=442 data-nosnippet>442</a>    /// We allow the server to migrate during the handshake as long as we have not
-<a href=#443 id=443 data-nosnippet>443</a>    /// received an authenticated handshake packet: it can send a response from a
-<a href=#444 id=444 data-nosnippet>444</a>    /// different address than we sent the initial to.  This allows us to send the
-<a href=#445 id=445 data-nosnippet>445</a>    /// initial packet over multiple paths - by means of an IPv6 ULA address that copies
-<a href=#446 id=446 data-nosnippet>446</a>    /// the packets sent to it to multiple destinations - and accept one response.
-<a href=#447 id=447 data-nosnippet>447</a>    ///
-<a href=#448 id=448 data-nosnippet>448</a>    /// This is only ever set to true if for a client which hasn't yet received an
-<a href=#449 id=449 data-nosnippet>449</a>    /// authenticated handshake packet.  It is set back to false in
-<a href=#450 id=450 data-nosnippet>450</a>    /// [`super::Connection::on_packet_authenticated`].
-<a href=#451 id=451 data-nosnippet>451</a>    ///
-<a href=#452 id=452 data-nosnippet>452</a>    /// THIS IS NOT RFC 9000 COMPLIANT!  A server is not allowed to migrate addresses,
-<a href=#453 id=453 data-nosnippet>453</a>    /// other than using the preferred-address transport parameter.
-<a href=#454 id=454 data-nosnippet>454</a>    </span><span class="kw">pub</span>(<span class="kw">super</span>) allow_server_migration: bool,
-<a href=#455 id=455 data-nosnippet>455</a>}</code></pre></div></section></main></body></html>
+<a href=#401 id=401 data-nosnippet>401</a>        <span class="doccomment">/// The reason the remote closed the connection, or the reason we are sending to the
+<a href=#402 id=402 data-nosnippet>402</a>        /// remote.
+<a href=#403 id=403 data-nosnippet>403</a>        </span>remote_reason: CloseReason,
+<a href=#404 id=404 data-nosnippet>404</a>        <span class="doccomment">/// Set to true if we closed the connection locally.
+<a href=#405 id=405 data-nosnippet>405</a>        </span>is_local: bool,
+<a href=#406 id=406 data-nosnippet>406</a>        <span class="doccomment">/// Did we read this as error already?
+<a href=#407 id=407 data-nosnippet>407</a>        </span>error_read: bool,
+<a href=#408 id=408 data-nosnippet>408</a>    },
+<a href=#409 id=409 data-nosnippet>409</a>    <span class="doccomment">/// See [`StateType::Draining`].
+<a href=#410 id=410 data-nosnippet>410</a>    </span>Draining {
+<a href=#411 id=411 data-nosnippet>411</a>        <span class="doccomment">/// Why the connection was lost, if it has been.
+<a href=#412 id=412 data-nosnippet>412</a>        </span>error: <span class="prelude-ty">Option</span>&lt;ConnectionError&gt;,
+<a href=#413 id=413 data-nosnippet>413</a>        <span class="doccomment">/// Set to true if we closed the connection locally.
+<a href=#414 id=414 data-nosnippet>414</a>        </span>is_local: bool,
+<a href=#415 id=415 data-nosnippet>415</a>    },
+<a href=#416 id=416 data-nosnippet>416</a>    <span class="doccomment">/// See [`StateType::Drained`].
+<a href=#417 id=417 data-nosnippet>417</a>    /// Waiting for application to call close so we can dispose of the resources.
+<a href=#418 id=418 data-nosnippet>418</a>    </span>Drained {
+<a href=#419 id=419 data-nosnippet>419</a>        <span class="doccomment">/// Why the connection was lost, if it has been.
+<a href=#420 id=420 data-nosnippet>420</a>        </span>error: <span class="prelude-ty">Option</span>&lt;ConnectionError&gt;,
+<a href=#421 id=421 data-nosnippet>421</a>        <span class="doccomment">/// Set to true if we closed the connection locally.
+<a href=#422 id=422 data-nosnippet>422</a>        </span>is_local: bool,
+<a href=#423 id=423 data-nosnippet>423</a>    },
+<a href=#424 id=424 data-nosnippet>424</a>}
+<a href=#425 id=425 data-nosnippet>425</a>
+<a href=#426 id=426 data-nosnippet>426</a><span class="attr">#[allow(unreachable_pub)] </span><span class="comment">// fuzzing only
+<a href=#427 id=427 data-nosnippet>427</a></span><span class="attr">#[derive(Debug, Clone)]
+<a href=#428 id=428 data-nosnippet>428</a></span><span class="kw">pub struct </span>Handshake {
+<a href=#429 id=429 data-nosnippet>429</a>    <span class="doccomment">/// Whether the remote CID has been set by the peer yet.
+<a href=#430 id=430 data-nosnippet>430</a>    ///
+<a href=#431 id=431 data-nosnippet>431</a>    /// Always set for servers.
+<a href=#432 id=432 data-nosnippet>432</a>    </span><span class="kw">pub</span>(<span class="kw">super</span>) remote_cid_set: bool,
+<a href=#433 id=433 data-nosnippet>433</a>    <span class="doccomment">/// Stateless retry token received in the first Initial by a server.
+<a href=#434 id=434 data-nosnippet>434</a>    ///
+<a href=#435 id=435 data-nosnippet>435</a>    /// Must be present in every Initial. Always empty for clients.
+<a href=#436 id=436 data-nosnippet>436</a>    </span><span class="kw">pub</span>(<span class="kw">super</span>) expected_token: Bytes,
+<a href=#437 id=437 data-nosnippet>437</a>    <span class="doccomment">/// First cryptographic message.
+<a href=#438 id=438 data-nosnippet>438</a>    ///
+<a href=#439 id=439 data-nosnippet>439</a>    /// Only set for clients.
+<a href=#440 id=440 data-nosnippet>440</a>    </span><span class="kw">pub</span>(<span class="kw">super</span>) client_hello: <span class="prelude-ty">Option</span>&lt;Bytes&gt;,
+<a href=#441 id=441 data-nosnippet>441</a>    <span class="doccomment">/// Whether the server address is allowed to migrate.
+<a href=#442 id=442 data-nosnippet>442</a>    ///
+<a href=#443 id=443 data-nosnippet>443</a>    /// We allow the server to migrate during the handshake as long as we have not
+<a href=#444 id=444 data-nosnippet>444</a>    /// received an authenticated handshake packet: it can send a response from a
+<a href=#445 id=445 data-nosnippet>445</a>    /// different address than we sent the initial to.  This allows us to send the
+<a href=#446 id=446 data-nosnippet>446</a>    /// initial packet over multiple paths - by means of an IPv6 ULA address that copies
+<a href=#447 id=447 data-nosnippet>447</a>    /// the packets sent to it to multiple destinations - and accept one response.
+<a href=#448 id=448 data-nosnippet>448</a>    ///
+<a href=#449 id=449 data-nosnippet>449</a>    /// This is only ever set to true if for a client which hasn't yet received an
+<a href=#450 id=450 data-nosnippet>450</a>    /// authenticated handshake packet.  It is set back to false in
+<a href=#451 id=451 data-nosnippet>451</a>    /// [`super::Connection::on_packet_authenticated`].
+<a href=#452 id=452 data-nosnippet>452</a>    ///
+<a href=#453 id=453 data-nosnippet>453</a>    /// THIS IS NOT RFC 9000 COMPLIANT!  A server is not allowed to migrate addresses,
+<a href=#454 id=454 data-nosnippet>454</a>    /// other than using the preferred-address transport parameter.
+<a href=#455 id=455 data-nosnippet>455</a>    </span><span class="kw">pub</span>(<span class="kw">super</span>) allow_server_migration: bool,
+<a href=#456 id=456 data-nosnippet>456</a>}</code></pre></div></section></main></body></html>

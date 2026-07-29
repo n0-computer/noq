@@ -136,9 +136,9 @@
 <a href=#136 id=136 data-nosnippet>136</a>
 <a href=#137 id=137 data-nosnippet>137</a>    <span class="doccomment">/// Notifies the [`MtuDiscovery`] that a non-probe packet was lost
 <a href=#138 id=138 data-nosnippet>138</a>    ///
-<a href=#139 id=139 data-nosnippet>139</a>    /// When done notifying of lost packets, [`MtuDiscovery::black_hole_detected`] must be called, to
-<a href=#140 id=140 data-nosnippet>140</a>    /// ensure the last loss burst is properly processed and to trigger black hole recovery logic if
-<a href=#141 id=141 data-nosnippet>141</a>    /// necessary.
+<a href=#139 id=139 data-nosnippet>139</a>    /// When done notifying of lost packets, [`MtuDiscovery::black_hole_detected`] must be called,
+<a href=#140 id=140 data-nosnippet>140</a>    /// to ensure the last loss burst is properly processed and to trigger black hole recovery
+<a href=#141 id=141 data-nosnippet>141</a>    /// logic if necessary.
 <a href=#142 id=142 data-nosnippet>142</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>on_non_probe_lost(<span class="kw-2">&amp;mut </span><span class="self">self</span>, pn: u64, len: u16) {
 <a href=#143 id=143 data-nosnippet>143</a>        <span class="self">self</span>.black_hole_detector.on_non_probe_lost(pn, len);
 <a href=#144 id=144 data-nosnippet>144</a>    }
@@ -185,8 +185,8 @@
 <a href=#185 id=185 data-nosnippet>185</a>    ///
 <a href=#186 id=186 data-nosnippet>186</a>    /// - There is no current in-flight probe.
 <a href=#187 id=187 data-nosnippet>187</a>    /// - A search for a new MTU is in progress.
-<a href=#188 id=188 data-nosnippet>188</a>    /// - The MTU discovery was completed but the [`MtuDiscoveryConfig::interval`] expired,
-<a href=#189 id=189 data-nosnippet>189</a>    ///   this re-starts a n MTU search.
+<a href=#188 id=188 data-nosnippet>188</a>    /// - The MTU discovery was completed but the [`MtuDiscoveryConfig::interval`] expired, this
+<a href=#189 id=189 data-nosnippet>189</a>    ///   re-starts a n MTU search.
 <a href=#190 id=190 data-nosnippet>190</a>    </span><span class="kw">fn </span>poll_transmit(<span class="kw-2">&amp;mut </span><span class="self">self</span>, now: Instant, current_mtu: u16, next_pn: u64) -&gt; <span class="prelude-ty">Option</span>&lt;u16&gt; {
 <a href=#191 id=191 data-nosnippet>191</a>        <span class="kw">if let </span>Phase::Initial = <span class="kw-2">&amp;</span><span class="self">self</span>.phase {
 <a href=#192 id=192 data-nosnippet>192</a>            <span class="comment">// Start the first search
@@ -376,8 +376,8 @@
 <a href=#376 id=376 data-nosnippet>376</a>    <span class="doccomment">/// Packet number of the biggest packet larger than `min_mtu` which we've received
 <a href=#377 id=377 data-nosnippet>377</a>    /// acknowledgment of more recently than any suspicious loss burst, if any
 <a href=#378 id=378 data-nosnippet>378</a>    </span>largest_post_loss_packet: u64,
-<a href=#379 id=379 data-nosnippet>379</a>    <span class="doccomment">/// The maximum of `min_mtu` and the size of `largest_post_loss_packet`, or exactly `min_mtu` if
-<a href=#380 id=380 data-nosnippet>380</a>    /// no larger packets have been received since the most recent loss burst.
+<a href=#379 id=379 data-nosnippet>379</a>    <span class="doccomment">/// The maximum of `min_mtu` and the size of `largest_post_loss_packet`, or exactly `min_mtu`
+<a href=#380 id=380 data-nosnippet>380</a>    /// if no larger packets have been received since the most recent loss burst.
 <a href=#381 id=381 data-nosnippet>381</a>    </span>acked_mtu: u16,
 <a href=#382 id=382 data-nosnippet>382</a>    <span class="doccomment">/// The UDP payload size guaranteed to be supported by the network
 <a href=#383 id=383 data-nosnippet>383</a>    </span>min_mtu: u16,

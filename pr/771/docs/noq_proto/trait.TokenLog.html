@@ -31,8 +31,8 @@ address validation token.</p>
 <ul>
 <li><code>nonce</code>: A server-generated random unique value for the token.</li>
 <li><code>issued</code>: The time the server issued the token.</li>
-<li><code>lifetime</code>: The expiration time of address validation tokens sent via NEW_TOKEN frames,
-as configured by <a href="struct.ValidationTokenConfig.html#method.lifetime" title="method noq_proto::ValidationTokenConfig::lifetime"><code>ServerValidationTokenConfig::lifetime</code></a>.</li>
+<li><code>lifetime</code>: The expiration time of address validation tokens sent via NEW_TOKEN frames, as
+configured by <a href="struct.ValidationTokenConfig.html#method.lifetime" title="method noq_proto::ValidationTokenConfig::lifetime"><code>ServerValidationTokenConfig::lifetime</code></a>.</li>
 </ul>
 <h6 id="security--performance"><a class="doc-anchor" href="#security--performance">§</a>Security &amp; Performance</h6>
 <p>To the extent that it is possible to repeatedly trigger false negatives (returning <code>Ok</code> for

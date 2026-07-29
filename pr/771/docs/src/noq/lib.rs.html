@@ -129,16 +129,18 @@
 <a href=#129 id=129 data-nosnippet>129</a>    }
 <a href=#130 id=130 data-nosnippet>130</a>}
 <a href=#131 id=131 data-nosnippet>131</a>
-<a href=#132 id=132 data-nosnippet>132</a><span class="doccomment">/// Maximum number of datagrams processed in send/recv calls to make before moving on to other processing
+<a href=#132 id=132 data-nosnippet>132</a><span class="doccomment">/// Maximum number of datagrams processed at once in send/recv calls.
 <a href=#133 id=133 data-nosnippet>133</a>///
-<a href=#134 id=134 data-nosnippet>134</a>/// This helps ensure we don't starve anything when the CPU is slower than the link.
-<a href=#135 id=135 data-nosnippet>135</a>/// Value is selected by picking a low number which didn't degrade throughput in benchmarks.
-<a href=#136 id=136 data-nosnippet>136</a></span><span class="kw">const </span>IO_LOOP_BOUND: usize = <span class="number">160</span>;
-<a href=#137 id=137 data-nosnippet>137</a>
-<a href=#138 id=138 data-nosnippet>138</a><span class="doccomment">/// The maximum amount of time that should be spent in `recvmsg()` calls per endpoint iteration
-<a href=#139 id=139 data-nosnippet>139</a>///
-<a href=#140 id=140 data-nosnippet>140</a>/// 50us are chosen so that an endpoint iteration with a 50us sendmsg limit blocks
-<a href=#141 id=141 data-nosnippet>141</a>/// the runtime for a maximum of about 100us.
-<a href=#142 id=142 data-nosnippet>142</a>/// Going much lower does not yield any noticeable difference, since a single `recvmmsg`
-<a href=#143 id=143 data-nosnippet>143</a>/// batch of size 32 was observed to take 30us on some systems.
-<a href=#144 id=144 data-nosnippet>144</a></span><span class="kw">const </span>RECV_TIME_BOUND: Duration = Duration::from_micros(<span class="number">50</span>);</code></pre></div></section></main></body></html>
+<a href=#134 id=134 data-nosnippet>134</a>/// This after this the driver moves on to other processing.
+<a href=#135 id=135 data-nosnippet>135</a>///
+<a href=#136 id=136 data-nosnippet>136</a>/// This helps ensure we don't starve anything when the CPU is slower than the link.
+<a href=#137 id=137 data-nosnippet>137</a>/// Value is selected by picking a low number which didn't degrade throughput in benchmarks.
+<a href=#138 id=138 data-nosnippet>138</a></span><span class="kw">const </span>IO_LOOP_BOUND: usize = <span class="number">160</span>;
+<a href=#139 id=139 data-nosnippet>139</a>
+<a href=#140 id=140 data-nosnippet>140</a><span class="doccomment">/// The maximum amount of time that should be spent in `recvmsg()` calls per endpoint iteration
+<a href=#141 id=141 data-nosnippet>141</a>///
+<a href=#142 id=142 data-nosnippet>142</a>/// 50us are chosen so that an endpoint iteration with a 50us sendmsg limit blocks
+<a href=#143 id=143 data-nosnippet>143</a>/// the runtime for a maximum of about 100us.
+<a href=#144 id=144 data-nosnippet>144</a>/// Going much lower does not yield any noticeable difference, since a single `recvmmsg`
+<a href=#145 id=145 data-nosnippet>145</a>/// batch of size 32 was observed to take 30us on some systems.
+<a href=#146 id=146 data-nosnippet>146</a></span><span class="kw">const </span>RECV_TIME_BOUND: Duration = Duration::from_micros(<span class="number">50</span>);</code></pre></div></section></main></body></html>

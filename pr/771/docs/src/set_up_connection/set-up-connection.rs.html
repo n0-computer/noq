@@ -24,15 +24,16 @@
 <a href=#24 id=24 data-nosnippet>24</a>    <span class="comment">// Bind this endpoint to a UDP socket on the given client address.
 <a href=#25 id=25 data-nosnippet>25</a>    </span><span class="kw">let </span>endpoint = Endpoint::client(CLIENT_ADDR)<span class="question-mark">?</span>;
 <a href=#26 id=26 data-nosnippet>26</a>
-<a href=#27 id=27 data-nosnippet>27</a>    <span class="comment">// Connect to the server passing in the server name which is supposed to be in the server certificate.
-<a href=#28 id=28 data-nosnippet>28</a>    </span><span class="kw">let </span>connection = endpoint.connect(SERVER_ADDR, SERVER_NAME)<span class="question-mark">?</span>.<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#29 id=29 data-nosnippet>29</a>
-<a href=#30 id=30 data-nosnippet>30</a>    <span class="comment">// Start transferring, receiving data, see data transfer page.
-<a href=#31 id=31 data-nosnippet>31</a>
-<a href=#32 id=32 data-nosnippet>32</a>    </span><span class="prelude-val">Ok</span>(())
-<a href=#33 id=33 data-nosnippet>33</a>}
-<a href=#34 id=34 data-nosnippet>34</a>
-<a href=#35 id=35 data-nosnippet>35</a><span class="kw">const </span>SERVER_NAME: <span class="kw-2">&amp;</span>str = <span class="string">"localhost"</span>;
-<a href=#36 id=36 data-nosnippet>36</a><span class="kw">const </span>LOCALHOST_V4: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
-<a href=#37 id=37 data-nosnippet>37</a><span class="kw">const </span>CLIENT_ADDR: SocketAddr = SocketAddr::new(LOCALHOST_V4, <span class="number">5000</span>);
-<a href=#38 id=38 data-nosnippet>38</a><span class="kw">const </span>SERVER_ADDR: SocketAddr = SocketAddr::new(LOCALHOST_V4, <span class="number">5001</span>);</code></pre></div></section></main></body></html>
+<a href=#27 id=27 data-nosnippet>27</a>    <span class="comment">// Connect to the server passing in the server name which is supposed to be in the server
+<a href=#28 id=28 data-nosnippet>28</a>    // certificate.
+<a href=#29 id=29 data-nosnippet>29</a>    </span><span class="kw">let </span>connection = endpoint.connect(SERVER_ADDR, SERVER_NAME)<span class="question-mark">?</span>.<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#30 id=30 data-nosnippet>30</a>
+<a href=#31 id=31 data-nosnippet>31</a>    <span class="comment">// Start transferring, receiving data, see data transfer page.
+<a href=#32 id=32 data-nosnippet>32</a>
+<a href=#33 id=33 data-nosnippet>33</a>    </span><span class="prelude-val">Ok</span>(())
+<a href=#34 id=34 data-nosnippet>34</a>}
+<a href=#35 id=35 data-nosnippet>35</a>
+<a href=#36 id=36 data-nosnippet>36</a><span class="kw">const </span>SERVER_NAME: <span class="kw-2">&amp;</span>str = <span class="string">"localhost"</span>;
+<a href=#37 id=37 data-nosnippet>37</a><span class="kw">const </span>LOCALHOST_V4: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
+<a href=#38 id=38 data-nosnippet>38</a><span class="kw">const </span>CLIENT_ADDR: SocketAddr = SocketAddr::new(LOCALHOST_V4, <span class="number">5000</span>);
+<a href=#39 id=39 data-nosnippet>39</a><span class="kw">const </span>SERVER_ADDR: SocketAddr = SocketAddr::new(LOCALHOST_V4, <span class="number">5001</span>);</code></pre></div></section></main></body></html>

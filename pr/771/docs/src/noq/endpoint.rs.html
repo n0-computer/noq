@@ -368,8 +368,8 @@
 <a href=#368 id=368 data-nosnippet>368</a>
 <a href=#369 id=369 data-nosnippet>369</a>    <span class="doccomment">/// Waits for all connections on the endpoint to be cleanly shut down and drained.
 <a href=#370 id=370 data-nosnippet>370</a>    ///
-<a href=#371 id=371 data-nosnippet>371</a>    /// This is equivalent to [`wait_all_draining()`] with additionally waiting for the connections to be
-<a href=#372 id=372 data-nosnippet>372</a>    /// drained. Please see its documentation for more information.
+<a href=#371 id=371 data-nosnippet>371</a>    /// This is equivalent to [`wait_all_draining()`] with additionally waiting for the connections
+<a href=#372 id=372 data-nosnippet>372</a>    /// to be drained. Please see its documentation for more information.
 <a href=#373 id=373 data-nosnippet>373</a>    ///
 <a href=#374 id=374 data-nosnippet>374</a>    /// Use `wait_idle()` in favor of `wait_all_draining()` if you care about waiting for the
 <a href=#375 id=375 data-nosnippet>375</a>    /// [`Connection`] structs to be dropped.
@@ -694,63 +694,63 @@
 <a href=#694 id=694 data-nosnippet>694</a>    // - A version negotiation response due to an unknown version
 <a href=#695 id=695 data-nosnippet>695</a>    // - A `CLOSE` due to a malformed or unwanted connection attempt
 <a href=#696 id=696 data-nosnippet>696</a>    // - A stateless reset due to an unrecognized connection
-<a href=#697 id=697 data-nosnippet>697</a>    // - A `Retry` packet due to a connection attempt when
-<a href=#698 id=698 data-nosnippet>698</a>    //   `use_retry` is set
-<a href=#699 id=699 data-nosnippet>699</a>    //
-<a href=#700 id=700 data-nosnippet>700</a>    // In each case, a well-behaved peer can be trusted to retry a
-<a href=#701 id=701 data-nosnippet>701</a>    // few times, which is guaranteed to produce the same response
-<a href=#702 id=702 data-nosnippet>702</a>    // from us. Repeated failures might at worst cause a peer's new
-<a href=#703 id=703 data-nosnippet>703</a>    // connection attempt to time out, which is acceptable if we're
-<a href=#704 id=704 data-nosnippet>704</a>    // under such heavy load that there's never room for this code
-<a href=#705 id=705 data-nosnippet>705</a>    // to transmit. This is morally equivalent to the packet getting
-<a href=#706 id=706 data-nosnippet>706</a>    // lost due to congestion further along the link, which
-<a href=#707 id=707 data-nosnippet>707</a>    // similarly relies on peer retries for recovery.
-<a href=#708 id=708 data-nosnippet>708</a>
-<a href=#709 id=709 data-nosnippet>709</a>    // Copied from rust 1.85's std::task::Waker::noop() implementation for backwards compatibility
-<a href=#710 id=710 data-nosnippet>710</a>    </span><span class="kw">const </span>NOOP: RawWaker = {
-<a href=#711 id=711 data-nosnippet>711</a>        <span class="kw">const </span>VTABLE: RawWakerVTable = RawWakerVTable::new(
-<a href=#712 id=712 data-nosnippet>712</a>            <span class="comment">// Cloning just returns a new no-op raw waker
-<a href=#713 id=713 data-nosnippet>713</a>            </span>|<span class="kw">_</span>| NOOP,
-<a href=#714 id=714 data-nosnippet>714</a>            <span class="comment">// `wake` does nothing
-<a href=#715 id=715 data-nosnippet>715</a>            </span>|<span class="kw">_</span>| {},
-<a href=#716 id=716 data-nosnippet>716</a>            <span class="comment">// `wake_by_ref` does nothing
-<a href=#717 id=717 data-nosnippet>717</a>            </span>|<span class="kw">_</span>| {},
-<a href=#718 id=718 data-nosnippet>718</a>            <span class="comment">// Dropping does nothing as we don't allocate anything
-<a href=#719 id=719 data-nosnippet>719</a>            </span>|<span class="kw">_</span>| {},
-<a href=#720 id=720 data-nosnippet>720</a>        );
-<a href=#721 id=721 data-nosnippet>721</a>        RawWaker::new(std::ptr::null(), <span class="kw-2">&amp;</span>VTABLE)
-<a href=#722 id=722 data-nosnippet>722</a>    };
-<a href=#723 id=723 data-nosnippet>723</a>    <span class="comment">// SAFETY: Copied from rust stdlib, the NOOP waker is thread-safe and doesn't violate the RawWakerVTable contract,
-<a href=#724 id=724 data-nosnippet>724</a>    // it doesn't access the data pointer at all.
-<a href=#725 id=725 data-nosnippet>725</a>    </span><span class="kw">let </span>waker = <span class="kw">unsafe </span>{ Waker::from_raw(NOOP) };
-<a href=#726 id=726 data-nosnippet>726</a>    <span class="kw">let </span><span class="kw-2">mut </span>cx = Context::from_waker(<span class="kw-2">&amp;</span>waker);
-<a href=#727 id=727 data-nosnippet>727</a>    <span class="kw">_ </span>= sender.as_mut().poll_send(
-<a href=#728 id=728 data-nosnippet>728</a>        <span class="kw-2">&amp;</span>udp_transmit(<span class="kw-2">&amp;</span>transmit, <span class="kw-2">&amp;</span>response_buffer[..transmit.size]),
-<a href=#729 id=729 data-nosnippet>729</a>        <span class="kw-2">&amp;mut </span>cx,
-<a href=#730 id=730 data-nosnippet>730</a>    );
-<a href=#731 id=731 data-nosnippet>731</a>}
-<a href=#732 id=732 data-nosnippet>732</a>
-<a href=#733 id=733 data-nosnippet>733</a><span class="attr">#[inline]
-<a href=#734 id=734 data-nosnippet>734</a></span><span class="kw">fn </span>proto_ecn(ecn: udp::EcnCodepoint) -&gt; proto::EcnCodepoint {
-<a href=#735 id=735 data-nosnippet>735</a>    <span class="kw">match </span>ecn {
-<a href=#736 id=736 data-nosnippet>736</a>        udp::EcnCodepoint::Ect0 =&gt; proto::EcnCodepoint::Ect0,
-<a href=#737 id=737 data-nosnippet>737</a>        udp::EcnCodepoint::Ect1 =&gt; proto::EcnCodepoint::Ect1,
-<a href=#738 id=738 data-nosnippet>738</a>        udp::EcnCodepoint::Ce =&gt; proto::EcnCodepoint::Ce,
-<a href=#739 id=739 data-nosnippet>739</a>    }
-<a href=#740 id=740 data-nosnippet>740</a>}
-<a href=#741 id=741 data-nosnippet>741</a>
-<a href=#742 id=742 data-nosnippet>742</a><span class="attr">#[derive(Debug)]
-<a href=#743 id=743 data-nosnippet>743</a></span><span class="kw">struct </span>ConnectionSet {
-<a href=#744 id=744 data-nosnippet>744</a>    <span class="doccomment">/// Senders for communicating with the endpoint's connections
-<a href=#745 id=745 data-nosnippet>745</a>    </span>senders: FxHashMap&lt;ConnectionHandle, mpsc::UnboundedSender&lt;ConnectionEvent&gt;&gt;,
-<a href=#746 id=746 data-nosnippet>746</a>    <span class="doccomment">/// Stored to give out clones to new ConnectionInners
-<a href=#747 id=747 data-nosnippet>747</a>    </span>sender: mpsc::UnboundedSender&lt;(ConnectionHandle, EndpointEvent)&gt;,
-<a href=#748 id=748 data-nosnippet>748</a>    <span class="doccomment">/// Set if the endpoint has been manually closed
-<a href=#749 id=749 data-nosnippet>749</a>    </span>close: <span class="prelude-ty">Option</span>&lt;(VarInt, Bytes)&gt;,
-<a href=#750 id=750 data-nosnippet>750</a>    <span class="doccomment">/// Counter for all active (non-draining/drained) connections.
-<a href=#751 id=751 data-nosnippet>751</a>    ///
-<a href=#752 id=752 data-nosnippet>752</a>    /// This is directly related to the QUIC connection states "Initial", "Handshake",
-<a href=#753 id=753 data-nosnippet>753</a>    /// "Established", "Closed", "Draining" and "Drained" (see also `proto/src/connection/state.rs`).
+<a href=#697 id=697 data-nosnippet>697</a>    // - A `Retry` packet due to a connection attempt when `use_retry` is set
+<a href=#698 id=698 data-nosnippet>698</a>    //
+<a href=#699 id=699 data-nosnippet>699</a>    // In each case, a well-behaved peer can be trusted to retry a
+<a href=#700 id=700 data-nosnippet>700</a>    // few times, which is guaranteed to produce the same response
+<a href=#701 id=701 data-nosnippet>701</a>    // from us. Repeated failures might at worst cause a peer's new
+<a href=#702 id=702 data-nosnippet>702</a>    // connection attempt to time out, which is acceptable if we're
+<a href=#703 id=703 data-nosnippet>703</a>    // under such heavy load that there's never room for this code
+<a href=#704 id=704 data-nosnippet>704</a>    // to transmit. This is morally equivalent to the packet getting
+<a href=#705 id=705 data-nosnippet>705</a>    // lost due to congestion further along the link, which
+<a href=#706 id=706 data-nosnippet>706</a>    // similarly relies on peer retries for recovery.
+<a href=#707 id=707 data-nosnippet>707</a>
+<a href=#708 id=708 data-nosnippet>708</a>    // Copied from rust 1.85's std::task::Waker::noop() implementation for backwards compatibility
+<a href=#709 id=709 data-nosnippet>709</a>    </span><span class="kw">const </span>NOOP: RawWaker = {
+<a href=#710 id=710 data-nosnippet>710</a>        <span class="kw">const </span>VTABLE: RawWakerVTable = RawWakerVTable::new(
+<a href=#711 id=711 data-nosnippet>711</a>            <span class="comment">// Cloning just returns a new no-op raw waker
+<a href=#712 id=712 data-nosnippet>712</a>            </span>|<span class="kw">_</span>| NOOP,
+<a href=#713 id=713 data-nosnippet>713</a>            <span class="comment">// `wake` does nothing
+<a href=#714 id=714 data-nosnippet>714</a>            </span>|<span class="kw">_</span>| {},
+<a href=#715 id=715 data-nosnippet>715</a>            <span class="comment">// `wake_by_ref` does nothing
+<a href=#716 id=716 data-nosnippet>716</a>            </span>|<span class="kw">_</span>| {},
+<a href=#717 id=717 data-nosnippet>717</a>            <span class="comment">// Dropping does nothing as we don't allocate anything
+<a href=#718 id=718 data-nosnippet>718</a>            </span>|<span class="kw">_</span>| {},
+<a href=#719 id=719 data-nosnippet>719</a>        );
+<a href=#720 id=720 data-nosnippet>720</a>        RawWaker::new(std::ptr::null(), <span class="kw-2">&amp;</span>VTABLE)
+<a href=#721 id=721 data-nosnippet>721</a>    };
+<a href=#722 id=722 data-nosnippet>722</a>    <span class="comment">// SAFETY: Copied from rust stdlib, the NOOP waker is thread-safe and doesn't violate the
+<a href=#723 id=723 data-nosnippet>723</a>    // RawWakerVTable contract, it doesn't access the data pointer at all.
+<a href=#724 id=724 data-nosnippet>724</a>    </span><span class="kw">let </span>waker = <span class="kw">unsafe </span>{ Waker::from_raw(NOOP) };
+<a href=#725 id=725 data-nosnippet>725</a>    <span class="kw">let </span><span class="kw-2">mut </span>cx = Context::from_waker(<span class="kw-2">&amp;</span>waker);
+<a href=#726 id=726 data-nosnippet>726</a>    <span class="kw">_ </span>= sender.as_mut().poll_send(
+<a href=#727 id=727 data-nosnippet>727</a>        <span class="kw-2">&amp;</span>udp_transmit(<span class="kw-2">&amp;</span>transmit, <span class="kw-2">&amp;</span>response_buffer[..transmit.size]),
+<a href=#728 id=728 data-nosnippet>728</a>        <span class="kw-2">&amp;mut </span>cx,
+<a href=#729 id=729 data-nosnippet>729</a>    );
+<a href=#730 id=730 data-nosnippet>730</a>}
+<a href=#731 id=731 data-nosnippet>731</a>
+<a href=#732 id=732 data-nosnippet>732</a><span class="attr">#[inline]
+<a href=#733 id=733 data-nosnippet>733</a></span><span class="kw">fn </span>proto_ecn(ecn: udp::EcnCodepoint) -&gt; proto::EcnCodepoint {
+<a href=#734 id=734 data-nosnippet>734</a>    <span class="kw">match </span>ecn {
+<a href=#735 id=735 data-nosnippet>735</a>        udp::EcnCodepoint::Ect0 =&gt; proto::EcnCodepoint::Ect0,
+<a href=#736 id=736 data-nosnippet>736</a>        udp::EcnCodepoint::Ect1 =&gt; proto::EcnCodepoint::Ect1,
+<a href=#737 id=737 data-nosnippet>737</a>        udp::EcnCodepoint::Ce =&gt; proto::EcnCodepoint::Ce,
+<a href=#738 id=738 data-nosnippet>738</a>    }
+<a href=#739 id=739 data-nosnippet>739</a>}
+<a href=#740 id=740 data-nosnippet>740</a>
+<a href=#741 id=741 data-nosnippet>741</a><span class="attr">#[derive(Debug)]
+<a href=#742 id=742 data-nosnippet>742</a></span><span class="kw">struct </span>ConnectionSet {
+<a href=#743 id=743 data-nosnippet>743</a>    <span class="doccomment">/// Senders for communicating with the endpoint's connections
+<a href=#744 id=744 data-nosnippet>744</a>    </span>senders: FxHashMap&lt;ConnectionHandle, mpsc::UnboundedSender&lt;ConnectionEvent&gt;&gt;,
+<a href=#745 id=745 data-nosnippet>745</a>    <span class="doccomment">/// Stored to give out clones to new ConnectionInners
+<a href=#746 id=746 data-nosnippet>746</a>    </span>sender: mpsc::UnboundedSender&lt;(ConnectionHandle, EndpointEvent)&gt;,
+<a href=#747 id=747 data-nosnippet>747</a>    <span class="doccomment">/// Set if the endpoint has been manually closed
+<a href=#748 id=748 data-nosnippet>748</a>    </span>close: <span class="prelude-ty">Option</span>&lt;(VarInt, Bytes)&gt;,
+<a href=#749 id=749 data-nosnippet>749</a>    <span class="doccomment">/// Counter for all active (non-draining/drained) connections.
+<a href=#750 id=750 data-nosnippet>750</a>    ///
+<a href=#751 id=751 data-nosnippet>751</a>    /// This is directly related to the QUIC connection states "Initial", "Handshake",
+<a href=#752 id=752 data-nosnippet>752</a>    /// "Established", "Closed", "Draining" and "Drained" (see also
+<a href=#753 id=753 data-nosnippet>753</a>    /// `proto/src/connection/state.rs`).
 <a href=#754 id=754 data-nosnippet>754</a>    ///
 <a href=#755 id=755 data-nosnippet>755</a>    /// Any connection state that is not "Draining" or "Drained" is considered active.
 <a href=#756 id=756 data-nosnippet>756</a>    ///
@@ -980,63 +980,64 @@
 <a href=#980 id=980 data-nosnippet>980</a>                                    }
 <a href=#981 id=981 data-nosnippet>981</a>                                }
 <a href=#982 id=982 data-nosnippet>982</a>                                <span class="prelude-val">Some</span>(DatagramEvent::ConnectionEvent(handle, event)) =&gt; {
-<a href=#983 id=983 data-nosnippet>983</a>                                    <span class="comment">// Ignoring errors from dropped connections that haven't yet been cleaned up
-<a href=#984 id=984 data-nosnippet>984</a>                                    </span>received_connection_packet = <span class="bool-val">true</span>;
-<a href=#985 id=985 data-nosnippet>985</a>                                    <span class="kw">let _ </span>= <span class="self">self
-<a href=#986 id=986 data-nosnippet>986</a>                                        </span>.connections
-<a href=#987 id=987 data-nosnippet>987</a>                                        .senders
-<a href=#988 id=988 data-nosnippet>988</a>                                        .get_mut(<span class="kw-2">&amp;</span>handle)
-<a href=#989 id=989 data-nosnippet>989</a>                                        .unwrap()
-<a href=#990 id=990 data-nosnippet>990</a>                                        .send(ConnectionEvent::Proto(event));
-<a href=#991 id=991 data-nosnippet>991</a>                                }
-<a href=#992 id=992 data-nosnippet>992</a>                                <span class="prelude-val">Some</span>(DatagramEvent::Response(transmit)) =&gt; {
-<a href=#993 id=993 data-nosnippet>993</a>                                    respond(transmit, <span class="kw-2">&amp;</span>response_buffer, sender);
-<a href=#994 id=994 data-nosnippet>994</a>                                }
-<a href=#995 id=995 data-nosnippet>995</a>                                <span class="prelude-val">None </span>=&gt; {}
-<a href=#996 id=996 data-nosnippet>996</a>                            }
-<a href=#997 id=997 data-nosnippet>997</a>                        }
-<a href=#998 id=998 data-nosnippet>998</a>                    }
-<a href=#999 id=999 data-nosnippet>999</a>                }
-<a href=#1000 id=1000 data-nosnippet>1000</a>                Poll::Pending =&gt; {
-<a href=#1001 id=1001 data-nosnippet>1001</a>                    <span class="kw">return </span><span class="prelude-val">Ok</span>(PollProgress {
-<a href=#1002 id=1002 data-nosnippet>1002</a>                        received_connection_packet,
-<a href=#1003 id=1003 data-nosnippet>1003</a>                        keep_going: <span class="bool-val">false</span>,
-<a href=#1004 id=1004 data-nosnippet>1004</a>                    });
-<a href=#1005 id=1005 data-nosnippet>1005</a>                }
-<a href=#1006 id=1006 data-nosnippet>1006</a>                <span class="comment">// Ignore ECONNRESET as it's undefined in QUIC and may be injected by an
-<a href=#1007 id=1007 data-nosnippet>1007</a>                // attacker
-<a href=#1008 id=1008 data-nosnippet>1008</a>                </span>Poll::Ready(<span class="prelude-val">Err</span>(<span class="kw-2">ref </span>e)) <span class="kw">if </span>e.kind() == io::ErrorKind::ConnectionReset =&gt; {
-<a href=#1009 id=1009 data-nosnippet>1009</a>                    <span class="kw">continue</span>;
-<a href=#1010 id=1010 data-nosnippet>1010</a>                }
-<a href=#1011 id=1011 data-nosnippet>1011</a>                Poll::Ready(<span class="prelude-val">Err</span>(e)) =&gt; {
-<a href=#1012 id=1012 data-nosnippet>1012</a>                    <span class="kw">return </span><span class="prelude-val">Err</span>(e);
-<a href=#1013 id=1013 data-nosnippet>1013</a>                }
-<a href=#1014 id=1014 data-nosnippet>1014</a>            }
-<a href=#1015 id=1015 data-nosnippet>1015</a>            <span class="kw">if </span>!<span class="self">self</span>.recv_limiter.allow_work(|| runtime.now()) {
-<a href=#1016 id=1016 data-nosnippet>1016</a>                <span class="kw">return </span><span class="prelude-val">Ok</span>(PollProgress {
-<a href=#1017 id=1017 data-nosnippet>1017</a>                    received_connection_packet,
-<a href=#1018 id=1018 data-nosnippet>1018</a>                    keep_going: <span class="bool-val">true</span>,
-<a href=#1019 id=1019 data-nosnippet>1019</a>                });
-<a href=#1020 id=1020 data-nosnippet>1020</a>            }
-<a href=#1021 id=1021 data-nosnippet>1021</a>        }
-<a href=#1022 id=1022 data-nosnippet>1022</a>    }
-<a href=#1023 id=1023 data-nosnippet>1023</a>}
-<a href=#1024 id=1024 data-nosnippet>1024</a>
-<a href=#1025 id=1025 data-nosnippet>1025</a><span class="kw">impl </span>fmt::Debug <span class="kw">for </span>RecvState {
-<a href=#1026 id=1026 data-nosnippet>1026</a>    <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; fmt::Result {
-<a href=#1027 id=1027 data-nosnippet>1027</a>        f.debug_struct(<span class="string">"RecvState"</span>)
-<a href=#1028 id=1028 data-nosnippet>1028</a>            .field(<span class="string">"incoming"</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.incoming)
-<a href=#1029 id=1029 data-nosnippet>1029</a>            .field(<span class="string">"connections"</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.connections)
-<a href=#1030 id=1030 data-nosnippet>1030</a>            <span class="comment">// recv_buf too large
-<a href=#1031 id=1031 data-nosnippet>1031</a>            </span>.field(<span class="string">"recv_limiter"</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.recv_limiter)
-<a href=#1032 id=1032 data-nosnippet>1032</a>            .finish_non_exhaustive()
-<a href=#1033 id=1033 data-nosnippet>1033</a>    }
-<a href=#1034 id=1034 data-nosnippet>1034</a>}
-<a href=#1035 id=1035 data-nosnippet>1035</a>
-<a href=#1036 id=1036 data-nosnippet>1036</a><span class="attr">#[derive(Default)]
-<a href=#1037 id=1037 data-nosnippet>1037</a></span><span class="kw">struct </span>PollProgress {
-<a href=#1038 id=1038 data-nosnippet>1038</a>    <span class="doccomment">/// Whether a datagram was routed to an existing connection
-<a href=#1039 id=1039 data-nosnippet>1039</a>    </span>received_connection_packet: bool,
-<a href=#1040 id=1040 data-nosnippet>1040</a>    <span class="doccomment">/// Whether datagram handling was interrupted early by the work limiter for fairness
-<a href=#1041 id=1041 data-nosnippet>1041</a>    </span>keep_going: bool,
-<a href=#1042 id=1042 data-nosnippet>1042</a>}</code></pre></div></section></main></body></html>
+<a href=#983 id=983 data-nosnippet>983</a>                                    <span class="comment">// Ignoring errors from dropped connections that haven't yet
+<a href=#984 id=984 data-nosnippet>984</a>                                    // been cleaned up
+<a href=#985 id=985 data-nosnippet>985</a>                                    </span>received_connection_packet = <span class="bool-val">true</span>;
+<a href=#986 id=986 data-nosnippet>986</a>                                    <span class="kw">let _ </span>= <span class="self">self
+<a href=#987 id=987 data-nosnippet>987</a>                                        </span>.connections
+<a href=#988 id=988 data-nosnippet>988</a>                                        .senders
+<a href=#989 id=989 data-nosnippet>989</a>                                        .get_mut(<span class="kw-2">&amp;</span>handle)
+<a href=#990 id=990 data-nosnippet>990</a>                                        .unwrap()
+<a href=#991 id=991 data-nosnippet>991</a>                                        .send(ConnectionEvent::Proto(event));
+<a href=#992 id=992 data-nosnippet>992</a>                                }
+<a href=#993 id=993 data-nosnippet>993</a>                                <span class="prelude-val">Some</span>(DatagramEvent::Response(transmit)) =&gt; {
+<a href=#994 id=994 data-nosnippet>994</a>                                    respond(transmit, <span class="kw-2">&amp;</span>response_buffer, sender);
+<a href=#995 id=995 data-nosnippet>995</a>                                }
+<a href=#996 id=996 data-nosnippet>996</a>                                <span class="prelude-val">None </span>=&gt; {}
+<a href=#997 id=997 data-nosnippet>997</a>                            }
+<a href=#998 id=998 data-nosnippet>998</a>                        }
+<a href=#999 id=999 data-nosnippet>999</a>                    }
+<a href=#1000 id=1000 data-nosnippet>1000</a>                }
+<a href=#1001 id=1001 data-nosnippet>1001</a>                Poll::Pending =&gt; {
+<a href=#1002 id=1002 data-nosnippet>1002</a>                    <span class="kw">return </span><span class="prelude-val">Ok</span>(PollProgress {
+<a href=#1003 id=1003 data-nosnippet>1003</a>                        received_connection_packet,
+<a href=#1004 id=1004 data-nosnippet>1004</a>                        keep_going: <span class="bool-val">false</span>,
+<a href=#1005 id=1005 data-nosnippet>1005</a>                    });
+<a href=#1006 id=1006 data-nosnippet>1006</a>                }
+<a href=#1007 id=1007 data-nosnippet>1007</a>                <span class="comment">// Ignore ECONNRESET as it's undefined in QUIC and may be injected by an
+<a href=#1008 id=1008 data-nosnippet>1008</a>                // attacker
+<a href=#1009 id=1009 data-nosnippet>1009</a>                </span>Poll::Ready(<span class="prelude-val">Err</span>(<span class="kw-2">ref </span>e)) <span class="kw">if </span>e.kind() == io::ErrorKind::ConnectionReset =&gt; {
+<a href=#1010 id=1010 data-nosnippet>1010</a>                    <span class="kw">continue</span>;
+<a href=#1011 id=1011 data-nosnippet>1011</a>                }
+<a href=#1012 id=1012 data-nosnippet>1012</a>                Poll::Ready(<span class="prelude-val">Err</span>(e)) =&gt; {
+<a href=#1013 id=1013 data-nosnippet>1013</a>                    <span class="kw">return </span><span class="prelude-val">Err</span>(e);
+<a href=#1014 id=1014 data-nosnippet>1014</a>                }
+<a href=#1015 id=1015 data-nosnippet>1015</a>            }
+<a href=#1016 id=1016 data-nosnippet>1016</a>            <span class="kw">if </span>!<span class="self">self</span>.recv_limiter.allow_work(|| runtime.now()) {
+<a href=#1017 id=1017 data-nosnippet>1017</a>                <span class="kw">return </span><span class="prelude-val">Ok</span>(PollProgress {
+<a href=#1018 id=1018 data-nosnippet>1018</a>                    received_connection_packet,
+<a href=#1019 id=1019 data-nosnippet>1019</a>                    keep_going: <span class="bool-val">true</span>,
+<a href=#1020 id=1020 data-nosnippet>1020</a>                });
+<a href=#1021 id=1021 data-nosnippet>1021</a>            }
+<a href=#1022 id=1022 data-nosnippet>1022</a>        }
+<a href=#1023 id=1023 data-nosnippet>1023</a>    }
+<a href=#1024 id=1024 data-nosnippet>1024</a>}
+<a href=#1025 id=1025 data-nosnippet>1025</a>
+<a href=#1026 id=1026 data-nosnippet>1026</a><span class="kw">impl </span>fmt::Debug <span class="kw">for </span>RecvState {
+<a href=#1027 id=1027 data-nosnippet>1027</a>    <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; fmt::Result {
+<a href=#1028 id=1028 data-nosnippet>1028</a>        f.debug_struct(<span class="string">"RecvState"</span>)
+<a href=#1029 id=1029 data-nosnippet>1029</a>            .field(<span class="string">"incoming"</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.incoming)
+<a href=#1030 id=1030 data-nosnippet>1030</a>            .field(<span class="string">"connections"</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.connections)
+<a href=#1031 id=1031 data-nosnippet>1031</a>            <span class="comment">// recv_buf too large
+<a href=#1032 id=1032 data-nosnippet>1032</a>            </span>.field(<span class="string">"recv_limiter"</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.recv_limiter)
+<a href=#1033 id=1033 data-nosnippet>1033</a>            .finish_non_exhaustive()
+<a href=#1034 id=1034 data-nosnippet>1034</a>    }
+<a href=#1035 id=1035 data-nosnippet>1035</a>}
+<a href=#1036 id=1036 data-nosnippet>1036</a>
+<a href=#1037 id=1037 data-nosnippet>1037</a><span class="attr">#[derive(Default)]
+<a href=#1038 id=1038 data-nosnippet>1038</a></span><span class="kw">struct </span>PollProgress {
+<a href=#1039 id=1039 data-nosnippet>1039</a>    <span class="doccomment">/// Whether a datagram was routed to an existing connection
+<a href=#1040 id=1040 data-nosnippet>1040</a>    </span>received_connection_packet: bool,
+<a href=#1041 id=1041 data-nosnippet>1041</a>    <span class="doccomment">/// Whether datagram handling was interrupted early by the work limiter for fairness
+<a href=#1042 id=1042 data-nosnippet>1042</a>    </span>keep_going: bool,
+<a href=#1043 id=1043 data-nosnippet>1043</a>}</code></pre></div></section></main></body></html>
