@@ -1,6 +1,7 @@
 use std::{
     ffi::{c_int, c_uchar},
     ptr,
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 #[cfg(unix)]
@@ -11,7 +12,7 @@ mod imp;
 #[path = "windows.rs"]
 mod imp;
 
-pub(crate) use imp::Aligned;
+pub(crate) use imp::{PAYLOAD_ALIGN, RecvBuf, SendBuf};
 
 /// Helper to encode a series of control messages (native "cmsgs") to a buffer for use in `sendmsg`
 //  like API.
@@ -39,11 +40,18 @@ impl<'a, M: MsgHdr> Encoder<'a, M> {
 
     /// Append a control message to the buffer.
     ///
+    /// Private: each message we send has its own method, declared next to the buffer size
+    /// covering it.
+    ///
     /// # Panics
     /// - If insufficient buffer space remains.
-    /// - If `T` has stricter alignment requirements than `M::ControlMessage`
-    pub(crate) fn push<T: Copy>(&mut self, level: c_int, ty: c_int, value: T) {
-        assert!(align_of::<T>() <= align_of::<M::ControlMessage>());
+    fn push<T: Copy>(&mut self, level: c_int, ty: c_int, value: T) {
+        const {
+            assert!(
+                align_of::<T>() <= PAYLOAD_ALIGN,
+                "control message payload is more aligned than a control message buffer can be",
+            );
+        }
         let space = M::ControlMessage::cmsg_space(size_of_val(&value));
         assert!(
             self.hdr.control_len() >= self.len + space,
@@ -74,11 +82,32 @@ impl<M: MsgHdr> Drop for Encoder<'_, M> {
     }
 }
 
+/// Warns once if the kernel had more to say about a datagram than the buffer could hold.
+///
+/// Dropped control messages mean lost metadata, in the worst case the GRO segment size,
+/// which leaves a coalesced datagram looking like a single one. `RECV_LEN` covers every
+/// option we enable, so this means either a new one is unaccounted for, or the caller
+/// enabled one of their own on the socket they gave us.
+pub(crate) fn warn_if_control_truncated(hdr: &impl MsgHdr) {
+    static WARNED: AtomicBool = AtomicBool::new(false);
+
+    if hdr.recv_flags() & imp::MSG_CTRUNC != 0 && !WARNED.swap(true, Ordering::Relaxed) {
+        crate::log::warn!(
+            "control messages truncated on receive, some datagram metadata was dropped"
+        );
+    }
+}
+
 /// # Safety
 ///
 /// `cmsg` must refer to a native cmsg containing a payload of type `T`
 pub(crate) unsafe fn decode<T: Copy, C: CMsgHdr>(cmsg: &impl CMsgHdr) -> T {
-    assert!(align_of::<T>() <= align_of::<C>());
+    const {
+        assert!(
+            align_of::<T>() <= PAYLOAD_ALIGN,
+            "control message payload is more aligned than a control message buffer can be",
+        );
+    }
     debug_assert_eq!(cmsg.len(), C::cmsg_len(size_of::<T>()));
     unsafe { ptr::read(cmsg.cmsg_data() as *const T) }
 }
@@ -138,6 +167,9 @@ pub(crate) trait MsgHdr {
     fn set_control_len(&mut self, len: usize);
 
     fn control_len(&self) -> usize;
+
+    /// The flags the kernel set on a received message, i.e. `msg_flags`.
+    fn recv_flags(&self) -> c_int;
 }
 
 pub(crate) trait CMsgHdr {
@@ -151,6 +183,3 @@ pub(crate) trait CMsgHdr {
 
     fn len(&self) -> usize;
 }
-
-#[cfg(unix)]
-pub(crate) const LEN: usize = 96;
