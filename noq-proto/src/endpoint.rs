@@ -1047,7 +1047,8 @@ struct ConnectionIndex {
     /// necessarily know what address we're sending from, and hence receiving at.
     ///
     /// Uses a standard `HashMap` to protect against hash collision attacks.
-    // TODO(matheus23): It's possible this could be changed now that we track the full 4-tuple on the client side, too.
+    // TODO(matheus23): It's possible this could be changed now that we track the full 4-tuple on
+    // the client side, too.
     outgoing_connection_remotes: HashMap<SocketAddr, ConnectionHandle>,
     /// Reset tokens provided by the peer for the CID each connection is currently sending to
     ///
@@ -1193,7 +1194,8 @@ pub(crate) struct ConnectionMeta {
     ///
     /// Each path has its own active CID. We use the [`PathId`] as a unique index, allowing
     /// us to retire the reset token when a path is abandoned.
-    // TODO(matheus23): Should be migrated to make reset tokens per 4-tuple instead of per remote addr
+    // TODO(matheus23): Should be migrated to make reset tokens per 4-tuple instead of per remote
+    // addr
     reset_token: FxHashMap<PathId, (SocketAddr, ResetToken)>,
 }
 
@@ -1298,7 +1300,8 @@ impl Incoming {
     /// Decrypt the Initial packet payload
     ///
     /// This clones and decrypts the packet payload (~1200 bytes).
-    /// Can be used to extract information from the TLS ClientHello without completing the handshake.
+    /// Can be used to extract information from the TLS ClientHello without completing the
+    /// handshake.
     pub fn decrypt(&self) -> Option<DecryptedInitial> {
         let packet_number = self.packet.header.number.expand(0);
         let mut payload = self.packet.payload.clone();

@@ -26,9 +26,10 @@ pub(crate) struct Encoder<'a, M: MsgHdr> {
 
 impl<'a, M: MsgHdr> Encoder<'a, M> {
     /// # Safety
-    /// - `hdr` must contain a suitably aligned pointer to a big enough buffer to hold control messages
-    ///   bytes. All bytes of this buffer can be safely written.
-    /// - The `Encoder` must be dropped before `hdr` is passed to a system call, and must not be leaked.
+    /// - `hdr` must contain a suitably aligned pointer to a big enough buffer to hold control
+    ///   messages bytes. All bytes of this buffer can be safely written.
+    /// - The `Encoder` must be dropped before `hdr` is passed to a system call, and must not be
+    ///   leaked.
     pub(crate) unsafe fn new(hdr: &'a mut M) -> Self {
         Self {
             cmsg: unsafe { hdr.cmsg_first_hdr().as_mut() },

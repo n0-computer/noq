@@ -90,11 +90,12 @@ impl<'a> Streams<'a> {
 
     /// The number of remotely initiated open streams of a certain directionality.
     ///
-    /// Includes remotely initiated streams, which have not been accepted via [`accept`](Self::accept).
-    /// These streams count against the respective concurrency limit reported by
+    /// Includes remotely initiated streams, which have not been accepted via
+    /// [`accept`](Self::accept). These streams count against the respective concurrency limit
+    /// reported by
     /// [`Connection::max_concurrent_streams`](super::Connection::max_concurrent_streams).
     pub fn remote_open_streams(&self, dir: Dir) -> u64 {
-        // total opened - total closed = total opened - ( total permitted - total permitted unclosed )
+        // total opened - total closed = total opened - (total permitted - total permitted unclosed)
         self.state.next_remote[dir as usize]
             - (self.state.max_remote[dir as usize]
                 - self.state.allocated_remote_count[dir as usize])
@@ -391,11 +392,13 @@ impl<'a> SendStream<'a> {
 /// A queue of streams with pending outgoing data, sorted by priority
 struct PendingStreamsQueue {
     streams: BinaryHeap<PendingStream>,
-    /// The next stream to write out. This is `Some` when `TransportConfig::send_fairness(false)` and writing a stream is
-    /// interrupted while the stream still has some pending data. See `reinsert_pending()`.
+    /// The next stream to write out. This is `Some` when `TransportConfig::send_fairness(false)`
+    /// and writing a stream is interrupted while the stream still has some pending data. See
+    /// `reinsert_pending()`.
     next: Option<PendingStream>,
-    /// A monotonically decreasing counter, used to implement round-robin scheduling for streams of the same priority.
-    /// Underflowing is not a practical concern, as it is initialized to u64::MAX and only decremented by 1 in `push_pending`
+    /// A monotonically decreasing counter, used to implement round-robin scheduling for streams of
+    /// the same priority. Underflowing is not a practical concern, as it is initialized to
+    /// u64::MAX and only decremented by 1 in `push_pending`
     recency: u64,
 }
 
@@ -419,16 +422,18 @@ impl PendingStreamsQueue {
         });
     }
 
-    /// Push a pending stream ID with the given priority, queued after any already-queued streams for the priority
+    /// Push a pending stream ID with the given priority, queued after any already-queued streams
+    /// for the priority
     fn push_pending(&mut self, id: StreamId, priority: i32) {
         // Note that in the case where fairness is disabled, if we have a reinserted stream we don't
         // bump it even if priority > next.priority. In order to minimize fragmentation we
         // always try to complete a stream once part of it has been written.
 
-        // As the recency counter is monotonically decreasing, we know that using its value to sort this stream will queue it
-        // after all other queued streams of the same priority.
-        // This is enough to implement round-robin scheduling for streams that are still pending even after being handled,
-        // as in that case they are removed from the `BinaryHeap`, handled, and then immediately reinserted.
+        // As the recency counter is monotonically decreasing, we know that using its value to sort
+        // this stream will queue it after all other queued streams of the same priority.
+        // This is enough to implement round-robin scheduling for streams that are still pending
+        // even after being handled, as in that case they are removed from the `BinaryHeap`,
+        // handled, and then immediately reinserted.
         self.recency -= 1;
         self.streams.push(PendingStream {
             priority,
@@ -460,18 +465,20 @@ impl PendingStreamsQueue {
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct PendingStream {
     /// The priority of the stream
-    // Note that this field should be kept above the `recency` field, in order for the `Ord` derive to be correct
-    // (See https://doc.rust-lang.org/stable/std/cmp/trait.Ord.html#derivable)
+    // Note that this field should be kept above the `recency` field, in order for the `Ord` derive
+    // to be correct (See https://doc.rust-lang.org/stable/std/cmp/trait.Ord.html#derivable)
     priority: i32,
-    /// A tie-breaker for streams of the same priority, used to improve fairness by implementing round-robin scheduling:
-    /// Larger values are prioritized, so it is initialised to `u64::MAX`, and when a stream writes data, we know
-    /// that it currently has the highest recency value, so it is deprioritized by setting its recency to 1 less than the
-    /// previous lowest recency value, such that all other streams of this priority will get processed once before we get back
-    /// round to this one
+    /// A tie-breaker for streams of the same priority, used to improve fairness by implementing
+    /// round-robin scheduling: Larger values are prioritized, so it is initialised to
+    /// `u64::MAX`, and when a stream writes data, we know that it currently has the highest
+    /// recency value, so it is deprioritized by setting its recency to 1 less than the
+    /// previous lowest recency value, such that all other streams of this priority will get
+    /// processed once before we get back round to this one
     recency: u64,
     /// The ID of the stream
-    // The way this type is used ensures that every instance has a unique `recency` value, so this field should be kept below
-    // the `priority` and `recency` fields, so that it does not interfere with the behaviour of the `Ord` derive
+    // The way this type is used ensures that every instance has a unique `recency` value, so this
+    // field should be kept below the `priority` and `recency` fields, so that it does not
+    // interfere with the behaviour of the `Ord` derive
     id: StreamId,
 }
 
