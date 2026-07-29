@@ -72,19 +72,15 @@ pub(crate) const RECV_LEN: usize = 3 * MESSAGE_LEN;
 
 /// A control message buffer of `N` bytes.
 ///
-/// The alignment is what the `WSA_CMSG_*` macros lay messages out at, i.e.
-/// [`PAYLOAD_ALIGN`]. It is a literal because `repr(align)` takes no expression, so the
-/// assertion below is what keeps it honest.
+/// Aligned like a `usize`, which is what `WSA_CMSGDATA_ALIGN` rounds to, i.e.
+/// [`PAYLOAD_ALIGN`]. The zero sized field is how a type borrows another's alignment,
+/// `repr(align)` taking a literal rather than an expression.
 #[derive(Copy, Clone)]
-#[repr(align(16))]
+#[repr(C)]
 pub(crate) struct ControlBuf<const N: usize> {
+    _align: [usize; 0],
     bytes: [MaybeUninit<u8>; N],
 }
-
-const _: () = assert!(
-    mem::align_of::<ControlBuf<0>>() >= PAYLOAD_ALIGN,
-    "control message buffers are less aligned than the platform lays messages out at",
-);
 
 /// Control message buffer for one `WSASendMsg`.
 pub(crate) type SendBuf = ControlBuf<SEND_LEN>;
@@ -96,6 +92,7 @@ impl<const N: usize> ControlBuf<N> {
     /// A zeroed buffer.
     pub(crate) const fn zeroed() -> Self {
         Self {
+            _align: [],
             bytes: [MaybeUninit::new(0); N],
         }
     }

@@ -48,16 +48,18 @@ const fn common_align(a: usize, b: usize) -> usize {
     1 << (a | b).trailing_zeros()
 }
 
-/// The alignment control messages are laid out at.
+/// The alignment a control message payload is guaranteed to have.
 ///
 /// A payload sits `CMSG_LEN(0)` bytes into its message and messages sit a sum of
-/// `CMSG_SPACE` values into the buffer, so this is the alignment those offsets share, and
-/// what a payload has given a buffer aligned to at least as much. It is a property of the
-/// platform, not of our payloads: the spread runs from 4 bytes on Darwin and the Solarish
-/// platforms to 16 on NetBSD and OpenBSD on sparc64, so take it from their own macros
-/// rather than restating it here. Checked against real pointers by `payloads_are_aligned`.
-pub(crate) const PAYLOAD_ALIGN: usize =
-    common_align(unsafe { libc::CMSG_LEN(0) } as usize, cmsg_space(1));
+/// `CMSG_SPACE` values into the buffer, so it is the alignment those offsets share, and no
+/// more than [`ControlBuf`] itself has. Both come from the platform rather than from our
+/// payloads: the macros round to anything from 4 bytes on Darwin and the Solarish
+/// platforms to 16 on NetBSD and OpenBSD on sparc64, where the buffer is the weaker of the
+/// two. Checked against real pointers by `payloads_are_aligned`.
+pub(crate) const PAYLOAD_ALIGN: usize = common_align(
+    common_align(unsafe { libc::CMSG_LEN(0) } as usize, cmsg_space(1)),
+    align_of::<ControlBuf<0>>(),
+);
 
 /// Space for one control message carrying any of our payloads.
 const MESSAGE_LEN: usize = cmsg_space(size_of::<Payload>());
@@ -76,20 +78,15 @@ pub(crate) const RECV_LEN: usize = 4 * MESSAGE_LEN;
 
 /// A control message buffer of `N` bytes.
 ///
-/// The alignment is what the `CMSG_*` macros lay messages out at, i.e. [`PAYLOAD_ALIGN`];
-/// 16 covers every platform we support, NetBSD and OpenBSD on sparc64 being the strictest.
-/// It is a literal because `repr(align)` takes no expression, so the assertion below is
-/// what keeps it honest.
+/// Aligned like a `size_t`, which is what the `CMSG_*` macros round their offsets to. The
+/// zero sized field is how a type borrows another's alignment, `repr(align)` taking a
+/// literal rather than an expression.
 #[derive(Copy, Clone)]
-#[repr(align(16))]
+#[repr(C)]
 pub(crate) struct ControlBuf<const N: usize> {
+    _align: [usize; 0],
     bytes: [MaybeUninit<u8>; N],
 }
-
-const _: () = assert!(
-    align_of::<ControlBuf<0>>() >= PAYLOAD_ALIGN,
-    "control message buffers are less aligned than the platform lays messages out at",
-);
 
 /// Control message buffer for one `sendmsg`.
 pub(crate) type SendBuf = ControlBuf<SEND_LEN>;
@@ -101,6 +98,7 @@ impl<const N: usize> ControlBuf<N> {
     /// A zeroed buffer, for sending.
     pub(crate) const fn zeroed() -> Self {
         Self {
+            _align: [],
             bytes: [MaybeUninit::new(0); N],
         }
     }
@@ -108,6 +106,7 @@ impl<const N: usize> ControlBuf<N> {
     /// An uninitialised buffer, for receiving: the kernel initialises what it uses.
     pub(crate) const fn uninit() -> Self {
         Self {
+            _align: [],
             bytes: [MaybeUninit::uninit(); N],
         }
     }
