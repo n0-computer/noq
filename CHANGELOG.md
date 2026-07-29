@@ -2,6 +2,14 @@
 
 All notable changes to noq will be documented in this file.
 
+
+## [1.1.1](https://github.com/n0-computer/noq/compare/noq-v1.1.0..1.1.1) - 2026-07-29
+
+### 🐛 Bug Fixes
+
+- *(udp)* Disable SO_TIMESTAMPNS for now ([#776](https://github.com/n0-computer/noq/issues/776)) - ([8d06fdf](https://github.com/n0-computer/noq/commit/8d06fdf21ae8f40ef4cd8d344f9aea0bd5ca4bfa))
+
+
 ## [1.1.0](https://github.com/n0-computer/noq/compare/noq-v1.0.1..1.1.0) - 2026-07-20
 
 ### ⛰️  Features
@@ -149,5 +157,3 @@ All notable changes to noq will be documented in this file.
 - Attempt at drafting a readme ([#467](https://github.com/n0-computer/noq/issues/467)) - ([e71b78b](https://github.com/n0-computer/noq/commit/e71b78b88a9d44eee6d7aaa61f1ad2b603fbf6d4))
 - Release prep - ([13695a4](https://github.com/n0-computer/noq/commit/13695a47ab1d0c151c536e0f3e5c07b80b315c44))
 - Release - ([faeddf5](https://github.com/n0-computer/noq/commit/faeddf58eed8b9b30a153aed5d9acee570934837))
-
-
