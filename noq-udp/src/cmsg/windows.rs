@@ -1,6 +1,7 @@
 use std::{
     ffi::{c_int, c_uchar},
-    mem::MaybeUninit,
+    mem::{self, MaybeUninit},
+    ptr,
 };
 
 use windows_sys::Win32::Networking::WinSock;
@@ -27,7 +28,7 @@ pub(crate) union Payload {
 /// `WSA_CMSG_DATA` rounds the header size up to this and `WSA_CMSG_SPACE` keeps every
 /// following header at a multiple of it, so payloads are this aligned as long as the
 /// buffer is, which [`Payload`] ensures.
-pub(crate) const PAYLOAD_ALIGN: usize = align_of::<usize>();
+pub(crate) const PAYLOAD_ALIGN: usize = mem::align_of::<usize>();
 
 /// Set in `dwFlags` when control messages did not fit in the buffer.
 pub(crate) const MSG_CTRUNC: c_int = WinSock::MSG_CTRUNC as c_int;
@@ -37,7 +38,7 @@ pub(crate) const MSG_CTRUNC: c_int = WinSock::MSG_CTRUNC as c_int;
 
 /// `WSA_CMSG_ALIGN`, which control message headers are aligned to.
 const fn cmsghdr_align(len: usize) -> usize {
-    (len + align_of::<WinSock::CMSGHDR>() - 1) & !(align_of::<WinSock::CMSGHDR>() - 1)
+    (len + mem::align_of::<WinSock::CMSGHDR>() - 1) & !(mem::align_of::<WinSock::CMSGHDR>() - 1)
 }
 
 /// `WSA_CMSGDATA_ALIGN`, which control message payloads are aligned to.
@@ -47,16 +48,16 @@ const fn cmsgdata_align(len: usize) -> usize {
 
 /// `WSA_CMSG_LEN`, the value of `cmsg_len` for a payload of `payload_len` bytes.
 const fn cmsg_len(payload_len: usize) -> usize {
-    cmsgdata_align(size_of::<WinSock::CMSGHDR>()) + payload_len
+    cmsgdata_align(mem::size_of::<WinSock::CMSGHDR>()) + payload_len
 }
 
 /// `WSA_CMSG_SPACE`, the buffer space one control message with this payload takes up.
 const fn cmsg_space(payload_len: usize) -> usize {
-    cmsgdata_align(size_of::<WinSock::CMSGHDR>() + cmsghdr_align(payload_len))
+    cmsgdata_align(mem::size_of::<WinSock::CMSGHDR>() + cmsghdr_align(payload_len))
 }
 
 /// Space for one control message carrying any of our payloads.
-const MESSAGE_LEN: usize = cmsg_space(size_of::<Payload>());
+const MESSAGE_LEN: usize = cmsg_space(mem::size_of::<Payload>());
 
 /// Space for the control messages one `WSASendMsg` can carry.
 ///
@@ -147,10 +148,10 @@ impl MsgHdr for WinSock::WSAMSG {
     type ControlMessage = WinSock::CMSGHDR;
 
     fn cmsg_first_hdr(&self) -> *mut Self::ControlMessage {
-        if self.Control.len as usize >= size_of::<WinSock::CMSGHDR>() {
+        if self.Control.len as usize >= mem::size_of::<WinSock::CMSGHDR>() {
             self.Control.buf as *mut WinSock::CMSGHDR
         } else {
-            std::ptr::null_mut::<WinSock::CMSGHDR>()
+            ptr::null_mut::<WinSock::CMSGHDR>()
         }
     }
 
@@ -159,7 +160,7 @@ impl MsgHdr for WinSock::WSAMSG {
             (cmsg as *const _ as usize + cmsghdr_align(cmsg.cmsg_len)) as *mut WinSock::CMSGHDR;
         let max = self.Control.buf as usize + self.Control.len as usize;
         if unsafe { next.offset(1) } as usize > max {
-            std::ptr::null_mut()
+            ptr::null_mut()
         } else {
             next
         }
@@ -191,7 +192,7 @@ impl CMsgHdr for WinSock::CMSGHDR {
     }
 
     fn cmsg_data(&self) -> *mut c_uchar {
-        (self as *const _ as usize + cmsgdata_align(size_of::<Self>())) as *mut c_uchar
+        (self as *const _ as usize + cmsgdata_align(mem::size_of::<Self>())) as *mut c_uchar
     }
 
     fn set(&mut self, level: c_int, ty: c_int, len: usize) {
