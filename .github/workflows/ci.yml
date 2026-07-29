@@ -72,8 +72,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Each target runs on a runner of its own architecture, so the tests
-          # run natively rather than under emulation.
+          # musl binaries are statically linked, and each target runs on a runner
+          # of its own architecture, so the tests run natively.
           - target: aarch64-unknown-linux-musl
             runner: ubuntu-24.04-arm
           - target: x86_64-unknown-linux-musl
@@ -100,8 +100,6 @@ jobs:
         uses: taiki-e/install-action@v2
         with:
           tool: nextest@0.9.80
-      # The musl binaries are statically linked, so they run as-is on the
-      # runner; no emulation or test runner needed.
       - name: Run tests
         run: |
           cargo nextest run --locked --workspace --exclude fuzz --lib --bins --tests --target ${{ matrix.target }} --profile ci
