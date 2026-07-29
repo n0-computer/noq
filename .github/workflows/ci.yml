@@ -64,6 +64,48 @@ jobs:
       - name: Build and test noq-udp (posix_minimal)
         run: cargo test --locked -p noq-udp
 
+  test_musl:
+    name: Test ${{ matrix.target }}
+    if: "github.event_name != 'pull_request' || ! contains(github.event.pull_request.labels.*.name, 'flaky-test')"
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # musl binaries are statically linked, and each target runs on a runner
+          # of its own architecture, so the tests run natively.
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
+    env:
+      RUSTC_WRAPPER: "sccache"
+      SCCACHE_GHA_ENABLED: "on"
+      # When cross-compiling to musl, cc-rs looks for `<arch>-linux-musl-gcc`,
+      # but `musl-tools` only ships the host-native `musl-gcc`.
+      CC_aarch64_unknown_linux_musl: musl-gcc
+      CC_x86_64_unknown_linux_musl: musl-gcc
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          target: ${{ matrix.target }}
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Install musl toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest@0.9.80
+      - name: Run tests
+        run: |
+          cargo nextest run --locked --workspace --exclude fuzz --lib --bins --tests --target ${{ matrix.target }} --profile ci
+        env:
+          RUST_LOG: ${{ runner.debug && 'TRACE' || 'DEBUG'}}
+
   esp32_check:
     name: ESP32-C3 build check (noq-udp, noq-proto, noq)
     if: "github.event_name != 'pull_request' || ! contains(github.event.pull_request.labels.*.name, 'flaky-test')"
