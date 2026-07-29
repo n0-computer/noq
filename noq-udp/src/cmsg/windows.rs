@@ -10,11 +10,11 @@ use super::{CMsgHdr, Encoder, MsgHdr};
 
 /// Every payload we put into, or read out of, a control message on this platform.
 ///
-/// A control message buffer must be aligned for the payloads it carries, and a union's
-/// alignment is the strictest of its fields.
+/// A payload slot has to hold any one of these, so the largest of them is what sizes a
+/// message. Listing them as a union is what lets the compiler work that out.
 #[derive(Copy, Clone)]
 #[repr(C)]
-#[allow(dead_code)] // the fields are here for their alignment, nothing reads them
+#[allow(dead_code)] // the fields are here for their size, nothing reads them
 pub(crate) union Payload {
     hdr: WinSock::CMSGHDR,
     ecn: c_int,
@@ -23,11 +23,11 @@ pub(crate) union Payload {
     pktinfo_v6: WinSock::IN6_PKTINFO,
 }
 
-/// The alignment a control message payload is guaranteed to have.
+/// The alignment control messages are laid out at.
 ///
 /// `WSA_CMSG_DATA` rounds the header size up to this and `WSA_CMSG_SPACE` keeps every
-/// following header at a multiple of it, so payloads are this aligned as long as the
-/// buffer is, which [`Payload`] ensures.
+/// following header at a multiple of it, so this is what a payload has given a buffer
+/// aligned to at least as much.
 pub(crate) const PAYLOAD_ALIGN: usize = mem::align_of::<usize>();
 
 /// Set in `dwFlags` when control messages did not fit in the buffer.
@@ -70,14 +70,21 @@ pub(crate) const SEND_LEN: usize = 3 * MESSAGE_LEN;
 /// The ECN codepoint, the packet info and the URO coalesced size, one each.
 pub(crate) const RECV_LEN: usize = 3 * MESSAGE_LEN;
 
-/// A control message buffer of `N` bytes, aligned for every [`Payload`].
+/// A control message buffer of `N` bytes.
+///
+/// The alignment is what the `WSA_CMSG_*` macros lay messages out at, i.e.
+/// [`PAYLOAD_ALIGN`]. It is a literal because `repr(align)` takes no expression, so the
+/// assertion below is what keeps it honest.
 #[derive(Copy, Clone)]
-#[repr(C)]
+#[repr(align(16))]
 pub(crate) struct ControlBuf<const N: usize> {
-    /// Zero sized, present only to give the buffer [`Payload`]'s alignment.
-    _align: [Payload; 0],
     bytes: [MaybeUninit<u8>; N],
 }
+
+const _: () = assert!(
+    mem::align_of::<ControlBuf<0>>() >= PAYLOAD_ALIGN,
+    "control message buffers are less aligned than the platform lays messages out at",
+);
 
 /// Control message buffer for one `WSASendMsg`.
 pub(crate) type SendBuf = ControlBuf<SEND_LEN>;
@@ -89,7 +96,6 @@ impl<const N: usize> ControlBuf<N> {
     /// A zeroed buffer.
     pub(crate) const fn zeroed() -> Self {
         Self {
-            _align: [],
             bytes: [MaybeUninit::new(0); N],
         }
     }

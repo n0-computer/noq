@@ -10,13 +10,11 @@ use crate::imp::IpTosTy;
 
 /// Every payload we put into, or read out of, a control message on this platform.
 ///
-/// A control message buffer must be aligned for the payloads it carries, and a union's
-/// alignment is the strictest of its fields. [`libc::cmsghdr`] on its own is not enough:
-/// musl declares it with `socklen_t` and `c_int` fields (alignment 4) where glibc uses
-/// `size_t` (alignment 8), yet both carry payloads like [`libc::timespec`] needing 8.
+/// A payload slot has to hold any one of these, so the largest of them is what sizes a
+/// message. Listing them as a union is what lets the compiler work that out.
 #[derive(Copy, Clone)]
 #[repr(C)]
-#[allow(dead_code)] // the fields are here for their alignment, nothing reads them
+#[allow(dead_code)] // the fields are here for their size, nothing reads them
 pub(crate) union Payload {
     hdr: libc::cmsghdr,
     #[cfg(not(target_os = "netbsd"))]
@@ -50,18 +48,16 @@ const fn common_align(a: usize, b: usize) -> usize {
     1 << (a | b).trailing_zeros()
 }
 
-/// The alignment a control message payload is guaranteed to have.
+/// The alignment control messages are laid out at.
 ///
-/// A payload sits `CMSG_LEN(0)` bytes into its message, and messages sit a sum of
-/// `CMSG_SPACE` values into the buffer, so a payload can only be assumed to have the
-/// alignment those offsets share, and no more than the buffer itself has. The platforms
-/// spread wider than they look, from 4 bytes on Darwin and the Solarish platforms to 16 on
-/// NetBSD and OpenBSD on sparc64, so this takes it from their own macros rather than
-/// restating it here. Checked against real pointers by `payloads_are_aligned`.
-pub(crate) const PAYLOAD_ALIGN: usize = common_align(
-    common_align(unsafe { libc::CMSG_LEN(0) } as usize, cmsg_space(1)),
-    align_of::<Payload>(),
-);
+/// A payload sits `CMSG_LEN(0)` bytes into its message and messages sit a sum of
+/// `CMSG_SPACE` values into the buffer, so this is the alignment those offsets share, and
+/// what a payload has given a buffer aligned to at least as much. It is a property of the
+/// platform, not of our payloads: the spread runs from 4 bytes on Darwin and the Solarish
+/// platforms to 16 on NetBSD and OpenBSD on sparc64, so take it from their own macros
+/// rather than restating it here. Checked against real pointers by `payloads_are_aligned`.
+pub(crate) const PAYLOAD_ALIGN: usize =
+    common_align(unsafe { libc::CMSG_LEN(0) } as usize, cmsg_space(1));
 
 /// Space for one control message carrying any of our payloads.
 const MESSAGE_LEN: usize = cmsg_space(size_of::<Payload>());
@@ -78,14 +74,22 @@ pub(crate) const SEND_LEN: usize = 3 * MESSAGE_LEN;
 /// timestamp, one each, matching the socket options `UdpSocketState::new` enables.
 pub(crate) const RECV_LEN: usize = 4 * MESSAGE_LEN;
 
-/// A control message buffer of `N` bytes, aligned for every [`Payload`].
+/// A control message buffer of `N` bytes.
+///
+/// The alignment is what the `CMSG_*` macros lay messages out at, i.e. [`PAYLOAD_ALIGN`];
+/// 16 covers every platform we support, NetBSD and OpenBSD on sparc64 being the strictest.
+/// It is a literal because `repr(align)` takes no expression, so the assertion below is
+/// what keeps it honest.
 #[derive(Copy, Clone)]
-#[repr(C)]
+#[repr(align(16))]
 pub(crate) struct ControlBuf<const N: usize> {
-    /// Zero sized, present only to give the buffer [`Payload`]'s alignment.
-    _align: [Payload; 0],
     bytes: [MaybeUninit<u8>; N],
 }
+
+const _: () = assert!(
+    align_of::<ControlBuf<0>>() >= PAYLOAD_ALIGN,
+    "control message buffers are less aligned than the platform lays messages out at",
+);
 
 /// Control message buffer for one `sendmsg`.
 pub(crate) type SendBuf = ControlBuf<SEND_LEN>;
@@ -97,7 +101,6 @@ impl<const N: usize> ControlBuf<N> {
     /// A zeroed buffer, for sending.
     pub(crate) const fn zeroed() -> Self {
         Self {
-            _align: [],
             bytes: [MaybeUninit::new(0); N],
         }
     }
@@ -105,7 +108,6 @@ impl<const N: usize> ControlBuf<N> {
     /// An uninitialised buffer, for receiving: the kernel initialises what it uses.
     pub(crate) const fn uninit() -> Self {
         Self {
-            _align: [],
             bytes: [MaybeUninit::uninit(); N],
         }
     }
@@ -274,8 +276,9 @@ mod tests {
 
     /// Every payload in a full buffer is aligned for the type read out of it.
     ///
-    /// What `cmsg::decode` relies on, and what breaks on musl if the buffer takes its
-    /// alignment from `libc::cmsghdr` rather than from the payloads.
+    /// What `cmsg::decode` relies on, and what breaks on musl if the buffer is aligned for
+    /// `libc::cmsghdr` (4 bytes there, 8 on glibc) rather than for the layout the `CMSG_*`
+    /// macros use.
     #[test]
     fn payloads_are_aligned() {
         let mut buf = RecvBuf::zeroed();
