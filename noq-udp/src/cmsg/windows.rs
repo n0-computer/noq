@@ -11,8 +11,9 @@ use super::{CMsgHdr, Encoder, MsgHdr};
 /// Every payload we put into, or read out of, a control message on this platform.
 ///
 /// A payload slot holds any one of these, so the largest of them sizes a message.
-// https://learn.microsoft.com/en-us/windows/win32/api/ws2ipdef/ns-ws2ipdef-in_pktinfo
-// https://learn.microsoft.com/en-us/windows/win32/api/ws2ipdef/ns-ws2ipdef-in6_pktinfo
+///
+/// <https://learn.microsoft.com/en-us/windows/win32/api/ws2ipdef/ns-ws2ipdef-in_pktinfo>
+/// <https://learn.microsoft.com/en-us/windows/win32/api/ws2ipdef/ns-ws2ipdef-in6_pktinfo>
 #[derive(Copy, Clone)]
 #[repr(C)]
 #[allow(dead_code)] // the fields are here for their size, nothing reads them
@@ -34,7 +35,7 @@ pub(crate) const PAYLOAD_ALIGN: usize = mem::align_of::<usize>();
 pub(crate) const MSG_CTRUNC: c_int = WinSock::MSG_CTRUNC as c_int;
 
 // The four functions below follow the C macros in
-// https://github.com/microsoft/win32metadata/blob/main/generation/WinSDK/RecompiledIdlHeaders/shared/ws2def.h#L741
+// <https://github.com/microsoft/win32metadata/blob/main/generation/WinSDK/RecompiledIdlHeaders/shared/ws2def.h#L741>
 
 /// `WSA_CMSG_ALIGN`, which control message headers are aligned to.
 const fn cmsghdr_align(len: usize) -> usize {
@@ -143,8 +144,9 @@ impl<M: MsgHdr<ControlMessage = WinSock::CMSGHDR>> Encoder<'_, M> {
 }
 
 /// Helpers for [`WinSock::WSAMSG`]
-// https://learn.microsoft.com/en-us/windows/win32/api/ws2def/ns-ws2def-wsamsg
-// https://microsoft.github.io/windows-docs-rs/doc/windows/Win32/Networking/WinSock/struct.WSAMSG.html
+///
+/// <https://learn.microsoft.com/en-us/windows/win32/api/ws2def/ns-ws2def-wsamsg>
+/// <https://microsoft.github.io/windows-docs-rs/doc/windows/Win32/Networking/WinSock/struct.WSAMSG.html>
 impl MsgHdr for WinSock::WSAMSG {
     type ControlMessage = WinSock::CMSGHDR;
 
@@ -181,8 +183,9 @@ impl MsgHdr for WinSock::WSAMSG {
 }
 
 /// Helpers for [`WinSock::CMSGHDR`]
-// https://learn.microsoft.com/en-us/windows/win32/api/ws2def/ns-ws2def-wsacmsghdr
-// https://microsoft.github.io/windows-docs-rs/doc/windows/Win32/Networking/WinSock/struct.CMSGHDR.html
+///
+/// <https://learn.microsoft.com/en-us/windows/win32/api/ws2def/ns-ws2def-wsacmsghdr>
+/// <https://microsoft.github.io/windows-docs-rs/doc/windows/Win32/Networking/WinSock/struct.CMSGHDR.html>
 impl CMsgHdr for WinSock::CMSGHDR {
     fn cmsg_len(length: usize) -> usize {
         cmsg_len(length)

@@ -36,7 +36,8 @@ pub(crate) union Payload {
 pub(crate) const MSG_CTRUNC: c_int = libc::MSG_CTRUNC;
 
 /// The buffer space one control message with a payload of this size takes up.
-// https://man7.org/linux/man-pages/man3/cmsg.3.html
+///
+/// <https://man7.org/linux/man-pages/man3/cmsg.3.html>
 const fn cmsg_space(payload_len: usize) -> usize {
     unsafe { libc::CMSG_SPACE(payload_len as _) as usize }
 }
@@ -268,8 +269,9 @@ mod tests {
     ///
     /// What `cmsg::decode` relies on. musl aligns `cmsghdr` to 4 where glibc aligns it to
     /// 8, so aligning the buffer for it rather than for the macros breaks there.
-    // https://github.com/kraj/musl/blob/master/include/sys/socket.h#L44
-    // https://github.com/bminor/glibc/blob/master/sysdeps/unix/sysv/linux/bits/socket.h#L283
+    ///
+    /// <https://git.musl-libc.org/cgit/musl/tree/include/sys/socket.h#n44>
+    /// <https://sourceware.org/git/gitweb.cgi?p=glibc.git;a=blob;f=sysdeps/unix/sysv/linux/bits/socket.h#l283>
     #[test]
     fn payloads_are_aligned() {
         let mut buf = RecvBuf::zeroed();
