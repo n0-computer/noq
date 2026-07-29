@@ -840,8 +840,8 @@ impl Connection {
 
     /// Sets the max_idle_timeout for a specific path.
     ///
-    /// The PathIdle timer is immediately re-armed accounting for already-elapsed
-    /// idle time. Setting `None` disables the timeout and stops the timer.
+    /// If `Some`, the path idle timer is immediately re-armed. Setting `None` disables the timeout
+    /// and stops the timer.
     ///
     /// See [`TransportConfig::default_path_max_idle_timeout`] for details.
     ///
@@ -856,29 +856,40 @@ impl Connection {
             .paths
             .get_mut(&path_id)
             .ok_or(ClosedPath { _private: () })?;
-        let prev = mem::replace(&mut path.data.idle_timeout, timeout);
+        let prev_timeout = mem::replace(&mut path.data.idle_timeout, timeout);
 
-        // Adjust the PathIdle timer, accounting for already-elapsed idle time.
-        if !self.state.is_closed() {
-            if let Some(new_timeout) = timeout {
-                let timer = Timer::PerPath(path_id, PathTimer::PathIdle);
-                let deadline = match (prev, self.timers.get(timer)) {
-                    (Some(old_timeout), Some(old_deadline)) => {
-                        let last_activity = old_deadline.checked_sub(old_timeout).unwrap_or(now);
-                        last_activity + new_timeout
-                    }
-                    _ => now + new_timeout,
-                };
-                self.timers.set(timer, deadline, self.qlog.with_time(now));
-            } else {
-                self.timers.stop(
-                    Timer::PerPath(path_id, PathTimer::PathIdle),
-                    self.qlog.with_time(now),
-                );
-            }
+        // The expiration instant of the timer should generally be computed from the last time the
+        // path was active. This reference instance is, however, not possible to be recovered.
+        // Previous attempts used the expiration instant and previous setting to get a "last
+        // activity" instant. Since the timer is extended to 3*PTO to prevent very small timeouts,
+        // it's likely that the computed value was in the future, and instead of accounting for
+        // elapsed idle time, it further extended the timer. Then, for consistency, we simply choose
+        // to compute the timer expiration in the same way as if the path had been immediately used.
+        self.rearm_path_max_idle_timer(now, self.highest_space, path_id);
+
+        Ok(prev_timeout)
+    }
+
+    /// Rearms or stops the state of the [`PathTimer::PathIdle`] based on the configured value in
+    /// [`PathData::idle_timeout`].
+    ///
+    /// The timer is extended to 3*PTO if such value is greater than the configured timeout,
+    /// applying the guidance of RFC9000 §10.1 to multipaths.
+    ///
+    /// The timer only applies for non-closed, multiplath-negotiated connections.
+    fn rearm_path_max_idle_timer(&mut self, now: Instant, space: SpaceKind, path_id: PathId) {
+        let timer = Timer::PerPath(path_id, PathTimer::PathIdle);
+
+        if self.state.is_closed() || !self.is_multipath_negotiated() {
+            return self.timers.stop(timer, self.qlog.with_time(now));
         }
 
-        Ok(prev)
+        if let Some(timeout) = self.path_data(path_id).idle_timeout {
+            let dt = cmp::max(timeout, 3 * self.pto(space, path_id));
+            self.timers.set(timer, now + dt, self.qlog.with_time(now));
+        } else {
+            self.timers.stop(timer, self.qlog.with_time(now));
+        }
     }
 
     /// Sets the keep_alive_interval for a specific path
@@ -3823,7 +3834,7 @@ impl Connection {
         }
     }
 
-    /// Resets the idle timeout timers
+    /// Resets the idle timeout timers.
     ///
     /// Without multipath there is only the connection-wide idle timeout. When multipath is
     /// enabled there is an additional per-path idle timeout.
@@ -3843,22 +3854,8 @@ impl Connection {
             }
         }
 
-        // Now handle the per-path state
-        if let Some(timeout) = self.path_data(path_id).idle_timeout {
-            if self.state.is_closed() {
-                self.timers.stop(
-                    Timer::PerPath(path_id, PathTimer::PathIdle),
-                    self.qlog.with_time(now),
-                );
-            } else {
-                let dt = cmp::max(timeout, 3 * self.pto(space, path_id));
-                self.timers.set(
-                    Timer::PerPath(path_id, PathTimer::PathIdle),
-                    now + dt,
-                    self.qlog.with_time(now),
-                );
-            }
-        }
+        // Now handle the per-path state.
+        self.rearm_path_max_idle_timer(now, space, path_id);
     }
 
     /// Resets both the [`ConnTimer::KeepAlive`] and [`PathTimer::PathKeepAlive`] timers
@@ -4726,6 +4723,7 @@ impl Connection {
                 // Multipath can only be enabled after the state has reached Established.
                 // So this can not happen any earlier.
                 self.issue_first_path_cids(now);
+                self.rearm_path_max_idle_timer(now, self.highest_space, path_id);
                 Ok(())
             }
             Header::Initial(InitialHeader {
