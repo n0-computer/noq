@@ -52,7 +52,7 @@ fn non_zero_length_cids() {
             0
         }
 
-        fn cid_lifetime(&self) -> Option<std::time::Duration> {
+        fn cid_lifetime(&self) -> Option<Duration> {
             None
         }
     }
@@ -76,7 +76,7 @@ fn non_zero_length_cids() {
         .expect_err("server did not raise error for connection");
     match accept_err {
         crate::ConnectionError::TransportError(error) => {
-            assert_eq!(error.code, crate::TransportErrorCode::PROTOCOL_VIOLATION);
+            assert_eq!(error.code, TransportErrorCode::PROTOCOL_VIOLATION);
         }
         _ => panic!("Not a TransportError"),
     }
@@ -142,7 +142,7 @@ fn path_close_last_path() {
 #[test]
 fn cid_issued_multipath() {
     let _guard = subscribe();
-    const ACTIVE_CID_LIMIT: u64 = crate::cid_queue::CidQueue::LEN as _;
+    const ACTIVE_CID_LIMIT: u64 = CidQueue::LEN as _;
     let mut pair = ConnPair::builder().enable_multipath().connect();
 
     let client_stats = pair.stats(Client);
@@ -374,12 +374,12 @@ fn open_path() -> TestResult {
     pair.drive();
     assert_matches!(
         pair.poll(Client),
-        Some(Event::Path(crate::PathEvent::Established { id  })) if id == path_id
+        Some(Event::Path(PathEvent::Established { id  })) if id == path_id
     );
 
     assert_matches!(
         pair.poll(Server),
-        Some(Event::Path(crate::PathEvent::Established { id  })) if id == path_id
+        Some(Event::Path(PathEvent::Established { id  })) if id == path_id
     );
     Ok(())
 }
@@ -402,12 +402,12 @@ fn open_path_key_update() -> TestResult {
     pair.drive();
     assert_matches!(
         pair.poll(Client),
-        Some(Event::Path(crate::PathEvent::Established { id  })) if id == path_id
+        Some(Event::Path(PathEvent::Established { id  })) if id == path_id
     );
 
     assert_matches!(
         pair.poll(Server),
-        Some(Event::Path(crate::PathEvent::Established { id  })) if id == path_id
+        Some(Event::Path(PathEvent::Established { id  })) if id == path_id
     );
     Ok(())
 }
@@ -418,65 +418,114 @@ fn open_path_key_update() -> TestResult {
 #[test]
 fn open_path_validation_fails_server_side() -> TestResult {
     let _guard = subscribe();
-    let mut pair = ConnPair::builder().enable_multipath().connect();
+    let client_addr_two = "[::1:2]:1".parse()?;
+    let server_addr_two = "[::2:2]:1".parse()?;
+    let mut builder = ConnPair::builder()
+        .enable_multipath()
+        .disable_mtud_discovery()
+        .with_routes(
+            // server_addr_two can send to client_addr_two, but the reverse is broken.
+            ManyToManyRouting::from_routes(
+                [(Pair::CLIENT_ADDR, 0), (client_addr_two, 1)],
+                [(Pair::SERVER_ADDR, 0), (server_addr_two, 0)],
+            ),
+        );
+    builder
+        .server_transport_cfg
+        .default_path_max_idle_timeout(Some(Duration::from_secs(8)));
+    builder
+        .client_transport_cfg
+        .default_path_max_idle_timeout(Some(Duration::from_secs(8)));
+    let mut pair = builder.connect();
 
-    let different_addr = FourTuple {
-        remote: SocketAddr::new([9, 8, 7, 6].into(), 5),
-        local_ip: None,
+    // Open a path from ::1:2 to ::2:2. Client datagrams will arrive from ::1:2 which is not
+    // allowed so they will be dropped.
+    let network_path = FourTuple {
+        remote: server_addr_two,
+        local_ip: Some(client_addr_two.ip()),
     };
-    assert_ne!(different_addr.remote, Pair::SERVER_ADDR);
-    assert_ne!(different_addr.remote, Pair::CLIENT_ADDR);
-    let path_id = pair.open_path(Client, different_addr, PathStatus::Available)?;
+    let path_id = pair.open_path(Client, network_path, PathStatus::Available)?;
 
-    // block the server from receiving anything
-    while pair.blackhole_step(true, false) {}
+    info!("client opens path, drive to just before idle");
+    pair.drive();
+
+    info!("manual keep-alive of PathId::ZERO");
+    pair.ping_path(Client, PathId::ZERO)?;
+    pair.drive();
+
+    info!("advancing time to past client path {path_id} idle");
+    pair.advance_time();
+    pair.drive();
+
+    // The client gave up first and timed out.
     assert_matches!(
         pair.poll(Client),
-        Some(Event::Path(crate::PathEvent::Abandoned { id, reason: PathAbandonReason::ValidationFailed  })) if id == path_id
+        Some(Event::Path(PathEvent::Abandoned { id, reason: PathAbandonReason::TimedOut  }))
+            if id == path_id
     );
-
-    assert!(pair.poll(Server).is_none());
+    // The server sees a closed path being abandoned, never emits this to the application.
+    assert_matches!(pair.poll(Server), None);
     Ok(())
 }
 
-/// Client starts opening a path but the client fails to validate the path
+/// client starts opening a path but the client fails to validate the path
 ///
 /// The server should receive an event close the path
 #[test]
 fn open_path_validation_fails_client_side() -> TestResult {
     let _guard = subscribe();
-    let mut pair = ConnPair::builder().enable_multipath().connect();
+    let client_addr_two = "[::1:2]:1".parse()?;
+    let server_addr_two = "[::2:2]:1".parse()?;
+    let mut builder = ConnPair::builder()
+        .enable_multipath()
+        .disable_mtud_discovery()
+        .with_routes(
+            // client_addr_two can send to server_addr_two, but the reverse is broken.
+            ManyToManyRouting::from_routes(
+                [(Pair::CLIENT_ADDR, 0), (client_addr_two, 0)],
+                [(Pair::SERVER_ADDR, 0), (server_addr_two, 1)],
+            ),
+        );
+    builder
+        .server_transport_cfg
+        .default_path_max_idle_timeout(Some(Duration::from_secs(30)));
+    builder
+        .client_transport_cfg
+        .default_path_max_idle_timeout(Some(Duration::from_secs(30)));
+    let mut pair = builder.connect();
 
-    // make sure the new path cannot be validated using the existing path
-    let new_addr = SocketAddr::new([9, 8, 7, 6].into(), 5);
-    assert_ne!(new_addr, Pair::SERVER_ADDR);
-    assert_ne!(new_addr, Pair::CLIENT_ADDR);
-    pair.routes.as_basic_mut().client_addr = new_addr;
-
+    // Open a path from ::1:2 to ::2:2. Client datagrams can be routed. Server datagrams
+    // will arrive at ::1:2 from ::2:2, but only ::2:1 is allowed to send to ::1:2, so
+    // server datagrams will be dropped.
     let network_path = FourTuple {
-        remote: pair.routes.public_server_addr(),
+        remote: server_addr_two,
         local_ip: None,
     };
     let path_id = pair.open_path(Client, network_path, PathStatus::Available)?;
 
-    // Make sure the client's path open makes it through to the server and is processed.
-    pair.drive_client();
-    pair.drive_server();
+    info!("client opens path, drive to just before idle");
+    pair.drive();
 
-    info!("dropping client inbound queue");
-    pair.client.inbound.clear();
+    info!("manual keep-alive of PathId::ZERO");
+    pair.ping_path(Client, PathId::ZERO)?;
 
-    // Sever the connection and run it to idle.
-    // This makes sure that
-    // - path validation can't succeed because path responses don't make it through and
-    // - the server needs to decide to close the path on its own, because path abandons don't make
-    //   it through.
-    while pair.blackhole_step(true, true) {}
+    info!("drive past new path idle");
+    pair.drive();
 
+    // The client gave up first and timed out.
+    assert_matches!(
+        pair.poll(Client),
+        Some(Event::Path(PathEvent::Abandoned { id, reason: PathAbandonReason::TimedOut  }))
+            if id == path_id
+    );
+    // Server would also fail to validate, but the client already abandoned.
     assert_matches!(
         pair.poll(Server),
-        Some(Event::Path(PathEvent::Abandoned { id, reason: PathAbandonReason::ValidationFailed  }))
-            if id == path_id
+        Some(Event::Path(PathEvent::Abandoned {
+            id,
+            reason: PathAbandonReason::RemoteAbandoned { .. }
+        }))
+        if id == path_id
     );
     Ok(())
 }
@@ -795,11 +844,11 @@ fn mtud_on_two_paths() -> TestResult {
     // Ensure the path opened correctly.
     assert_matches!(
         pair.poll(Client),
-        Some(Event::Path(crate::PathEvent::Established { id  })) if id == path_id
+        Some(Event::Path(PathEvent::Established { id  })) if id == path_id
     );
     assert_matches!(
         pair.poll(Server),
-        Some(Event::Path(crate::PathEvent::Established { id  })) if id == path_id
+        Some(Event::Path(PathEvent::Established { id  })) if id == path_id
     );
 
     // MTU should be 1200 for both paths.
@@ -1773,7 +1822,7 @@ fn test_simple_nat_traveral_opens_path() -> TestResult {
     let mut pair = ConnPair::builder()
         .enable_multipath()
         .enable_nat_traversal()
-        .with_routes(SimpleFirewallRouting::new().into())
+        .with_routes(SimpleFirewallRouting::new())
         .connect();
 
     info!("adding addrs");
@@ -1877,7 +1926,7 @@ fn test_hard_nat_client_opens_path() -> TestResult {
     let mut pair = ConnPair::builder()
         .enable_multipath()
         .enable_nat_traversal()
-        .with_routes(routing.into())
+        .with_routes(routing)
         .connect();
 
     info!("adding addrs");
@@ -1927,7 +1976,7 @@ fn test_hard_nat_server_opens_path() -> TestResult {
     let mut pair = ConnPair::builder()
         .enable_multipath()
         .enable_nat_traversal()
-        .with_routes(routing.into())
+        .with_routes(routing)
         .connect();
 
     info!("adding addrs");
@@ -1973,7 +2022,7 @@ fn test_peer_may_probe() -> TestResult {
         .enable_multipath()
         .enable_nat_traversal()
         .disable_mtud_discovery()
-        .with_routes(SimpleFirewallRouting::new().into());
+        .with_routes(SimpleFirewallRouting::new());
     let server_cfg = ServerConfig {
         transport: Arc::new(builder.server_transport_cfg.clone()),
         migration: false,
@@ -2010,114 +2059,78 @@ fn test_peer_may_probe() -> TestResult {
 }
 
 #[test]
-fn on_path_challenge_lost_backoff() {
+fn path_open_challenge_lost() -> TestResult {
     let _guard = subscribe();
+    let mut pair = ConnPair::builder()
+        .enable_multipath()
+        .disable_mtud_discovery()
+        .connect();
 
-    let mut pair = ConnPair::default();
+    info!("opening path");
+    let server_addr = pair.routes.public_server_addr();
+    let path_id = pair.open_path(
+        Client,
+        FourTuple::from_remote(server_addr),
+        PathStatus::Available,
+    )?;
+    let first_challenge = pair.time;
+    pair.drive_client();
 
-    // We use two helpers so we can "skip over" unrelated stopping points from `next_wakeup`
+    // Drop the 1st PATH_CHALLENGE
+    let client_stats = pair.path_stats(Client, path_id).unwrap();
+    assert_eq!(client_stats.frame_tx.path_challenge, 1);
+    assert!(pair.path_stats(Server, path_id).is_none());
+    info!("dropping client's packet");
+    pair.server.inbound.clear();
 
-    /// Attempts to drive the client until it has sent the expected amount of path challenges.
-    ///
-    /// Tries for a maximum of 10 iterations. Panics if that fails.
-    fn drive_client_until_challenge_sent(pair: &mut ConnPair, expected_path_challenges_sent: u64) {
-        for _ in 0..10 {
-            pair.drive_client();
-            if pair.stats(Client).frame_tx.path_challenge == expected_path_challenges_sent {
-                return;
-            }
-            pair.time = pair
-                .client
-                .next_wakeup()
-                .expect("couldn't drive client forward");
-            info!("advancing to {:?} for client", pair.time - pair.epoch);
-        }
-        panic!(
-            "client never sent PATH_CHALLENGE #{}, actual: {}",
-            expected_path_challenges_sent,
-            pair.stats(Client).frame_tx.path_challenge
-        );
-    }
+    // Drop the 2nd PATH_CHALLENGE
+    pair.time = pair
+        .client
+        .next_wakeup()
+        .expect("couldn't drive client forward");
+    info!("advancing to {:?} for client", pair.time - pair.epoch);
+    let second_challenge = pair.time;
+    pair.drive_client();
+    let client_stats = pair.path_stats(Client, path_id).unwrap();
+    assert_eq!(client_stats.frame_tx.path_challenge, 2);
+    assert!(pair.path_stats(Server, path_id).is_none());
+    info!("dropping client's packet");
+    pair.server.inbound.clear();
 
-    /// Attempts to drive the server until it has received the expected amount of path challenges.
-    ///
-    /// Tries for a maximum of 10 iterations. Panics if that fails.
-    fn drive_server_until_challenge_received(
-        pair: &mut ConnPair,
-        expected_path_challenges_received: u64,
-    ) {
-        for _ in 0..10 {
-            // attempt to drive the server until it receives the PATH_CHALLENGE and sends a
-            // PATH_RESPONSE
-            pair.time = pair
-                .server
-                .next_wakeup()
-                .expect("couldn't drive server forward");
-            info!("advancing to {:?} for server", pair.time - pair.epoch);
-            pair.drive_server();
-            if pair.stats(Server).frame_rx.path_challenge == expected_path_challenges_received
-                && pair.stats(Server).frame_tx.path_response == expected_path_challenges_received
-            {
-                return;
-            }
-        }
-        panic!(
-            "server never received PATH_CHALLENGE #{}, actual: {}",
-            expected_path_challenges_received,
-            pair.stats(Server).frame_rx.path_challenge
-        );
-    }
+    // Send the 3rd PATH_CHALLENGE
+    pair.time = pair
+        .client
+        .next_wakeup()
+        .expect("couldn't drive client forward");
+    info!("advancing to {:?} for client", pair.time - pair.epoch);
+    let third_challenge = pair.time;
+    pair.drive_client();
+    let client_stats = pair.path_stats(Client, path_id).unwrap();
+    assert_eq!(client_stats.frame_tx.path_challenge, 3);
+    assert!(pair.path_stats(Server, path_id).is_none());
 
-    pair.conn_mut(Client).trigger_path_validation();
+    let first_delay = second_challenge - first_challenge;
+    let second_delay = third_challenge - second_challenge;
+    assert!(
+        first_delay < second_delay,
+        "delays must monotonically increase"
+    );
 
-    // Kickstart the process once to get a reference point for the last_challenge_sent
-    drive_client_until_challenge_sent(&mut pair, 1);
-    let mut last_challenge_send = pair.time;
-    let mut last_duration = Duration::ZERO;
-
-    const MAX_DURATION: Duration = Duration::from_secs(2); // equivalent to MAX_PTO_INTERVAL
-    const MAX_ITERS: u64 = MAX_DURATION.as_millis().ilog2() as u64 + 2;
-
-    for i in 1..=MAX_ITERS {
-        drive_server_until_challenge_received(&mut pair, i);
-        pair.client.inbound.clear(); // we drop the client-inbound PATH_RESPONSE
-        info!("dropped client inbound");
-
-        drive_client_until_challenge_sent(&mut pair, i + 1);
-        let time = pair.time.duration_since(last_challenge_send);
-        info!(?time, ?last_duration, "time since last PATH_CHALLENGE send");
-        assert!(
-            time >= last_duration,
-            "duration between PATH_CHALLENGE sends must be monotonically increasing (backing off)"
-        );
-        assert!(
-            time <= MAX_DURATION,
-            "duration between PATH_CHALLENGE sends must be bound to a maximum of 2s"
-        );
-        if i == MAX_ITERS {
-            assert_eq!(time, MAX_DURATION);
-        }
-        last_duration = time;
-        last_challenge_send = pair.time;
-    }
-
-    // Now we stop dropping the client inbound once and the backoff should return back to normal:
-
-    drive_server_until_challenge_received(&mut pair, MAX_ITERS + 1);
-    pair.drive(); // Ensure the client fully processes the PATH_RESPONSE this time.
-    info!("client should have processed PATH_RESPONSE");
-
-    // The next time challenges are sent, the backoff should be reset.
-
-    pair.conn_mut(Client).trigger_path_validation();
-    drive_client_until_challenge_sent(&mut pair, MAX_ITERS + 2);
-    last_challenge_send = pair.time;
-    drive_server_until_challenge_received(&mut pair, MAX_ITERS + 2);
-    pair.client.inbound.clear(); // we drop the client-inbound PATH_RESPONSE
-    info!("dropped client inbound");
-    drive_client_until_challenge_sent(&mut pair, MAX_ITERS + 3);
-    let duration = pair.time.duration_since(last_challenge_send);
-    assert_eq!(duration, Duration::from_millis(1));
+    // Open path, drive to completion
+    pair.drive_server();
+    let server_stats = pair.path_stats(Server, path_id).unwrap();
+    assert_eq!(server_stats.frame_rx.path_challenge, 1);
+    pair.advance_time();
+    pair.drive();
+    assert_matches!(
+        pair.poll(Client),
+        Some(Event::Path(PathEvent::Established { id  })) if id == path_id
+    );
+    assert_matches!(
+        pair.poll(Server),
+        Some(Event::Path(PathEvent::Established { id  })) if id == path_id
+    );
+    Ok(())
 }
 
 #[test]

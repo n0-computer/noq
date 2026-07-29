@@ -916,7 +916,7 @@ impl From<VarInt> for IdleTimeout {
     }
 }
 
-impl std::convert::TryFrom<Duration> for IdleTimeout {
+impl TryFrom<Duration> for IdleTimeout {
     type Error = VarIntBoundsExceeded;
 
     fn try_from(timeout: Duration) -> Result<Self, Self::Error> {

@@ -152,7 +152,7 @@ impl<Socket, MakeWritableFutFn, WriteableFut>
     }
 }
 
-impl<Socket, MakeWritableFutFn, WritableFut> super::UdpSender
+impl<Socket, MakeWritableFutFn, WritableFut> UdpSender
     for UdpSenderHelper<Socket, MakeWritableFutFn, WritableFut>
 where
     Socket: UdpSenderHelperSocket,
@@ -161,7 +161,7 @@ where
 {
     fn poll_send(
         self: Pin<&mut Self>,
-        transmit: &udp::Transmit<'_>,
+        transmit: &Transmit<'_>,
         cx: &mut Context<'_>,
     ) -> Poll<io::Result<()>> {
         let mut this = self.project();
@@ -211,7 +211,7 @@ trait UdpSenderHelperSocket: Send + Sync + 'static {
     /// If not write-ready, this is allowed to return [`std::io::ErrorKind::WouldBlock`].
     ///
     /// The [`UdpSenderHelper`] will use this to implement [`UdpSender::poll_send`].
-    fn try_send(&self, transmit: &udp::Transmit<'_>) -> io::Result<()>;
+    fn try_send(&self, transmit: &Transmit<'_>) -> io::Result<()>;
 
     /// See [`UdpSender::max_transmit_segments`].
     fn max_transmit_segments(&self) -> NonZeroUsize;

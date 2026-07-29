@@ -323,9 +323,6 @@ impl QlogSink {
                 PathTimer::PathIdle => Some(TimerType::custom("path_idle")),
                 PathTimer::PathValidationFailed => Some(QlogTimerType::PathValidation.into()),
                 PathTimer::PathChallengeLost => Some(TimerType::custom("path_challenge_lost")),
-                PathTimer::AbandonFromValidation => {
-                    Some(TimerType::custom("abandon_from_validation"))
-                }
                 PathTimer::PathKeepAlive => Some(TimerType::custom("path_keep_alive")),
                 PathTimer::Pacing => Some(TimerType::custom("pacing")),
                 PathTimer::MaxAckDelay => Some(QlogTimerType::Ack.into()),
@@ -527,7 +524,7 @@ impl QlogRecvPacket {
     pub(crate) fn frame(&mut self, frame: &Frame) {
         #[cfg(feature = "qlog")]
         {
-            if matches!(frame, crate::Frame::Padding) {
+            if matches!(frame, Frame::Padding) {
                 self.padding += 1;
             } else {
                 self.emit_padding();
@@ -732,7 +729,7 @@ impl ToQlog for frame::MaxStreams {
 }
 
 #[cfg(feature = "qlog")]
-impl ToQlog for frame::StreamsBlocked {
+impl ToQlog for StreamsBlocked {
     fn to_qlog(&self) -> QuicFrame {
         QuicFrame::StreamsBlocked {
             stream_type: self.dir.into(),

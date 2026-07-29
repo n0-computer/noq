@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::fmt::{self, Write};
 use std::iter::Sum;
 use std::ops::{Add, Range, Sub};
@@ -88,15 +89,18 @@ where
     }
 
     pub(crate) fn contains(&self, x: T) -> bool {
-        for range in self.0.iter() {
-            if range.start > x {
-                // We only get here if there was no prior range that contained x
-                return false;
-            } else if range.contains(&x) {
-                return true;
-            }
-        }
-        false
+        self.0
+            .binary_search_by(|range| {
+                if range.end <= x {
+                    Ordering::Less
+                } else if x < range.start {
+                    Ordering::Greater
+                } else {
+                    // range.start <= x < range.end
+                    Ordering::Equal
+                }
+            })
+            .is_ok()
     }
 
     pub(crate) fn iter_range(&self, range: Range<T>) -> impl Iterator<Item = Range<T>> + '_ {
@@ -121,57 +125,58 @@ where
             return false;
         }
 
-        let mut idx = 0;
-        while idx != self.0.len() {
-            let range = &mut self.0[idx];
+        // Find the first range that might interact with `x`.
+        // Unlike removal, we use a strict comparison so that ranges
+        // adjacent to `x` are included in the right-hand partition and can be merged.
+        let idx = self.0.partition_point(|r| r.end < x.start);
 
-            if range.start > x.end {
-                // The range is fully before this range and therefore not extensible.
-                // Add a new range to the left
-                self.0.insert(idx, x);
-                return true;
-            } else if range.start > x.start {
-                // The new range starts before this range but overlaps.
-                // Extend the current range to the left
-                // Note that we don't have to merge a potential left range, since
-                // this case would have been captured by merging the right range
-                // in the previous loop iteration
-                result = true;
-                range.start = x.start;
-            }
-
-            // At this point we have handled all parts of the new range which
-            // are in front of the current range. Now we handle everything from
-            // the start of the current range
-
-            if x.end <= range.end {
-                // Fully contained
-                return result;
-            } else if x.start <= range.end {
-                // Extend the current range to the end of the new range.
-                // Since it's not contained it must be bigger
-                range.end = x.end;
-
-                // Merge all follow-up ranges which overlap
-                while idx != self.0.len() - 1 {
-                    let curr = self.0[idx].clone();
-                    let next = self.0[idx + 1].clone();
-                    if curr.end >= next.start {
-                        self.0[idx].end = next.end.max(curr.end);
-                        self.0.remove(idx + 1);
-                    } else {
-                        break;
-                    }
-                }
-
-                return true;
-            }
-
-            idx += 1;
+        if idx == self.0.len() {
+            self.0.push(x);
+            return true;
         }
 
-        // Insert a range at the end
-        self.0.push(x);
+        let range = &mut self.0[idx];
+
+        if x.end < range.start {
+            // The range is fully before this range and therefore not extensible.
+            // Add a new range to the left
+            self.0.insert(idx, x);
+            return true;
+        } else if range.start > x.start {
+            // The new range starts before this range but overlaps.
+            // Extend the current range to the left
+            // Note that we don't have to merge a potential left range, since
+            // this case would have been captured by merging the right range
+            // in the previous loop iteration
+            result = true;
+            range.start = x.start;
+        }
+
+        // At this point we have handled all parts of the new range which
+        // are in front of the current range. Now we handle everything from
+        // the start of the current range
+
+        if x.end <= range.end {
+            // Fully contained
+            return result;
+        }
+
+        // Extend the current range to the end of the new range.
+        // Since it's not contained it must be bigger
+        range.end = x.end;
+
+        // Merge all follow-up ranges which overlap
+        while idx != self.0.len() - 1 {
+            let curr = self.0[idx].clone();
+            let next = self.0[idx + 1].clone();
+            if curr.end >= next.start {
+                self.0[idx].end = next.end.max(curr.end);
+                self.0.remove(idx + 1);
+            } else {
+                break;
+            }
+        }
+
         true
     }
 
@@ -183,17 +188,17 @@ where
             return false;
         }
 
-        let mut idx = 0;
-        while idx != self.0.len() && x.start != x.end {
+        // Find the first range that might overlap with `x`.
+        // Unlike insertion, we use an inclusive comparison since removal does not
+        // affect the adjacent range on the left.
+        let mut idx = self.0.partition_point(|r| r.end <= x.start);
+
+        while idx != self.0.len() {
             let range = self.0[idx].clone();
 
             if x.end <= range.start {
-                // The range is fully before this range
-                return result;
-            } else if x.start >= range.end {
-                // The range is fully after this range
-                idx += 1;
-                continue;
+                // The range is not in the set
+                break;
             }
 
             // The range overlaps with this range
@@ -201,6 +206,7 @@ where
 
             let left = range.start..x.start;
             let right = x.end..range.end;
+
             if left.is_empty() && right.is_empty() {
                 self.0.remove(idx);
             } else if left.is_empty() {

@@ -167,7 +167,7 @@ impl FrameType {
 
 impl Decodable for FrameType {
     fn decode<B: Buf>(buf: &mut B) -> coding::Result<Self> {
-        Self::try_from(buf.get_var()?).map_err(|_| coding::UnexpectedEnd)
+        Self::try_from(buf.get_var()?).map_err(|_| UnexpectedEnd)
     }
 }
 
@@ -903,11 +903,11 @@ pub struct ConnectionClose {
     /// Type of frame that caused the close
     pub frame_type: MaybeFrame,
     /// Human-readable reason for the close
-    #[cfg_attr(test, strategy(proptest::collection::vec(any::<u8>(), 0..64).prop_map(Bytes::from)))]
+    #[cfg_attr(test, strategy(collection::vec(any::<u8>(), 0..64).prop_map(Bytes::from)))]
     pub reason: Bytes,
 }
 
-impl fmt::Display for ConnectionClose {
+impl Display for ConnectionClose {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.error_code.fmt(f)?;
         if !self.reason.as_ref().is_empty() {
@@ -954,11 +954,11 @@ pub struct ApplicationClose {
     /// Application-specific reason code
     pub error_code: VarInt,
     /// Human-readable reason for the close
-    #[cfg_attr(test, strategy(proptest::collection::vec(any::<u8>(), 0..64).prop_map(Bytes::from)))]
+    #[cfg_attr(test, strategy(collection::vec(any::<u8>(), 0..64).prop_map(Bytes::from)))]
     pub reason: Bytes,
 }
 
-impl fmt::Display for ApplicationClose {
+impl Display for ApplicationClose {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if !self.reason.as_ref().is_empty() {
             f.write_str(&String::from_utf8_lossy(&self.reason))?;
@@ -1882,7 +1882,7 @@ pub(crate) struct NewConnectionId {
 }
 
 #[cfg(test)]
-fn connection_id_and_reset_token() -> impl Strategy<Value = (crate::ConnectionId, ResetToken)> {
+fn connection_id_and_reset_token() -> impl Strategy<Value = (ConnectionId, ResetToken)> {
     (any::<ConnectionId>(), any::<[u8; 64]>()).prop_map(|(id, reset_key)| {
         #[cfg(all(feature = "aws-lc-rs", not(feature = "ring")))]
         use aws_lc_rs::hmac;
@@ -2114,7 +2114,7 @@ pub(crate) struct ObservedAddr {
 }
 
 impl ObservedAddr {
-    pub(crate) fn new<N: Into<VarInt>>(remote: std::net::SocketAddr, seq_no: N) -> Self {
+    pub(crate) fn new<N: Into<VarInt>>(remote: SocketAddr, seq_no: N) -> Self {
         Self {
             ip: remote.ip(),
             port: remote.port(),
@@ -2740,7 +2740,7 @@ mod test {
             sequence: 31,
             retire_prior_to: 13,
             id: ConnectionId::new(&[0xAB; 8]),
-            reset_token: ResetToken::from([0xCD; crate::RESET_TOKEN_SIZE]),
+            reset_token: ResetToken::from([0xCD; RESET_TOKEN_SIZE]),
         };
         let mut buf = Vec::new();
         cid.encode(&mut buf);

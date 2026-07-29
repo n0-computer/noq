@@ -27,14 +27,24 @@ jobs:
 
       - name: Clean docs branch
         run: |
+          set -euo pipefail
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
           cd pr/
           # keep the last 10 prs
-          dirs=$(ls -1d [0-9]* | sort -n)
-          total_dirs=$(echo "$dirs" | wc -l)
-          dirs_to_remove=$(echo "$dirs" | head -n $(($total_dirs - 10)))
-          if [ -n "$dirs_to_remove" ]; then
-            echo "$dirs_to_remove" | xargs rm -rf
+          mapfile -t dirs < <(ls -1d [0-9]* 2>/dev/null | sort -n)
+          if [ "${#dirs[@]}" -le 10 ]; then
+            echo "only ${#dirs[@]} PR dirs, nothing to prune"
+            exit 0
           fi
-          git add .
-          git commit -m "Cleanup old docs" || true
-          git push || true
+          printf '%s\n' "${dirs[@]:0:${#dirs[@]}-10}" | xargs rm -rf
+
+          git add -A .
+          if git diff --cached --quiet; then
+            echo "nothing staged, branch already clean"
+            exit 0
+          fi
+          git commit -m "Cleanup old docs"
+          git push

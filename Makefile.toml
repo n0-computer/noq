@@ -5,8 +5,7 @@ skip_core_tasks = true
 default_to_workspace = false
 
 [env]
-RUSTFLAGS = "-Dwarnings"
-RUSTDOCFLAGS = "-Dwarnings"
+CARGO_BUILD_WARNINGS = "deny"
 CARGO_MAKE_EXTEND_WORKSPACE_MAKEFILE = true
 # Workspace members to exclude when setting `workspace = true` for a task.
 # Must live at global env (not task-level) so it's read before workspace iteration
@@ -57,16 +56,25 @@ args = [
 
 [tasks.check]
 description = "Run cargo-check for entire project"
+# Allows us to use CARGO_BUILD_WARNINGS instead of
+# RUSTFLAGS=-Dwarnings which breaks the build cache.
+toolchain = { channel = "stable", min_version = "1.97.0" }
 command = "cargo"
 args = ["check", "--workspace", "--all-features", "--all-targets"]
 
 [tasks.clippy]
 description = "Run cargo-clippy for entire project"
+# Allows us to use CARGO_BUILD_WARNINGS instead of
+# RUSTFLAGS=-Dwarnings which breaks the build cache.
+toolchain = { channel = "stable", min_version = "1.97.0" }
 command = "cargo"
 args = ["clippy", "--workspace", "--all-features", "--all-targets"]
 
 [tasks.doc]
 description = "Check the documentation build"
+# Allows us to use CARGO_BUILD_WARNINGS instead of
+# RUSTDOCFLAGS=-Dwarnings which breaks the build cache.
+toolchain = { channel = "stable", min_version = "1.97.0" }
 command = "cargo"
 args = ["doc", "--workspace", "--all-features", "--no-deps", "--document-private-items"]
 
