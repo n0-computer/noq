@@ -136,11 +136,12 @@ impl UdpSocketState {
                 gro_segments = NonZeroUsize::new(64).expect("known");
             }
 
-            if let Err(_err) =
-                set_socket_option(&*io, libc::SOL_SOCKET, libc::SO_TIMESTAMPNS, OPTION_ON)
-            {
-                crate::log::debug!("Ignoring error setting SO_TIMESTAMPNS on socket: {_err:?}");
-            }
+            // Disable SO_TIMESTAMPNS for now: https://github.com/n0-computer/noq/issues/774
+            // if let Err(_err) =
+            //     set_socket_option(&*io, libc::SOL_SOCKET, libc::SO_TIMESTAMPNS, OPTION_ON)
+            // {
+            //     crate::log::debug!("Ignoring error setting SO_TIMESTAMPNS on socket: {_err:?}");
+            // }
         }
         #[cfg(any(target_os = "freebsd", apple))]
         {
