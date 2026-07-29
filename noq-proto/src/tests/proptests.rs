@@ -64,8 +64,8 @@ const SERVER_ADDRS: [SocketAddr; 3] = [
 /// this has several advantages:
 /// - On a proptest failure, it is easy to see which minimal setup the proptest fails with.
 /// - The definition of the setup itself is concise, e.g. when copying it into regression tests.
-/// - We can be more precise/smaller in the "search space" and have more efficient shrinking,
-///   see [`Seed`] or [`RoutingSetup`].
+/// - We can be more precise/smaller in the "search space" and have more efficient shrinking, see
+///   [`Seed`] or [`RoutingSetup`].
 #[derive(Debug, test_strategy::Arbitrary)]
 struct PairSetup {
     seed: Seed,
@@ -89,7 +89,8 @@ enum Extensions {
 pub(super) enum RoutingSetup {
     /// Set [`Pair::routes`] to [`BasicRouting`]
     Basic,
-    /// Use [`RoutingTable::simple_symmetric`] with the default [`CLIENT_ADDRS`] and [`SERVER_ADDRS`].
+    /// Use [`RoutingTable::simple_symmetric`] with the default [`CLIENT_ADDRS`] and
+    /// [`SERVER_ADDRS`].
     SimpleSymmetric,
     /// Use given generated routing table.
     Complex(#[strategy(routing_table())] ManyToManyRouting),
@@ -102,9 +103,9 @@ pub(super) enum RoutingSetup {
 /// but also we don't want to disable shrinking altogether: when the seed shrinks to zero, this
 /// helps us understand that the seed is likely irrelevant to the test failure.
 ///
-/// This struct achieves the best of both worlds: If the seed is generated as `Generated(some_seed)`,
-/// shrinking will try `Zeroes` once, and if that fails, fall back to using the generated seed
-/// and avoid doing any further shrinking of `some_seed`.
+/// This struct achieves the best of both worlds: If the seed is generated as
+/// `Generated(some_seed)`, shrinking will try `Zeroes` once, and if that fails, fall back to using
+/// the generated seed and avoid doing any further shrinking of `some_seed`.
 #[derive(Debug, test_strategy::Arbitrary)]
 enum Seed {
     /// The zero seed.
@@ -672,12 +673,10 @@ fn regression_peer_failed_to_respond_with_path_abandon2() {
 /// share the same IP address and don't both have the same two
 /// interfaces, but the resulting situation is the same:
 ///
-/// - The server sees the remote as 1.1.1.0 and had previously
-///   sent and received on that address in this connection and
-///   thus considers it valid, while
-/// - the client side first sends to 2.2.2.1 but gets the response
-///   from the remote 2.2.2.0, thus it fails validation on the
-///   client side and it ignores the packet.
+/// - The server sees the remote as 1.1.1.0 and had previously sent and received on that address in
+///   this connection and thus considers it valid, while
+/// - the client side first sends to 2.2.2.1 but gets the response from the remote 2.2.2.0, thus it
+///   fails validation on the client side and it ignores the packet.
 ///
 /// Originally this test produced a "PATH_ABANDON was ignored"
 /// error message, but that's secondary to the original problem.
@@ -995,9 +994,9 @@ fn regression_peer_ignored_path_abandon() {
 /// > DEBUG client:pkt{path_id=1}:recv{space=Data pn=3}:frame{ty=PATH_RESPONSE}:
 /// > noq_proto::connection: 4704:
 /// > ignoring invalid PATH_RESPONSE
-/// >  response=PATH_RESPONSE(ece9dc07f89ded7e)
-/// >  network_path=(local: ::ffff:1.1.1.2, remote: [::ffff:2.2.2.0]:4433)
-/// >  expected=(local: ::ffff:1.1.1.1, remote: [::ffff:2.2.2.0]:4433)
+/// > response=PATH_RESPONSE(ece9dc07f89ded7e)
+/// > network_path=(local: ::ffff:1.1.1.2, remote: [::ffff:2.2.2.0]:4433)
+/// > expected=(local: ::ffff:1.1.1.1, remote: [::ffff:2.2.2.0]:4433)
 ///
 /// The client will then never clear out the PATH_CHALLENGE from the "pending"
 /// challenges, and so it will never fully clear the path challenge timer.
@@ -1074,8 +1073,8 @@ fn regression_never_idle4() {
 /// due to an infinite LossDetection timer loop:
 /// - The loss detection timer would fire
 /// - Upon detecting loss, it would re-set the loss detection timer to `now` (0ms delay) again
-/// - Within a single `pair.step()` it would go back to the loss detection timer firing
-///   (it expects timers to fire in the future eventually.)
+/// - Within a single `pair.step()` it would go back to the loss detection timer firing (it expects
+///   timers to fire in the future eventually.)
 ///
 /// The reason this tight loop existed was because the loss detection timer is relative to the
 /// `time_of_last_ack_eliciting_packet`. If this becomes too old (and we cap the PTO duration to
@@ -1132,24 +1131,26 @@ fn regression_infinite_loop() {
     )));
 }
 
-/// This test reproduced a situation in which a QNT-enabled connection sends path challenges indefinitely.
+/// This test reproduced a situation in which a QNT-enabled connection sends path challenges
+/// indefinitely.
 ///
-/// In this test setup, we enable QNT, call the required functions for adding addresses to holepunch,
-/// and then eventually initiate the first holepunching round.
-/// Before that, we also trigger a passive migration on the server side, effectively severing the connection
-/// in the server -> client direction on path 0 (the only path at that time), because all packets are
-/// rejected on the client side as coming from the wrong address.
+/// In this test setup, we enable QNT, call the required functions for adding addresses to
+/// holepunch, and then eventually initiate the first holepunching round.
+/// Before that, we also trigger a passive migration on the server side, effectively severing the
+/// connection in the server -> client direction on path 0 (the only path at that time), because all
+/// packets are rejected on the client side as coming from the wrong address.
 ///
-/// What follows is that the server sends PATH_CHALLENGEs for path 0 (as that's what we've added as the
-/// "holepunching address"), and initiating the holepunching means that we reuse existing paths if we
-/// already have one on the required address, but we do *revalidate* them (triggering new PATH_CHALLENGEs).
+/// What follows is that the server sends PATH_CHALLENGEs for path 0 (as that's what we've added as
+/// the "holepunching address"), and initiating the holepunching means that we reuse existing paths
+/// if we already have one on the required address, but we do *revalidate* them (triggering new
+/// PATH_CHALLENGEs).
 ///
-/// However, in this code path, we didn't have anything that would prevent re-validated path challenges
-/// to ever be stopped, so this revalidation would keep the connection busy in the path challenge sent ->
-/// path challenge lost -> path challenge sent loop.
+/// However, in this code path, we didn't have anything that would prevent re-validated path
+/// challenges to ever be stopped, so this revalidation would keep the connection busy in the path
+/// challenge sent -> path challenge lost -> path challenge sent loop.
 ///
-/// We fixed this bug by introducing another `OpenState::Revalidating`, and arming the `PathOpenFailed`
-/// timer when we start revalidating a path.
+/// We fixed this bug by introducing another `OpenState::Revalidating`, and arming the
+/// `PathOpenFailed` timer when we start revalidating a path.
 #[test]
 fn regression_qnt_revalidating_path_forever() {
     let prefix = "regression_qnt_revalidating_path_forever";
@@ -1246,7 +1247,8 @@ fn regression_migration_probing_loop() {
     )));
 }
 
-/// Test for a case where we kept sending so many PATH_CHALLENGEs that we'd run out of `drive_bounded` budget.
+/// Test for a case where we kept sending so many PATH_CHALLENGEs that we'd run out of
+/// `drive_bounded` budget.
 ///
 /// The original proptest found a situation in which the newly opened path was working one-way.
 /// The client was able to send to the server, but the responses from the server back to the client
@@ -1256,18 +1258,18 @@ fn regression_migration_probing_loop() {
 /// didn't receive them.
 /// This in turn means that the client will re-send PATH_CHALLENGEs.
 ///
-/// At the same time, the PATH_CHALLENGEs were acknowledged by the server and the acknowledgements were
-/// sent over a different path.
+/// At the same time, the PATH_CHALLENGEs were acknowledged by the server and the acknowledgements
+/// were sent over a different path.
 ///
 /// This meant that the client had updated its RTT estimates for the path, even though the path was
 /// not yet working.
-/// Initially when the client opened the path, the RTT estimate was the initial RTT estimate of 333ms.
-/// This resulted in the `AbandonFromPathValidation` timer to be set at ~3s.
+/// Initially when the client opened the path, the RTT estimate was the initial RTT estimate of
+/// 333ms. This resulted in the `AbandonFromPathValidation` timer to be set at ~3s.
 /// After the first couple of ACKs, the path's RTT estimate quickly updated to 1ms though.
 ///
-/// When this test was failing, PATH_CHALLENGEs were re-sent after 1 PTO without a response. This meant
-/// that it would re-send challenges every 2ms, generating many hundreds of PATH_CHALLENGEs before the
-/// path would be abandoned.
+/// When this test was failing, PATH_CHALLENGEs were re-sent after 1 PTO without a response. This
+/// meant that it would re-send challenges every 2ms, generating many hundreds of PATH_CHALLENGEs
+/// before the path would be abandoned.
 ///
 /// The fix was to implement PATH_CHALLENGE re-sending backoffs, similar to tail loss probe backoff.
 #[test]

@@ -12,8 +12,8 @@
 //!   addresses for sent packets, allowing responses to be sent from the address that the peer
 //!   expects when there are multiple possibilities. This is common when bound to a wildcard address
 //!   in IPv6 due to [RFC 8981] temporary addresses.
-//! - [Explicit Congestion Notification], which is required by QUIC to prevent packet loss and reduce
-//!   latency on congested links when supported by the network path.
+//! - [Explicit Congestion Notification], which is required by QUIC to prevent packet loss and
+//!   reduce latency on congested links when supported by the network path.
 //! - Disabled IP-layer fragmentation, which allows the true physical MTU to be detected and reduces
 //!   risk of QUIC packet loss.
 //!

@@ -368,8 +368,8 @@ impl Endpoint {
 
     /// Waits for all connections on the endpoint to be cleanly shut down and drained.
     ///
-    /// This is equivalent to [`wait_all_draining()`] with additionally waiting for the connections to be
-    /// drained. Please see its documentation for more information.
+    /// This is equivalent to [`wait_all_draining()`] with additionally waiting for the connections
+    /// to be drained. Please see its documentation for more information.
     ///
     /// Use `wait_idle()` in favor of `wait_all_draining()` if you care about waiting for the
     /// [`Connection`] structs to be dropped.
@@ -694,8 +694,7 @@ fn respond(
     // - A version negotiation response due to an unknown version
     // - A `CLOSE` due to a malformed or unwanted connection attempt
     // - A stateless reset due to an unrecognized connection
-    // - A `Retry` packet due to a connection attempt when
-    //   `use_retry` is set
+    // - A `Retry` packet due to a connection attempt when `use_retry` is set
     //
     // In each case, a well-behaved peer can be trusted to retry a
     // few times, which is guaranteed to produce the same response
@@ -720,8 +719,8 @@ fn respond(
         );
         RawWaker::new(std::ptr::null(), &VTABLE)
     };
-    // SAFETY: Copied from rust stdlib, the NOOP waker is thread-safe and doesn't violate the RawWakerVTable contract,
-    // it doesn't access the data pointer at all.
+    // SAFETY: Copied from rust stdlib, the NOOP waker is thread-safe and doesn't violate the
+    // RawWakerVTable contract, it doesn't access the data pointer at all.
     let waker = unsafe { Waker::from_raw(NOOP) };
     let mut cx = Context::from_waker(&waker);
     _ = sender.as_mut().poll_send(
@@ -750,7 +749,8 @@ struct ConnectionSet {
     /// Counter for all active (non-draining/drained) connections.
     ///
     /// This is directly related to the QUIC connection states "Initial", "Handshake",
-    /// "Established", "Closed", "Draining" and "Drained" (see also `proto/src/connection/state.rs`).
+    /// "Established", "Closed", "Draining" and "Drained" (see also
+    /// `proto/src/connection/state.rs`).
     ///
     /// Any connection state that is not "Draining" or "Drained" is considered active.
     ///
@@ -980,7 +980,8 @@ impl RecvState {
                                     }
                                 }
                                 Some(DatagramEvent::ConnectionEvent(handle, event)) => {
-                                    // Ignoring errors from dropped connections that haven't yet been cleaned up
+                                    // Ignoring errors from dropped connections that haven't yet
+                                    // been cleaned up
                                     received_connection_packet = true;
                                     let _ = self
                                         .connections

@@ -39,7 +39,8 @@ pub trait Controller: Send + Sync + std::fmt::Debug {
     ) {
     }
 
-    /// Packets are acked in batches, all with the same `now` argument. This indicates one of those batches has completed.
+    /// Packets are acked in batches, all with the same `now` argument. This indicates one of those
+    /// batches has completed.
     #[allow(unused_variables)]
     fn on_end_acks(
         &mut self,
@@ -101,8 +102,8 @@ pub trait Controller: Send + Sync + std::fmt::Debug {
     /// Number of ack-eliciting bytes that may be in flight
     fn window(&self) -> u64;
 
-    /// Retrieve implementation-specific metrics used to populate `qlog` traces when they are enabled
-    /// This is also used to alter the pacing of the connection with
+    /// Retrieve implementation-specific metrics used to populate `qlog` traces when they are
+    /// enabled This is also used to alter the pacing of the connection with
     /// `pacing_rate` and `send_quantum`
     fn metrics(&self) -> ControllerMetrics {
         ControllerMetrics {

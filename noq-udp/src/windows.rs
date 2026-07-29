@@ -276,7 +276,8 @@ impl UdpSocketState {
     ) -> io::Result<usize> {
         let wsa_recvmsg_ptr = WSARECVMSG_PTR.expect("valid function pointer for WSARecvMsg");
 
-        // we cannot use [`socket2::MsgHdrMut`] as we do not have access to inner field which holds the WSAMSG
+        // we cannot use [`socket2::MsgHdrMut`] as we do not have access to inner field which holds
+        // the WSAMSG
         let mut ctrl_buf = cmsg::Aligned([0; CMSG_LEN]);
         let mut source: WinSock::SOCKADDR_INET = unsafe { mem::zeroed() };
         let mut data = WinSock::WSABUF {
@@ -607,7 +608,8 @@ fn set_socket_option(
 }
 
 pub(crate) const BATCH_SIZE: usize = 1;
-// Enough to store max(IP_PKTINFO + IP_ECN, IPV6_PKTINFO + IPV6_ECN) + max(UDP_SEND_MSG_SIZE, UDP_COALESCED_INFO) bytes (header + data) and some extra margin
+// Enough to store max(IP_PKTINFO + IP_ECN, IPV6_PKTINFO + IPV6_ECN) + max(UDP_SEND_MSG_SIZE,
+// UDP_COALESCED_INFO) bytes (header + data) and some extra margin
 const CMSG_LEN: usize = 128;
 const OPTION_ON: u32 = 1;
 
@@ -675,7 +677,8 @@ static WSARECVMSG_PTR: LazyLock<WinSock::LPFN_WSARECVMSG> = LazyLock::new(|| {
 ///
 /// See:
 /// - Wine's `convert_control_headers()`: <https://github.com/wine-mirror/wine/blob/master/dlls/ntdll/unix/socket.c>
-/// - Linux `in_pktinfo` fields: <https://man7.org/linux/man-pages/man7/ip.7.html> (`ipi_spec_dst` vs `ipi_addr`)
+/// - Linux `in_pktinfo` fields: <https://man7.org/linux/man-pages/man7/ip.7.html> (`ipi_spec_dst`
+///   vs `ipi_addr`)
 /// - Windows `IN_PKTINFO`: <https://learn.microsoft.com/en-us/windows/win32/api/ws2ipdef/ns-ws2ipdef-in_pktinfo>
 /// - Wine bug for original IP_PKTINFO impl: <https://bugs.winehq.org/show_bug.cgi?id=19493>
 pub(crate) fn is_wine() -> bool {
