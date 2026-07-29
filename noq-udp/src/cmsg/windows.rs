@@ -205,3 +205,39 @@ impl CMsgHdr for WinSock::CMSGHDR {
         self.cmsg_len as _
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every payload in a full buffer is aligned for the type read out of it.
+    ///
+    /// Encoding the whole set the send path can produce also proves [`SEND_LEN`] covers it,
+    /// since [`Encoder::push`] panics rather than overrun the buffer.
+    #[test]
+    fn payloads_are_aligned() {
+        let mut buf = SendBuf::zeroed();
+        let mut msg: WinSock::WSAMSG = unsafe { mem::zeroed() };
+        msg.Control = WinSock::WSABUF {
+            buf: buf.as_mut_ptr(),
+            len: buf.len() as _,
+        };
+
+        let mut encoder = unsafe { Encoder::new(&mut msg) };
+        encoder.push_pktinfo_v6(unsafe { mem::zeroed() });
+        encoder.push_ecn_v6(0);
+        encoder.push_segment_size(1200);
+        encoder.finish();
+
+        let mut count = 0;
+        for cmsg in unsafe { super::super::Iter::new(&msg) } {
+            assert_eq!(
+                cmsg.cmsg_data() as usize % PAYLOAD_ALIGN,
+                0,
+                "payload {count} is not aligned to {PAYLOAD_ALIGN}",
+            );
+            count += 1;
+        }
+        assert_eq!(count, 3);
+    }
+}

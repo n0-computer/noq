@@ -22,6 +22,8 @@ pub(crate) union Payload {
     #[cfg(not(target_os = "netbsd"))]
     ecn_v4: IpTosTy,
     ecn_v6: c_int,
+    /// `IP_TOS` and, on Darwin, `IPV6_TCLASS` come back as a single byte.
+    ecn_byte: u8,
     segment_size: u16,
     #[cfg(not(target_os = "redox"))]
     pktinfo_v6: libc::in6_pktinfo,
