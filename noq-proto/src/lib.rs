@@ -101,7 +101,9 @@ pub use crate::cid_generator::{
 
 mod token;
 use token::ResetToken;
-pub use token::{NoneTokenLog, NoneTokenStore, TokenLog, TokenReuseError, TokenStore};
+#[allow(deprecated)]
+pub use token::{NoneTokenLog, NoneTokenStore};
+pub use token::{TokenLog, TokenReuseError, TokenStore};
 
 mod address_discovery;
 

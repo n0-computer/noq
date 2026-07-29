@@ -13,8 +13,6 @@ use thiserror::Error;
 
 #[cfg(feature = "bloom")]
 use crate::BloomTokenLog;
-#[cfg(not(feature = "bloom"))]
-use crate::NoneTokenLog;
 #[cfg(all(feature = "rustls", any(feature = "aws-lc-rs", feature = "ring")))]
 use crate::crypto::rustls::{QuicServerConfig, configured_provider};
 use crate::{
@@ -475,7 +473,7 @@ impl fmt::Debug for ServerConfig {
 #[derive(Clone)]
 pub struct ValidationTokenConfig {
     pub(crate) lifetime: Duration,
-    pub(crate) log: Arc<dyn TokenLog>,
+    pub(crate) log: Option<Arc<dyn TokenLog>>,
     pub(crate) sent: u32,
 }
 
@@ -500,7 +498,13 @@ impl ValidationTokenConfig {
     /// which makes the server ignore all address validation tokens (that is, tokens originating
     /// from NEW_TOKEN frames--retry tokens are not affected).
     pub fn log(&mut self, log: Arc<dyn TokenLog>) -> &mut Self {
-        self.log = log;
+        self.log = Some(log);
+        self
+    }
+
+    /// Disable the [`TokenLog`], making the server ignore all address validation tokens
+    pub fn disable_token_log(&mut self) -> &mut Self {
+        self.log = None;
         self
     }
 
@@ -519,9 +523,9 @@ impl ValidationTokenConfig {
 impl Default for ValidationTokenConfig {
     fn default() -> Self {
         #[cfg(feature = "bloom")]
-        let log = Arc::new(BloomTokenLog::default());
+        let log = Some(Arc::new(BloomTokenLog::default()) as Arc<dyn TokenLog>);
         #[cfg(not(feature = "bloom"))]
-        let log = Arc::new(NoneTokenLog);
+        let log = None;
         Self {
             lifetime: Duration::from_secs(2 * 7 * 24 * 60 * 60),
             log,
@@ -553,7 +557,7 @@ pub struct ClientConfig {
     pub(crate) crypto: Arc<dyn crypto::ClientConfig>,
 
     /// Validation token store to use
-    pub(crate) token_store: Arc<dyn TokenStore>,
+    pub(crate) token_store: Option<Arc<dyn TokenStore>>,
 
     /// Provider that populates the destination connection ID of Initial Packets
     pub(crate) initial_dst_cid_provider: Arc<dyn Fn() -> ConnectionId + Send + Sync>,
@@ -568,7 +572,7 @@ impl ClientConfig {
         Self {
             transport: Default::default(),
             crypto,
-            token_store: Arc::new(TokenMemoryCache::default()),
+            token_store: Some(Arc::new(TokenMemoryCache::default())),
             initial_dst_cid_provider: Arc::new(|| {
                 RandomConnectionIdGenerator::new(MAX_CID_SIZE).generate_cid()
             }),
@@ -602,7 +606,13 @@ impl ClientConfig {
     ///
     /// Defaults to [`TokenMemoryCache`], which is suitable for most internet applications.
     pub fn token_store(&mut self, store: Arc<dyn TokenStore>) -> &mut Self {
-        self.token_store = store;
+        self.token_store = Some(store);
+        self
+    }
+
+    /// Disable the [`TokenStore`], so that no validation tokens are stored
+    pub fn disable_token_store(&mut self) -> &mut Self {
+        self.token_store = None;
         self
     }
 
