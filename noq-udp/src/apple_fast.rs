@@ -33,7 +33,7 @@ fn send_via_sendmsg_x(
 ) -> io::Result<()> {
     let mut hdrs = unsafe { mem::zeroed::<[msghdr_x; BATCH_SIZE]>() };
     let mut iovs = unsafe { mem::zeroed::<[libc::iovec; BATCH_SIZE]>() };
-    let mut ctrls = [cmsg::Aligned([0u8; cmsg::LEN]); BATCH_SIZE];
+    let mut ctrls = [cmsg::SendBuf::zeroed(); BATCH_SIZE];
     let addr = socket2::SockAddr::from(transmit.destination);
     let segment_size = transmit.segment_size.unwrap_or(transmit.contents.len());
     let mut cnt = 0;
@@ -75,7 +75,7 @@ fn prepare_msg_x(
     dst_addr: &socket2::SockAddr,
     hdr: &mut msghdr_x,
     iov: &mut libc::iovec,
-    ctrl: &mut cmsg::Aligned<[u8; cmsg::LEN]>,
+    ctrl: &mut cmsg::SendBuf,
     #[allow(unused_variables)] encode_src_ip: bool,
     sendmsg_einval: bool,
 ) {
@@ -89,18 +89,18 @@ fn prepare_msg_x(
     hdr.msg_iov = iov;
     hdr.msg_iovlen = 1;
 
-    hdr.msg_control = ctrl.0.as_mut_ptr() as _;
-    hdr.msg_controllen = cmsg::LEN as _;
+    hdr.msg_control = ctrl.as_mut_ptr() as _;
+    hdr.msg_controllen = ctrl.len() as _;
     let mut encoder = unsafe { cmsg::Encoder::new(hdr) };
     let ecn = transmit.ecn.map_or(0, |x| x as libc::c_int);
     let is_ipv4 = transmit.destination.is_ipv4()
         || matches!(transmit.destination.ip(), IpAddr::V6(addr) if addr.to_ipv4_mapped().is_some());
     if is_ipv4 {
         if !sendmsg_einval {
-            encoder.push(libc::IPPROTO_IP, libc::IP_TOS, ecn as IpTosTy);
+            encoder.push_ecn_v4(ecn as IpTosTy);
         }
     } else {
-        encoder.push(libc::IPPROTO_IPV6, libc::IPV6_TCLASS, ecn);
+        encoder.push_ecn_v6(ecn);
     }
 
     if let Some(ip) = &transmit.src_ip {
@@ -110,7 +110,7 @@ fn prepare_msg_x(
                     let addr = libc::in_addr {
                         s_addr: u32::from_ne_bytes(v4.octets()),
                     };
-                    encoder.push(libc::IPPROTO_IP, libc::IP_RECVDSTADDR, addr);
+                    encoder.push_src_addr_v4(addr);
                 }
             }
             IpAddr::V6(v6) => {
@@ -120,7 +120,7 @@ fn prepare_msg_x(
                         s6_addr: v6.octets(),
                     },
                 };
-                encoder.push(libc::IPPROTO_IPV6, libc::IPV6_PKTINFO, pktinfo);
+                encoder.push_pktinfo_v6(pktinfo);
             }
         }
     }
@@ -156,7 +156,7 @@ pub(crate) fn recv_via_recvmsg_x(
     // uninitialized memory, do not use `MaybeUninit` for `ctrls`, instead
     // initialize `ctrls` with `0`s. A control message of all `0`s is
     // automatically skipped by `libc::CMSG_NXTHDR`.
-    let mut ctrls = [cmsg::Aligned([0u8; cmsg::LEN]); BATCH_SIZE];
+    let mut ctrls = [cmsg::RecvBuf::zeroed(); BATCH_SIZE];
     let mut hdrs = unsafe { mem::zeroed::<[msghdr_x; BATCH_SIZE]>() };
     let max_msg_count = bufs.len().min(BATCH_SIZE);
     for i in 0..max_msg_count {
@@ -178,15 +178,15 @@ pub(crate) fn recv_via_recvmsg_x(
 fn prepare_recv_x(
     buf: &mut IoSliceMut<'_>,
     name: &mut MaybeUninit<libc::sockaddr_storage>,
-    ctrl: &mut cmsg::Aligned<[u8; cmsg::LEN]>,
+    ctrl: &mut cmsg::RecvBuf,
     hdr: &mut msghdr_x,
 ) {
     hdr.msg_name = name.as_mut_ptr() as _;
     hdr.msg_namelen = size_of::<libc::sockaddr_storage>() as _;
     hdr.msg_iov = buf as *mut IoSliceMut<'_> as *mut libc::iovec;
     hdr.msg_iovlen = 1;
-    hdr.msg_control = ctrl.0.as_mut_ptr() as _;
-    hdr.msg_controllen = cmsg::LEN as _;
+    hdr.msg_control = ctrl.as_mut_ptr() as _;
+    hdr.msg_controllen = ctrl.len() as _;
     hdr.msg_flags = 0;
     hdr.msg_datalen = buf.len();
 }
@@ -247,5 +247,9 @@ impl MsgHdr for msghdr_x {
 
     fn control_len(&self) -> usize {
         self.msg_controllen as _
+    }
+
+    fn recv_flags(&self) -> libc::c_int {
+        self.msg_flags
     }
 }

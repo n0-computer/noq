@@ -244,6 +244,35 @@ fn gso() {
     );
 }
 
+/// A datagram that is both segmented and ECN marked.
+///
+/// The traffic class arrives after the GRO segment size and the timestamp, so too small a
+/// receive buffer drops it and ECN feedback disappears. `gso` sends no ECN and the `ecn_*`
+/// tests send one segment, so neither puts enough control messages on a datagram to notice.
+#[test]
+#[cfg_attr(not(any(target_os = "linux", target_os = "android")), ignore)]
+fn gso_with_ecn() {
+    let send = UdpSocket::bind((Ipv6Addr::LOCALHOST, 0)).unwrap();
+    let recv = UdpSocket::bind((Ipv6Addr::LOCALHOST, 0)).unwrap();
+    let max_segments = UdpSocketState::new((&send).into())
+        .unwrap()
+        .max_gso_segments();
+    let dst_addr = recv.local_addr().unwrap();
+    const SEGMENT_SIZE: usize = 128;
+    let msg = vec![0xAB; SEGMENT_SIZE * max_segments.get()];
+    test_send_recv(
+        &send.into(),
+        &recv.into(),
+        Transmit {
+            destination: dst_addr,
+            ecn: Some(EcnCodepoint::Ect0),
+            contents: &msg,
+            segment_size: Some(SEGMENT_SIZE),
+            src_ip: None,
+        },
+    );
+}
+
 #[test]
 fn socket_buffers() {
     const BUFFER_SIZE: usize = 123456;

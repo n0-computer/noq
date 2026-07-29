@@ -16,9 +16,7 @@ use libc::{c_int, c_uint};
 use windows_sys::Win32::Networking::WinSock;
 
 use crate::{
-    EcnCodepoint, IO_ERROR_LOG_INTERVAL, RecvMeta, Transmit, UdpSockRef,
-    cmsg::{self, CMsgHdr},
-    log::debug,
+    EcnCodepoint, IO_ERROR_LOG_INTERVAL, RecvMeta, Transmit, UdpSockRef, cmsg, log::debug,
     log_sendmsg_error,
 };
 
@@ -38,17 +36,6 @@ pub struct UdpSocketState {
 
 impl UdpSocketState {
     pub fn new(socket: UdpSockRef<'_>) -> io::Result<Self> {
-        assert!(
-            CMSG_LEN
-                >= WinSock::CMSGHDR::cmsg_space(size_of::<WinSock::IN6_PKTINFO>())
-                    + WinSock::CMSGHDR::cmsg_space(size_of::<c_int>())
-                    + WinSock::CMSGHDR::cmsg_space(size_of::<u32>())
-        );
-        assert!(
-            align_of::<WinSock::CMSGHDR>() <= align_of::<cmsg::Aligned<[u8; 0]>>(),
-            "control message buffers will be misaligned"
-        );
-
         socket.0.set_nonblocking(true)?;
 
         // Stop Windows from failing the next recv with WSAECONNRESET or WSAENETRESET when a
@@ -277,7 +264,7 @@ impl UdpSocketState {
         let wsa_recvmsg_ptr = WSARECVMSG_PTR.expect("valid function pointer for WSARecvMsg");
 
         // we cannot use [`socket2::MsgHdrMut`] as we do not have access to inner field which holds the WSAMSG
-        let mut ctrl_buf = cmsg::Aligned([0; CMSG_LEN]);
+        let mut ctrl_buf = cmsg::RecvBuf::zeroed();
         let mut source: WinSock::SOCKADDR_INET = unsafe { mem::zeroed() };
         let mut data = WinSock::WSABUF {
             buf: bufs[0].as_mut_ptr(),
@@ -285,8 +272,8 @@ impl UdpSocketState {
         };
 
         let ctrl = WinSock::WSABUF {
-            buf: ctrl_buf.0.as_mut_ptr(),
-            len: ctrl_buf.0.len() as _,
+            buf: ctrl_buf.as_mut_ptr(),
+            len: ctrl_buf.len() as _,
         };
 
         let mut wsa_msg = WinSock::WSAMSG {
@@ -311,6 +298,8 @@ impl UdpSocketState {
                 return Err(io::Error::last_os_error());
             }
         }
+
+        cmsg::warn_if_control_truncated(&wsa_msg);
 
         let addr = unsafe {
             let (_, addr) = socket2::SockAddr::try_init(|addr_storage, len| {
@@ -447,7 +436,7 @@ fn is_unsupported_error(e: &io::Error) -> bool {
 fn send(state: &UdpSocketState, socket: UdpSockRef<'_>, transmit: &Transmit<'_>) -> io::Result<()> {
     // we cannot use [`socket2::sendmsg()`] and [`socket2::MsgHdr`] as we do not have access
     // to the inner field which holds the WSAMSG
-    let mut ctrl_buf = cmsg::Aligned([0; CMSG_LEN]);
+    let mut ctrl_buf = cmsg::SendBuf::zeroed();
     let daddr = socket2::SockAddr::from(transmit.destination);
 
     let mut data = WinSock::WSABUF {
@@ -456,8 +445,8 @@ fn send(state: &UdpSocketState, socket: UdpSockRef<'_>, transmit: &Transmit<'_>)
     };
 
     let ctrl = WinSock::WSABUF {
-        buf: ctrl_buf.0.as_mut_ptr(),
-        len: ctrl_buf.0.len() as _,
+        buf: ctrl_buf.as_mut_ptr(),
+        len: ctrl_buf.len() as _,
     };
 
     let mut wsa_msg = WinSock::WSAMSG {
@@ -485,7 +474,7 @@ fn send(state: &UdpSocketState, socket: UdpSockRef<'_>, transmit: &Transmit<'_>)
                     ipi_addr: src_ip.sin_addr,
                     ipi_ifindex: 0,
                 };
-                encoder.push(WinSock::IPPROTO_IP, WinSock::IP_PKTINFO, pktinfo);
+                encoder.push_pktinfo_v4(pktinfo);
             }
             WinSock::AF_INET6 if state.pktinfo_v6_enabled.load(Ordering::Relaxed) => {
                 let src_ip = unsafe { ptr::read(ip.as_ptr() as *const WinSock::SOCKADDR_IN6) };
@@ -493,7 +482,7 @@ fn send(state: &UdpSocketState, socket: UdpSockRef<'_>, transmit: &Transmit<'_>)
                     ipi6_addr: src_ip.sin6_addr,
                     ipi6_ifindex: unsafe { src_ip.Anonymous.sin6_scope_id },
                 };
-                encoder.push(WinSock::IPPROTO_IPV6, WinSock::IPV6_PKTINFO, pktinfo);
+                encoder.push_pktinfo_v6(pktinfo);
             }
             WinSock::AF_INET | WinSock::AF_INET6 => {}
             _ => {
@@ -505,21 +494,17 @@ fn send(state: &UdpSocketState, socket: UdpSockRef<'_>, transmit: &Transmit<'_>)
     let ecn = transmit.ecn.map_or(0, |x| x as c_int);
     if is_ipv4 {
         if state.ecn_v4_enabled.load(Ordering::Relaxed) {
-            encoder.push(WinSock::IPPROTO_IP, WinSock::IP_ECN, ecn);
+            encoder.push_ecn_v4(ecn);
         }
     } else {
         if state.ecn_v6_enabled.load(Ordering::Relaxed) {
-            encoder.push(WinSock::IPPROTO_IPV6, WinSock::IPV6_ECN, ecn);
+            encoder.push_ecn_v6(ecn);
         }
     }
 
     // Segment size is a u32 https://learn.microsoft.com/en-us/windows/win32/api/ws2tcpip/nf-ws2tcpip-wsasetudpsendmessagesize
     if let Some(segment_size) = transmit.effective_segment_size() {
-        encoder.push(
-            WinSock::IPPROTO_UDP,
-            WinSock::UDP_SEND_MSG_SIZE,
-            segment_size as u32,
-        );
+        encoder.push_segment_size(segment_size as u32);
     }
 
     encoder.finish();
@@ -607,8 +592,6 @@ fn set_socket_option(
 }
 
 pub(crate) const BATCH_SIZE: usize = 1;
-// Enough to store max(IP_PKTINFO + IP_ECN, IPV6_PKTINFO + IPV6_ECN) + max(UDP_SEND_MSG_SIZE, UDP_COALESCED_INFO) bytes (header + data) and some extra margin
-const CMSG_LEN: usize = 128;
 const OPTION_ON: u32 = 1;
 
 static WSARECVMSG_PTR: LazyLock<WinSock::LPFN_WSARECVMSG> = LazyLock::new(|| {

@@ -49,7 +49,7 @@ pub(super) mod gso {
         encoder: &mut cmsg::Encoder<'_, libc::msghdr>,
         segment_size: u16,
     ) {
-        encoder.push(libc::SOL_UDP, libc::UDP_SEGMENT, segment_size);
+        encoder.push_segment_size(segment_size);
     }
 
     // Avoid calling `supported_by_current_kernel` for each socket by using `OnceLock`.

@@ -53,28 +53,6 @@ pub struct UdpSocketState {
 impl UdpSocketState {
     pub fn new(sock: UdpSockRef<'_>) -> io::Result<Self> {
         let io = sock.0;
-        let mut cmsg_platform_space = 0;
-        #[cfg(not(target_os = "redox"))]
-        if cfg!(target_os = "linux")
-            || cfg!(bsd)
-            || cfg!(apple)
-            || cfg!(target_os = "android")
-            || cfg!(solarish)
-        {
-            cmsg_platform_space +=
-                unsafe { libc::CMSG_SPACE(size_of::<libc::in6_pktinfo>() as _) as usize };
-        }
-
-        assert!(
-            cmsg::LEN
-                >= unsafe { libc::CMSG_SPACE(size_of::<libc::c_int>() as _) as usize }
-                    + cmsg_platform_space
-        );
-        assert!(
-            align_of::<libc::cmsghdr>() <= align_of::<cmsg::Aligned<[u8; 0]>>(),
-            "control message buffers will be misaligned"
-        );
-
         io.set_nonblocking(true)?;
 
         let addr = io.local_addr()?;
@@ -402,7 +380,7 @@ fn send(
     }
     let mut msg_hdr: libc::msghdr = unsafe { mem::zeroed() };
     let mut iovec: libc::iovec = unsafe { mem::zeroed() };
-    let mut cmsgs = cmsg::Aligned([0u8; cmsg::LEN]);
+    let mut cmsgs = cmsg::SendBuf::zeroed();
     let dst_addr = socket2::SockAddr::from(transmit.destination);
     prepare_msg(
         transmit,
@@ -478,7 +456,7 @@ pub(crate) fn send_single(
 ) -> io::Result<()> {
     let mut hdr: libc::msghdr = unsafe { mem::zeroed() };
     let mut iov: libc::iovec = unsafe { mem::zeroed() };
-    let mut ctrl = cmsg::Aligned([0u8; cmsg::LEN]);
+    let mut ctrl = cmsg::SendBuf::zeroed();
     let addr = socket2::SockAddr::from(transmit.destination);
     prepare_msg(
         transmit,
@@ -508,7 +486,7 @@ fn recv_via_recvmmsg(
     meta: &mut [RecvMeta],
 ) -> io::Result<usize> {
     let mut names = [MaybeUninit::<libc::sockaddr_storage>::uninit(); BATCH_SIZE];
-    let mut ctrls = [cmsg::Aligned(MaybeUninit::<[u8; cmsg::LEN]>::uninit()); BATCH_SIZE];
+    let mut ctrls = [cmsg::RecvBuf::uninit(); BATCH_SIZE];
     let mut hdrs = unsafe { mem::zeroed::<[libc::mmsghdr; BATCH_SIZE]>() };
     let max_msg_count = bufs.len().min(BATCH_SIZE);
     for i in 0..max_msg_count {
@@ -549,7 +527,7 @@ pub(crate) fn recv_single(
     meta: &mut [RecvMeta],
 ) -> io::Result<usize> {
     let mut name = MaybeUninit::<libc::sockaddr_storage>::uninit();
-    let mut ctrl = cmsg::Aligned(MaybeUninit::<[u8; cmsg::LEN]>::uninit());
+    let mut ctrl = cmsg::RecvBuf::uninit();
     let mut hdr = unsafe { mem::zeroed::<libc::msghdr>() };
     prepare_recv(&mut bufs[0], &mut name, &mut ctrl, &mut hdr);
     let n = loop {
@@ -580,7 +558,7 @@ fn prepare_msg(
     dst_addr: &socket2::SockAddr,
     hdr: &mut libc::msghdr,
     iov: &mut libc::iovec,
-    ctrl: &mut cmsg::Aligned<[u8; cmsg::LEN]>,
+    ctrl: &mut cmsg::SendBuf,
     #[allow(unused_variables)] // only used on FreeBSD & macOS
     encode_src_ip: bool,
     sendmsg_einval: bool,
@@ -600,8 +578,8 @@ fn prepare_msg(
     hdr.msg_iov = iov;
     hdr.msg_iovlen = 1;
 
-    hdr.msg_control = ctrl.0.as_mut_ptr() as _;
-    hdr.msg_controllen = cmsg::LEN as _;
+    hdr.msg_control = ctrl.as_mut_ptr() as _;
+    hdr.msg_controllen = ctrl.len() as _;
     let mut encoder = unsafe { cmsg::Encoder::new(hdr) };
     let ecn = transmit.ecn.map_or(0, |x| x as libc::c_int);
     // True for IPv4 or IPv4-Mapped IPv6
@@ -611,12 +589,12 @@ fn prepare_msg(
         if !sendmsg_einval {
             #[cfg(not(target_os = "netbsd"))]
             {
-                encoder.push(libc::IPPROTO_IP, libc::IP_TOS, ecn as IpTosTy);
+                encoder.push_ecn_v4(ecn as IpTosTy);
             }
         }
     } else {
         #[cfg(not(target_os = "redox"))]
-        encoder.push(libc::IPPROTO_IPV6, libc::IPV6_TCLASS, ecn);
+        encoder.push_ecn_v6(ecn);
     }
 
     // On apple_fast, prepare_msg is only compiled for send_single (fallback path), while the main
@@ -639,7 +617,7 @@ fn prepare_msg(
                         },
                         ipi_addr: libc::in_addr { s_addr: 0 },
                     };
-                    encoder.push(libc::IPPROTO_IP, libc::IP_PKTINFO, pktinfo);
+                    encoder.push_pktinfo_v4(pktinfo);
                 }
                 #[cfg(any(bsd, apple, solarish))]
                 {
@@ -647,7 +625,7 @@ fn prepare_msg(
                         let addr = libc::in_addr {
                             s_addr: u32::from_ne_bytes(v4.octets()),
                         };
-                        encoder.push(libc::IPPROTO_IP, libc::IP_RECVDSTADDR, addr);
+                        encoder.push_src_addr_v4(addr);
                     }
                 }
             }
@@ -661,7 +639,7 @@ fn prepare_msg(
                         s6_addr: v6.octets(),
                     },
                 };
-                encoder.push(libc::IPPROTO_IPV6, libc::IPV6_PKTINFO, pktinfo);
+                encoder.push_pktinfo_v6(pktinfo);
             }
         }
     }
@@ -673,15 +651,15 @@ fn prepare_msg(
 fn prepare_recv(
     buf: &mut IoSliceMut<'_>,
     name: &mut MaybeUninit<libc::sockaddr_storage>,
-    ctrl: &mut cmsg::Aligned<MaybeUninit<[u8; cmsg::LEN]>>,
+    ctrl: &mut cmsg::RecvBuf,
     hdr: &mut libc::msghdr,
 ) {
     hdr.msg_name = name.as_mut_ptr() as _;
     hdr.msg_namelen = size_of::<libc::sockaddr_storage>() as _;
     hdr.msg_iov = buf as *mut IoSliceMut<'_> as *mut libc::iovec;
     hdr.msg_iovlen = 1;
-    hdr.msg_control = ctrl.0.as_mut_ptr() as _;
-    hdr.msg_controllen = cmsg::LEN as _;
+    hdr.msg_control = ctrl.as_mut_ptr() as _;
+    hdr.msg_controllen = ctrl.len() as _;
     hdr.msg_flags = 0;
 }
 
@@ -698,6 +676,8 @@ pub(crate) fn decode_recv<M: cmsg::MsgHdr<ControlMessage = libc::cmsghdr>>(
         stride: len,
         timestamp: None,
     };
+
+    cmsg::warn_if_control_truncated(hdr);
 
     let cmsg_iter = unsafe { cmsg::Iter::new(hdr) };
     for cmsg in cmsg_iter {
@@ -851,7 +831,7 @@ mod gso {
 }
 
 #[cfg(target_os = "freebsd")]
-type IpTosTy = libc::c_uchar;
+pub(crate) type IpTosTy = libc::c_uchar;
 #[cfg(not(any(target_os = "freebsd", target_os = "netbsd")))]
 pub(crate) type IpTosTy = libc::c_int;
 
