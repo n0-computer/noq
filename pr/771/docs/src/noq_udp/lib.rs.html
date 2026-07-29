@@ -29,8 +29,8 @@
 <a href=#29 id=29 data-nosnippet>29</a>
 <a href=#30 id=30 data-nosnippet>30</a></span><span class="kw">use </span>core::time::Duration;
 <a href=#31 id=31 data-nosnippet>31</a><span class="kw">use </span>std::net::{IpAddr, Ipv6Addr, SocketAddr};
-<a href=#32 id=32 data-nosnippet>32</a><span class="attr">#[cfg(unix)]
-<a href=#33 id=33 data-nosnippet>33</a></span><span class="kw">use </span>std::os::unix::io::AsFd;
+<a href=#32 id=32 data-nosnippet>32</a><span class="attr">#[cfg(any(unix, target_os = <span class="string">"wasi"</span>))]
+<a href=#33 id=33 data-nosnippet>33</a></span><span class="kw">use </span>std::os::fd::AsFd;
 <a href=#34 id=34 data-nosnippet>34</a><span class="attr">#[cfg(windows)]
 <a href=#35 id=35 data-nosnippet>35</a></span><span class="kw">use </span>std::os::windows::io::AsSocket;
 <a href=#36 id=36 data-nosnippet>36</a><span class="attr">#[cfg(not(wasm_browser))]
@@ -216,13 +216,13 @@
 <a href=#216 id=216 data-nosnippet>216</a>
 <a href=#217 id=217 data-nosnippet>217</a><span class="doccomment">/// A borrowed UDP socket
 <a href=#218 id=218 data-nosnippet>218</a>///
-<a href=#219 id=219 data-nosnippet>219</a>/// On Unix, constructible via `From&lt;T: AsFd&gt;`. On Windows, constructible via `From&lt;T:
+<a href=#219 id=219 data-nosnippet>219</a>/// On Unix and WASI, constructible via `From&lt;T: AsFd&gt;`. On Windows, constructible via `From&lt;T:
 <a href=#220 id=220 data-nosnippet>220</a>/// AsSocket&gt;`.
 <a href=#221 id=221 data-nosnippet>221</a></span><span class="comment">// Wrapper around socket2 to avoid making it a public dependency and incurring stability risk
 <a href=#222 id=222 data-nosnippet>222</a></span><span class="attr">#[cfg(not(wasm_browser))]
 <a href=#223 id=223 data-nosnippet>223</a></span><span class="kw">pub struct </span>UdpSockRef&lt;<span class="lifetime">'a</span>&gt;(socket2::SockRef&lt;<span class="lifetime">'a</span>&gt;);
 <a href=#224 id=224 data-nosnippet>224</a>
-<a href=#225 id=225 data-nosnippet>225</a><span class="attr">#[cfg(unix)]
+<a href=#225 id=225 data-nosnippet>225</a><span class="attr">#[cfg(any(unix, target_os = <span class="string">"wasi"</span>))]
 <a href=#226 id=226 data-nosnippet>226</a></span><span class="kw">impl</span>&lt;<span class="lifetime">'s</span>, S&gt; From&lt;<span class="kw-2">&amp;</span><span class="lifetime">'s </span>S&gt; <span class="kw">for </span>UdpSockRef&lt;<span class="lifetime">'s</span>&gt;
 <a href=#227 id=227 data-nosnippet>227</a><span class="kw">where
 <a href=#228 id=228 data-nosnippet>228</a>    </span>S: AsFd,
