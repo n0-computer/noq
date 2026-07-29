@@ -40,8 +40,7 @@ impl<'a, M: MsgHdr> Encoder<'a, M> {
 
     /// Append a control message to the buffer.
     ///
-    /// Private: each message we send has its own method, declared next to the buffer size
-    /// covering it.
+    /// Private: each message we send has its own method, next to the size covering it.
     ///
     /// # Panics
     /// - If insufficient buffer space remains.
@@ -84,10 +83,9 @@ impl<M: MsgHdr> Drop for Encoder<'_, M> {
 
 /// Warns once if the kernel had more to say about a datagram than the buffer could hold.
 ///
-/// Dropped control messages mean lost metadata, in the worst case the GRO segment size,
-/// which leaves a coalesced datagram looking like a single one. `RECV_LEN` covers every
-/// option we enable, so this means either a new one is unaccounted for, or the caller
-/// enabled one of their own on the socket they gave us.
+/// The dropped messages cost us metadata, at worst the GRO segment size. `RECV_LEN` covers
+/// every option we enable, so one is unaccounted for, or the caller enabled their own on
+/// the socket they gave us.
 pub(crate) fn warn_if_control_truncated(hdr: &impl MsgHdr) {
     static WARNED: AtomicBool = AtomicBool::new(false);
 

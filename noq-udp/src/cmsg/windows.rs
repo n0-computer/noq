@@ -10,8 +10,9 @@ use super::{CMsgHdr, Encoder, MsgHdr};
 
 /// Every payload we put into, or read out of, a control message on this platform.
 ///
-/// A payload slot has to hold any one of these, so the largest of them is what sizes a
-/// message. Listing them as a union is what lets the compiler work that out.
+/// A payload slot holds any one of these, so the largest of them sizes a message.
+// https://learn.microsoft.com/en-us/windows/win32/api/ws2ipdef/ns-ws2ipdef-in_pktinfo
+// https://learn.microsoft.com/en-us/windows/win32/api/ws2ipdef/ns-ws2ipdef-in6_pktinfo
 #[derive(Copy, Clone)]
 #[repr(C)]
 #[allow(dead_code)] // the fields are here for their size, nothing reads them
@@ -23,11 +24,10 @@ pub(crate) union Payload {
     pktinfo_v6: WinSock::IN6_PKTINFO,
 }
 
-/// The alignment control messages are laid out at.
+/// The alignment a control message payload is guaranteed to have.
 ///
-/// `WSA_CMSG_DATA` rounds the header size up to this and `WSA_CMSG_SPACE` keeps every
-/// following header at a multiple of it, so this is what a payload has given a buffer
-/// aligned to at least as much.
+/// `WSA_CMSG_DATA` rounds the header size up to it and `WSA_CMSG_SPACE` keeps every
+/// following header at a multiple of it, [`ControlBuf`] having at least as much.
 pub(crate) const PAYLOAD_ALIGN: usize = mem::align_of::<usize>();
 
 /// Set in `dwFlags` when control messages did not fit in the buffer.
@@ -71,13 +71,11 @@ pub(crate) const SEND_LEN: usize = 3 * MESSAGE_LEN;
 pub(crate) const RECV_LEN: usize = 3 * MESSAGE_LEN;
 
 /// A control message buffer of `N` bytes.
-///
-/// Aligned like a `usize`, which is what `WSA_CMSGDATA_ALIGN` rounds to, i.e.
-/// [`PAYLOAD_ALIGN`]. The zero sized field is how a type borrows another's alignment,
-/// `repr(align)` taking a literal rather than an expression.
 #[derive(Copy, Clone)]
 #[repr(C)]
 pub(crate) struct ControlBuf<const N: usize> {
+    /// Aligns the buffer like the `usize` `WSA_CMSGDATA_ALIGN` rounds to.
+    /// Zero sized: `repr(align)` takes a literal, not an expression.
     _align: [usize; 0],
     bytes: [MaybeUninit<u8>; N],
 }
@@ -109,8 +107,8 @@ impl<const N: usize> ControlBuf<N> {
 
 /// The control messages we send.
 ///
-/// One method each rather than a generic `push`, so the set stays next to the [`SEND_LEN`]
-/// that has to cover it.
+/// One method each rather than a generic `push`, keeping the set next to the [`SEND_LEN`]
+/// covering it.
 impl<M: MsgHdr<ControlMessage = WinSock::CMSGHDR>> Encoder<'_, M> {
     /// Sets the ECN codepoint of an IPv4 datagram.
     pub(crate) fn push_ecn_v4(&mut self, ecn: c_int) {
@@ -215,8 +213,8 @@ mod tests {
 
     /// Every payload in a full buffer is aligned for the type read out of it.
     ///
-    /// Encoding the whole set the send path can produce also proves [`SEND_LEN`] covers it,
-    /// since [`Encoder::push`] panics rather than overrun the buffer.
+    /// Encoding the whole send set also proves [`SEND_LEN`] covers it, `push` panicking
+    /// rather than overrunning.
     #[test]
     fn payloads_are_aligned() {
         let mut buf = SendBuf::zeroed();

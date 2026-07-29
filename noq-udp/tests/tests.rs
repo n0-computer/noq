@@ -246,10 +246,9 @@ fn gso() {
 
 /// A datagram that is both segmented and ECN marked.
 ///
-/// The traffic class arrives after the GRO segment size and the timestamp, so a receive
-/// buffer that is too small drops it and ECN feedback silently disappears. `gso` sends no
-/// ECN and the `ecn_*` tests send a single segment, so neither puts enough control
-/// messages on one datagram to notice.
+/// The traffic class arrives after the GRO segment size and the timestamp, so too small a
+/// receive buffer drops it and ECN feedback disappears. `gso` sends no ECN and the `ecn_*`
+/// tests send one segment, so neither puts enough control messages on a datagram to notice.
 #[test]
 #[cfg_attr(not(any(target_os = "linux", target_os = "android")), ignore)]
 fn gso_with_ecn() {

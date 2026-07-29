@@ -10,8 +10,7 @@ use crate::imp::IpTosTy;
 
 /// Every payload we put into, or read out of, a control message on this platform.
 ///
-/// A payload slot has to hold any one of these, so the largest of them is what sizes a
-/// message. Listing them as a union is what lets the compiler work that out.
+/// A payload slot holds any one of these, so the largest of them sizes a message.
 #[derive(Copy, Clone)]
 #[repr(C)]
 #[allow(dead_code)] // the fields are here for their size, nothing reads them
@@ -37,25 +36,21 @@ pub(crate) union Payload {
 pub(crate) const MSG_CTRUNC: c_int = libc::MSG_CTRUNC;
 
 /// The buffer space one control message with a payload of this size takes up.
+// https://man7.org/linux/man-pages/man3/cmsg.3.html
 const fn cmsg_space(payload_len: usize) -> usize {
     unsafe { libc::CMSG_SPACE(payload_len as _) as usize }
 }
 
 /// The weaker of two alignments, i.e. the largest power of two dividing both.
 const fn common_align(a: usize, b: usize) -> usize {
-    // Whichever of the two has its lowest set bit first decides the trailing zeros of the
-    // OR, and both are offsets a payload can sit at.
+    // The lower of the two lowest set bits decides the trailing zeros of the OR.
     1 << (a | b).trailing_zeros()
 }
 
 /// The alignment a control message payload is guaranteed to have.
 ///
-/// A payload sits `CMSG_LEN(0)` bytes into its message and messages sit a sum of
-/// `CMSG_SPACE` values into the buffer, so it is the alignment those offsets share, and no
-/// more than [`ControlBuf`] itself has. Both come from the platform rather than from our
-/// payloads: the macros round to anything from 4 bytes on Darwin and the Solarish
-/// platforms to 16 on NetBSD and OpenBSD on sparc64, where the buffer is the weaker of the
-/// two. Checked against real pointers by `payloads_are_aligned`.
+/// Payloads sit `CMSG_LEN(0)` into their message and messages a sum of `CMSG_SPACE`s into
+/// the buffer, so it is what those offsets and [`ControlBuf`]'s alignment share.
 pub(crate) const PAYLOAD_ALIGN: usize = common_align(
     common_align(unsafe { libc::CMSG_LEN(0) } as usize, cmsg_space(1)),
     align_of::<ControlBuf<0>>(),
@@ -66,24 +61,21 @@ const MESSAGE_LEN: usize = cmsg_space(size_of::<Payload>());
 
 /// Space for the control messages one `sendmsg` can carry.
 ///
-/// ECN, the GSO segment size and the source address, one each: the IPv4 and IPv6 forms
-/// are mutually exclusive.
+/// ECN, GSO segment size and source address, one each; the v4 and v6 forms are exclusive.
 pub(crate) const SEND_LEN: usize = 3 * MESSAGE_LEN;
 
 /// Space for the control messages the kernel can attach to one received datagram.
 ///
-/// The TOS or traffic class, the packet info, the GRO segment size and the receive
-/// timestamp, one each, matching the socket options `UdpSocketState::new` enables.
+/// TOS or traffic class, packet info, GRO segment size and receive timestamp, one each,
+/// matching the options `UdpSocketState::new` enables.
 pub(crate) const RECV_LEN: usize = 4 * MESSAGE_LEN;
 
 /// A control message buffer of `N` bytes.
-///
-/// Aligned like a `size_t`, which is what the `CMSG_*` macros round their offsets to. The
-/// zero sized field is how a type borrows another's alignment, `repr(align)` taking a
-/// literal rather than an expression.
 #[derive(Copy, Clone)]
 #[repr(C)]
 pub(crate) struct ControlBuf<const N: usize> {
+    /// Aligns the buffer like the `size_t` the `CMSG_*` macros round offsets to.
+    /// Zero sized: `repr(align)` takes a literal, not an expression.
     _align: [usize; 0],
     bytes: [MaybeUninit<u8>; N],
 }
@@ -123,8 +115,8 @@ impl<const N: usize> ControlBuf<N> {
 
 /// The control messages we send.
 ///
-/// One method each rather than a generic `push`, so the set stays next to the [`SEND_LEN`]
-/// that has to cover it.
+/// One method each rather than a generic `push`, keeping the set next to the [`SEND_LEN`]
+/// covering it.
 impl<M: MsgHdr<ControlMessage = libc::cmsghdr>> Encoder<'_, M> {
     /// Sets the ECN codepoint of an IPv4 or IPv4-mapped datagram.
     #[cfg(not(target_os = "netbsd"))]
@@ -258,9 +250,8 @@ mod tests {
 
     /// The buffers hold every control message they have to.
     ///
-    /// [`SEND_LEN`] and [`RECV_LEN`] count messages and assume the largest payload; this
-    /// adds up the real ones, so a message we forgot to count shows up here rather than as
-    /// a truncated datagram.
+    /// The constants count messages and assume the largest payload; this adds up the real
+    /// ones, so a message we failed to count shows up here, not as a truncated datagram.
     #[test]
     fn control_len_covers_libc() {
         let sent = libc_cmsg_space(&sent_payload_lens());
@@ -275,9 +266,10 @@ mod tests {
 
     /// Every payload in a full buffer is aligned for the type read out of it.
     ///
-    /// What `cmsg::decode` relies on, and what breaks on musl if the buffer is aligned for
-    /// `libc::cmsghdr` (4 bytes there, 8 on glibc) rather than for the layout the `CMSG_*`
-    /// macros use.
+    /// What `cmsg::decode` relies on. musl aligns `cmsghdr` to 4 where glibc aligns it to
+    /// 8, so aligning the buffer for it rather than for the macros breaks there.
+    // https://github.com/kraj/musl/blob/master/include/sys/socket.h#L44
+    // https://github.com/bminor/glibc/blob/master/sysdeps/unix/sysv/linux/bits/socket.h#L283
     #[test]
     fn payloads_are_aligned() {
         let mut buf = RecvBuf::zeroed();
