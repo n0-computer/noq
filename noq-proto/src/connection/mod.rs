@@ -3347,8 +3347,6 @@ impl Connection {
     fn discard_path(&mut self, path_id: PathId, now: Instant) {
         trace!(%path_id, "dropping path state");
 
-        // The path was abandoned and 3*PTO has expired since.  Clean up all
-        // remaining state and install stateless reset token.
         self.timers.stop_per_path(path_id, self.qlog.with_time(now));
 
         debug_assert!(!self.state.is_drained()); // requirement for endpoint_events. All timers should be cleared in drained connections.
