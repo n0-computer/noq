@@ -2,10 +2,10 @@ use std::{cmp, net::SocketAddr};
 
 use identity_hash::IntMap;
 use thiserror::Error;
-use tracing::{debug, trace};
+use tracing::trace;
 
 use super::{
-    PathStats, SpaceKind,
+    PathStats, PathStatus, SpaceKind,
     mtud::MtuDiscovery,
     pacing::Pacer,
     spaces::{PacketNumberSpace, SentPacket},
@@ -224,8 +224,6 @@ pub(super) struct PathData {
     /// Observed address frame with the largest sequence number received from the peer on this
     /// path.
     pub(super) last_observed_addr_report: Option<ObservedAddr>,
-    /// The QUIC-MULTIPATH path status
-    pub(super) status: PathStatusState,
     /// Number of the first packet sent on this path
     ///
     /// With RFC9000 §9 style migration (i.e. not multipath) the PathId does not change and
@@ -337,7 +335,6 @@ impl PathData {
             in_flight: InFlight::new(),
             pending: PathRetransmits::default(),
             last_observed_addr_report: None,
-            status: Default::default(),
             first_packet: None,
             pto_count: 0,
             idle_timeout: config.default_path_max_idle_timeout,
@@ -385,7 +382,6 @@ impl PathData {
             in_flight: InFlight::new(),
             pending: PathRetransmits::default(),
             last_observed_addr_report: None,
-            status: prev.status.clone(),
             first_packet: None,
             pto_count: 0,
             idle_timeout: prev.idle_timeout,
@@ -644,14 +640,6 @@ impl PathData {
                 Some(addr)
             }
         }
-    }
-
-    pub(crate) fn remote_status(&self) -> Option<PathStatus> {
-        self.status.remote_status.map(|(_seq, status)| status)
-    }
-
-    pub(crate) fn local_status(&self) -> PathStatus {
-        self.status.local_status
     }
 
     /// Tag uniquely identifying a path in a connection.
@@ -976,69 +964,6 @@ impl InFlight {
         self.bytes -= u64::from(packet.size);
         self.ack_eliciting -= u64::from(packet.ack_eliciting);
     }
-}
-
-/// State for QUIC-MULTIPATH PATH_STATUS_AVAILABLE and PATH_STATUS_BACKUP frames
-#[derive(Debug, Clone, Default)]
-pub(super) struct PathStatusState {
-    /// The local status
-    local_status: PathStatus,
-    /// Local sequence number, for both PATH_STATUS_AVAILABLE and PATH_STATUS_BACKUP
-    ///
-    /// This is the number of the *next* path status frame to be sent.
-    local_seq: VarInt,
-    /// The status set by the remote
-    remote_status: Option<(VarInt, PathStatus)>,
-}
-
-impl PathStatusState {
-    /// To be called on received PATH_STATUS_AVAILABLE/PATH_STATUS_BACKUP frames
-    pub(super) fn remote_update(&mut self, status: PathStatus, seq: VarInt) {
-        if self.remote_status.is_some_and(|(curr, _)| curr >= seq) {
-            return trace!(%seq, "ignoring path status update");
-        }
-
-        let prev = self.remote_status.replace((seq, status)).map(|(_, s)| s);
-        if prev != Some(status) {
-            debug!(?status, ?seq, "remote changed path status");
-        }
-    }
-
-    /// Updates the local status
-    ///
-    /// If the local status changed, the previous value is returned
-    pub(super) fn local_update(&mut self, status: PathStatus) -> Option<PathStatus> {
-        if self.local_status == status {
-            return None;
-        }
-
-        self.local_seq = self.local_seq.saturating_add(1u8);
-        Some(std::mem::replace(&mut self.local_status, status))
-    }
-
-    pub(crate) fn seq(&self) -> VarInt {
-        self.local_seq
-    }
-}
-
-/// The QUIC-MULTIPATH path status
-///
-/// See section "3.3 Path Status Management":
-/// <https://quicwg.org/multipath/draft-ietf-quic-multipath.html#name-path-status-management>
-#[cfg_attr(test, derive(test_strategy::Arbitrary))]
-#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
-pub enum PathStatus {
-    /// Paths marked with as available will be used when scheduling packets
-    ///
-    /// If multiple paths are available, packets will be scheduled on whichever has
-    /// capacity.
-    #[default]
-    Available,
-    /// Paths marked as backup will only be used if there are no available paths
-    ///
-    /// If the max_idle_timeout is specified the path will be kept alive so that it does not
-    /// expire.
-    Backup,
 }
 
 /// Application events about paths
