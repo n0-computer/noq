@@ -74,7 +74,9 @@ use packet_crypto::CryptoState;
 pub(crate) use packet_crypto::EncryptionLevel;
 
 mod paths;
-pub use paths::{ClosedPath, PathAbandonReason, PathEvent, PathId, RttEstimator, SetPathStatusError};
+pub use paths::{
+    ClosedPath, PathAbandonReason, PathEvent, PathId, RttEstimator, SetPathStatusError,
+};
 use paths::{PathData, PathState};
 
 pub(crate) mod qlog;
@@ -5886,7 +5888,7 @@ impl Connection {
                 // pns can never be None, that would be a logical error.
                 let path_status = self.spaces[SpaceKind::Data]
                     .number_spaces
-                    .get(&path_id)
+                    .get(path_id)
                     .map(|pns| pns.local_status())
                     .unwrap_or_default();
                 non_recoverable_paths.push((*path_id, remote, path_status));
