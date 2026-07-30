@@ -74,9 +74,7 @@ use packet_crypto::CryptoState;
 pub(crate) use packet_crypto::EncryptionLevel;
 
 mod paths;
-pub use paths::{
-    ClosedPath, PathAbandonReason, PathEvent, PathId, RttEstimator, SetPathStatusError,
-};
+pub use paths::{ClosedPath, PathAbandonReason, PathEvent, PathId, RttEstimator, SetPathStatusError};
 use paths::{PathData, PathState};
 
 pub(crate) mod qlog;
