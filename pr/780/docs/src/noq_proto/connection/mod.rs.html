@@ -5886,7 +5886,7 @@
 <a href=#5886 id=5886 data-nosnippet>5886</a>                <span class="comment">// pns can never be None, that would be a logical error.
 <a href=#5887 id=5887 data-nosnippet>5887</a>                </span><span class="kw">let </span>path_status = <span class="self">self</span>.spaces[SpaceKind::Data]
 <a href=#5888 id=5888 data-nosnippet>5888</a>                    .number_spaces
-<a href=#5889 id=5889 data-nosnippet>5889</a>                    .get(<span class="kw-2">&amp;</span>path_id)
+<a href=#5889 id=5889 data-nosnippet>5889</a>                    .get(path_id)
 <a href=#5890 id=5890 data-nosnippet>5890</a>                    .map(|pns| pns.local_status())
 <a href=#5891 id=5891 data-nosnippet>5891</a>                    .unwrap_or_default();
 <a href=#5892 id=5892 data-nosnippet>5892</a>                non_recoverable_paths.push((<span class="kw-2">*</span>path_id, remote, path_status));
