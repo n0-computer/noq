@@ -404,7 +404,13 @@ impl FourTuple {
             }
         }
 
-        Self { remote, local_ip }
+        Self {
+            remote,
+            // Normalize e.g. IPv4-mapped-IPv6 addresses to their IPv4 form, so that
+            // path-identity comparisons don't depend on which representation a
+            // dual-stack socket happened to report the local address in.
+            local_ip: local_ip.map(|ip| ip.to_canonical()),
+        }
     }
 
     /// Creates a new [`FourTuple`] without a known local address.
@@ -462,5 +468,43 @@ impl fmt::Debug for FourTuple {
 impl From<SocketAddr> for FourTuple {
     fn from(value: SocketAddr) -> Self {
         Self::from_remote(value)
+    }
+}
+
+#[cfg(test)]
+mod four_tuple_tests {
+    use std::net::{Ipv4Addr, Ipv6Addr};
+
+    use super::*;
+
+    /// Regression test for https://github.com/n0-computer/noq/issues/738.
+    ///
+    /// An IPv4 address and its IPv4-mapped-IPv6 form are the same network address, but
+    /// compare unequal under plain `IpAddr` equality. Since a dual-stack socket may
+    /// report either form depending on how it observed the packet (e.g. via
+    /// `IPV6_PKTINFO`), `FourTuple` must normalize `local_ip` so that path-identity
+    /// comparisons don't depend on which form happened to be used.
+    #[test]
+    fn local_ip_representation_is_normalized() {
+        let remote: SocketAddr = "[::2:1]:1".parse().unwrap();
+        let v4 = Ipv4Addr::new(10, 0, 0, 5);
+
+        let plain = FourTuple::new(remote, Some(IpAddr::V4(v4)));
+        let mapped = FourTuple::new(remote, Some(IpAddr::V6(v4.to_ipv6_mapped())));
+
+        assert_eq!(plain.local_ip(), mapped.local_ip());
+        assert!(plain.is_probably_same_path(&mapped));
+        assert!(mapped.is_probably_same_path(&plain));
+    }
+
+    /// IPv6 addresses that aren't IPv4-mapped must not be conflated with each other.
+    #[test]
+    fn distinct_local_ips_stay_distinct() {
+        let remote: SocketAddr = "[::2:1]:1".parse().unwrap();
+        let a = FourTuple::new(remote, Some(IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 1, 1))));
+        let b = FourTuple::new(remote, Some(IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 1, 2))));
+
+        assert_ne!(a.local_ip(), b.local_ip());
+        assert!(!a.is_probably_same_path(&b));
     }
 }

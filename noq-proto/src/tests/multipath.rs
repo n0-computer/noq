@@ -1,6 +1,6 @@
 //! Tests for multipath
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Duration;
@@ -872,6 +872,78 @@ fn mtud_on_two_paths() -> TestResult {
     // Both paths should have found the new MTU.
     assert_eq!(pair.conn(Client).path_mtu(PathId::ZERO), 1452);
     assert_eq!(pair.conn(Client).path_mtu(path_id), 1452);
+    Ok(())
+}
+
+/// Regression test for https://github.com/n0-computer/noq/issues/738.
+///
+/// A path opened with an explicit `local_ip` must still validate even if the socket
+/// layer reports our own local address back to us in a different (but equivalent)
+/// `IpAddr` representation than the one we used to open the path. This commonly
+/// happens on dual-stack sockets, where an IPv4 local address can be reported via
+/// `IPV6_PKTINFO` as an IPv4-mapped IPv6 address (`::ffff:a.b.c.d`) instead of plain
+/// IPv4.
+///
+/// Before the fix, `FourTuple`'s `local_ip` was compared with plain `IpAddr`
+/// equality, which considers `10.0.0.5` and `::ffff:10.0.0.5` different addresses.
+/// This made `early_discard_packet` and `PathState::on_path_response_received`
+/// silently disagree about identity, and the PATH_RESPONSE was never accepted:
+/// the path would keep retransmitting PATH_CHALLENGE until it timed out.
+#[test]
+fn open_path_validates_despite_local_ip_representation_mismatch() -> TestResult {
+    let _guard = subscribe();
+
+    let mut builder = ConnPair::builder().enable_multipath();
+    builder
+        .server_transport_cfg
+        .default_path_max_idle_timeout(Some(Duration::from_secs(8)));
+    builder
+        .client_transport_cfg
+        .default_path_max_idle_timeout(Some(Duration::from_secs(8)));
+    let mut pair = builder.connect();
+
+    let first_client_addr = pair.routes.as_basic().client_addr;
+    let first_server_addr = pair.routes.as_basic().server_addr;
+    let client_ip_v4: IpAddr = Ipv4Addr::new(10, 0, 0, 5).into();
+    let second_client_addr = SocketAddr::new(client_ip_v4, 1);
+    let mut second_server_addr = first_server_addr;
+    second_server_addr.set_port(second_server_addr.port() + 1);
+    pair.routes = ManyToManyRouting::simple_symmetric(
+        [first_client_addr, second_client_addr],
+        [first_server_addr, second_server_addr],
+    )
+    .into();
+
+    let mapped_ip = match client_ip_v4 {
+        IpAddr::V4(v4) => IpAddr::V6(v4.to_ipv6_mapped()),
+        IpAddr::V6(_) => unreachable!(),
+    };
+
+    let network_path = FourTuple {
+        remote: second_server_addr,
+        local_ip: Some(client_ip_v4),
+    };
+    let path_id = pair.open_path(Client, network_path, PathStatus::Available)?;
+
+    info!("client opens path; every packet it receives on it reports dst_ip as the \
+           IPv4-mapped-IPv6 form of the local_ip it opened the path with");
+    loop {
+        pair.drive_client();
+        pair.drive_server();
+        pair.client.inbound.rewrite_dst_ip(client_ip_v4, mapped_ip);
+        if !pair.advance_time() {
+            break;
+        }
+    }
+
+    assert_matches!(
+        pair.poll(Client),
+        Some(Event::Path(PathEvent::Established { id })) if id == path_id
+    );
+    assert_matches!(
+        pair.poll(Server),
+        Some(Event::Path(PathEvent::Established { id })) if id == path_id
+    );
     Ok(())
 }
 

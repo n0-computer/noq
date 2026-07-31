@@ -1202,6 +1202,19 @@ impl InboundQueue {
     pub(super) fn iter(&self) -> impl Iterator<Item = (&Instant, &Inbound)> {
         self.inner.iter().map(|((t, _), v)| (t, v))
     }
+
+    /// Rewrites the `dst_ip` of all pending packets matching `from` to `to`.
+    ///
+    /// Used to simulate a dual-stack socket reporting the same local address in a
+    /// different `IpAddr` representation (e.g. IPv4 vs. IPv4-mapped-IPv6) than what
+    /// was used to open the path.
+    pub(super) fn rewrite_dst_ip(&mut self, from: IpAddr, to: IpAddr) {
+        for inbound in self.inner.values_mut() {
+            if inbound.dst_ip == Some(from) {
+                inbound.dst_ip = Some(to);
+            }
+        }
+    }
 }
 
 impl std::ops::Index<usize> for InboundQueue {
@@ -1271,10 +1284,11 @@ impl TestEndpoint {
                 remote,
                 dst_ip,
             } = inbound;
-            let network_path = FourTuple {
-                remote,
-                local_ip: dst_ip,
-            };
+            // Mirrors the real receive path (`noq::Endpoint`'s socket polling), which
+            // builds the `FourTuple` via `FourTuple::new` rather than a raw struct
+            // literal, so normalization (e.g. of IPv4-mapped-IPv6 addresses) is
+            // exercised the same way here as in production.
+            let network_path = FourTuple::new(remote, dst_ip);
             if let Some(event) =
                 self.endpoint
                     .handle(recv_time, network_path, ecn, packet, &mut buf)
@@ -1874,7 +1888,7 @@ impl ManyToManyRouting {
                 .iter()
                 .filter(|(addr, _)| *addr == transmit.destination)
                 .filter_map(|&(_, idx)| self.client_routes.get(idx))
-                .find(|&(addr, _)| addr.ip() == client_interface_ip)
+                .find(|&(addr, _)| addr.ip().to_canonical() == client_interface_ip.to_canonical())
             else {
                 // There's no route for given four-tuple.
                 return RoutingDecision::Drop;
@@ -1915,7 +1929,7 @@ impl ManyToManyRouting {
                 .iter()
                 .filter(|(addr, _)| *addr == transmit.destination)
                 .filter_map(|&(_, idx)| self.server_routes.get(idx))
-                .find(|&(addr, _)| addr.ip() == server_interface_ip)
+                .find(|&(addr, _)| addr.ip().to_canonical() == server_interface_ip.to_canonical())
             else {
                 // There's no route for given four-tuple.
                 return RoutingDecision::Drop;
