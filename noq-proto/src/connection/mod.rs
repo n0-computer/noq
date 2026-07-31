@@ -2339,7 +2339,15 @@ impl Connection {
 
             if known_path.network_path.local_ip.is_some()
                 && network_path.local_ip.is_some()
-                && known_path.network_path.local_ip != network_path.local_ip
+                && known_path
+                    .network_path
+                    .local_ip
+                    .as_ref()
+                    .map(std::net::IpAddr::to_canonical)
+                    != network_path
+                        .local_ip
+                        .as_ref()
+                        .map(std::net::IpAddr::to_canonical)
                 && !local_ip_may_migrate
             {
                 trace!(
