@@ -1412,6 +1412,23 @@ fn connect_capturing_coalesced_datagram() -> (ConnPair, CoalescedDatagram) {
     (ConnPair::new(pair, client_ch, server_ch), datagram)
 }
 
+#[test]
+fn coalesced_datagram_for_never_opened_path_is_ignored() {
+    // A coalesced datagram whose path id is in neither `paths` nor `abandoned_paths`:
+    // `early_discard_packet` only covers the abandoned case, and while the first packet is
+    // dropped by the unknown-path guard in `process_decrypted_packet`, the coalesced
+    // remainder previously reached `path_data_mut(..).expect("known path")` and panicked.
+    let _guard = subscribe();
+    let (mut pair, datagram) = connect_capturing_coalesced_datagram();
+
+    let never_opened = PathId::from(7u32);
+    assert!(
+        !pair.paths(Client).contains(&never_opened),
+        "path 7 must not exist"
+    );
+
+    datagram.replay(&mut pair, never_opened);
+}
 
 #[test]
 fn stale_coalesced_datagram_after_path_discard_is_ignored() {
