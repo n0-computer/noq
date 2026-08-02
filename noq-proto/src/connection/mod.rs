@@ -4160,8 +4160,13 @@ impl Connection {
         ecn: Option<EcnCodepoint>,
         data: BytesMut,
     ) {
-        self.path_data_mut(path_id)
-            .inc_total_recvd(data.len() as u64);
+        let Some(path) = self.paths.get_mut(&path_id) else {
+            // Handling the first packet of this datagram may have removed the path, so the
+            // coalesced remainder can no longer assume it exists.
+            trace!(%path_id, "discarding coalesced datagram tail for unknown path");
+            return;
+        };
+        path.data.inc_total_recvd(data.len() as u64);
         let mut remaining = Some(data);
         let cid_len = self
             .local_cid_state
