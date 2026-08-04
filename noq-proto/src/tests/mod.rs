@@ -1340,8 +1340,6 @@ fn initial_retransmit() {
     );
 }
 
-/// A coalesced handshake datagram captured before the client finished connecting, together
-/// with the metadata needed to replay it as a [`DatagramConnectionEvent`].
 struct CoalescedDatagram {
     first_decode: PartialDecode,
     remaining: Option<BytesMut>,
@@ -1351,10 +1349,6 @@ struct CoalescedDatagram {
 }
 
 impl CoalescedDatagram {
-    /// Builds the [`ConnectionEvent`] this datagram would arrive as on `path_id`.
-    ///
-    /// Deliberately does NOT call `handle_event` itself: the point of the tests below is
-    /// that a *public* API call panics, so that call stays visible in each test body.
     fn to_connection_event(self, now: Instant, path_id: PathId) -> ConnectionEvent {
         ConnectionEvent(ConnectionEventInner::Datagram(DatagramConnectionEvent {
             now,
@@ -1370,7 +1364,6 @@ impl CoalescedDatagram {
     }
 }
 
-/// Connects a multipath pair, capturing a coalesced handshake datagram on the way.
 fn connect_capturing_coalesced_datagram() -> (ConnPair, CoalescedDatagram) {
     let (mut pair, client_cfg) = ConnPair::builder().enable_multipath().build_pair();
 
@@ -1413,19 +1406,6 @@ fn connect_capturing_coalesced_datagram() -> (ConnPair, CoalescedDatagram) {
 
 #[test]
 fn coalesced_datagram_for_never_opened_path_is_ignored() {
-    // A path id in NEITHER `paths` nor `abandoned_paths`.
-    //
-    // `early_discard_packet` has two guards and neither covers this: the handshake guard
-    // needs `is_handshaking()`, and the discarded-path guard needs the id to be in
-    // `abandoned_paths`. A never-opened id is in neither map, so the packet proceeds; the
-    // first packet is then dropped by the unknown-path guard in `process_decrypted_packet`,
-    // while the coalesced remainder used to reach `path_data_mut(..).expect("known path")`
-    // and panic.
-    //
-    // The receiver does not read the path id off the wire: the endpoint looks it up as
-    // `connection_ids[dst_cid]` (endpoint.rs), so which path a datagram is attributed to is
-    // local state, not something the sender chose. That is why replaying the datagram under
-    // a different id is a faithful model of the receive path rather than a fabricated input.
     let _guard = subscribe();
     let (mut pair, datagram) = connect_capturing_coalesced_datagram();
 
