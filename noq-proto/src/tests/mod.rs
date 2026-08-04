@@ -1351,23 +1351,22 @@ struct CoalescedDatagram {
 }
 
 impl CoalescedDatagram {
-    /// Replays the datagram on `path_id`, as if it had just arrived from the network.
-    fn replay(self, pair: &mut ConnPair, path_id: PathId) {
-        let now = pair.time;
-        pair.conn_mut(Client)
-            .handle_event(ConnectionEvent(ConnectionEventInner::Datagram(
-                DatagramConnectionEvent {
-                    now,
-                    network_path: FourTuple {
-                        remote: self.remote,
-                        local_ip: self.dst_ip,
-                    },
-                    path_id,
-                    ecn: self.ecn,
-                    first_decode: self.first_decode,
-                    remaining: self.remaining,
-                },
-            )));
+    /// Builds the [`ConnectionEvent`] this datagram would arrive as on `path_id`.
+    ///
+    /// Deliberately does NOT call `handle_event` itself: the point of the tests below is
+    /// that a *public* API call panics, so that call stays visible in each test body.
+    fn to_connection_event(self, now: Instant, path_id: PathId) -> ConnectionEvent {
+        ConnectionEvent(ConnectionEventInner::Datagram(DatagramConnectionEvent {
+            now,
+            network_path: FourTuple {
+                remote: self.remote,
+                local_ip: self.dst_ip,
+            },
+            path_id,
+            ecn: self.ecn,
+            first_decode: self.first_decode,
+            remaining: self.remaining,
+        }))
     }
 }
 
@@ -1414,10 +1413,19 @@ fn connect_capturing_coalesced_datagram() -> (ConnPair, CoalescedDatagram) {
 
 #[test]
 fn coalesced_datagram_for_never_opened_path_is_ignored() {
-    // A coalesced datagram whose path id is in neither `paths` nor `abandoned_paths`:
-    // `early_discard_packet` only covers the abandoned case, and while the first packet is
-    // dropped by the unknown-path guard in `process_decrypted_packet`, the coalesced
-    // remainder previously reached `path_data_mut(..).expect("known path")` and panicked.
+    // A path id in NEITHER `paths` nor `abandoned_paths`.
+    //
+    // `early_discard_packet` has two guards and neither covers this: the handshake guard
+    // needs `is_handshaking()`, and the discarded-path guard needs the id to be in
+    // `abandoned_paths`. A never-opened id is in neither map, so the packet proceeds; the
+    // first packet is then dropped by the unknown-path guard in `process_decrypted_packet`,
+    // while the coalesced remainder used to reach `path_data_mut(..).expect("known path")`
+    // and panic.
+    //
+    // The receiver does not read the path id off the wire: the endpoint looks it up as
+    // `connection_ids[dst_cid]` (endpoint.rs), so which path a datagram is attributed to is
+    // local state, not something the sender chose. That is why replaying the datagram under
+    // a different id is a faithful model of the receive path rather than a fabricated input.
     let _guard = subscribe();
     let (mut pair, datagram) = connect_capturing_coalesced_datagram();
 
@@ -1427,7 +1435,9 @@ fn coalesced_datagram_for_never_opened_path_is_ignored() {
         "path 7 must not exist"
     );
 
-    datagram.replay(&mut pair, never_opened);
+    let now = pair.time;
+    pair.conn_mut(Client)
+        .handle_event(datagram.to_connection_event(now, never_opened));
 }
 
 #[test]
@@ -1453,7 +1463,9 @@ fn stale_coalesced_datagram_after_path_discard_is_ignored() {
         "path 0 should have been discarded"
     );
 
-    datagram.replay(&mut pair, PathId::ZERO);
+    let now = pair.time;
+    pair.conn_mut(Client)
+        .handle_event(datagram.to_connection_event(now, PathId::ZERO));
 }
 
 #[test]

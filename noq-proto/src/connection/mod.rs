@@ -4161,8 +4161,12 @@ impl Connection {
         data: BytesMut,
     ) {
         let Some(path) = self.paths.get_mut(&path_id) else {
-            // Handling the first packet of this datagram may have removed the path, so the
-            // coalesced remainder can no longer assume it exists.
+            // An unknown path id reaches here because `early_discard_packet` does not cover
+            // it: the handshake guard needs `is_handshaking()`, and the discarded-path guard
+            // needs the id to be in `abandoned_paths`. An id that was never opened is in
+            // neither map, so the datagram proceeds. `process_decrypted_packet` then drops
+            // the first packet through its own unknown-path check, but the coalesced
+            // remainder must not assume that lookup succeeded.
             trace!(%path_id, "discarding coalesced datagram tail for unknown path");
             return;
         };
