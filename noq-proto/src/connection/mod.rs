@@ -1329,8 +1329,25 @@ impl Connection {
         // nothing to send or because we were congestion blocked.
         let mut congestion_blocked = false;
 
+        let path = self.path_data(path_id);
+
+        // `C.send_quantum` bounds one aggregate scheduled and transmitted together as a unit,
+        // which for a GSO batch is its datagram count. Controllers that don't compute one leave
+        // the batch bounded only by what the caller offered.
+        // <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-06.html#section-5.6.3>
+        // Nothing `poll_transmit_on_path` does alters these, so one snapshot serves the whole call.
+        let controller_metrics = path.congestion.metrics();
+        let max_datagrams = match controller_metrics.send_quantum {
+            Some(send_quantum) => {
+                let datagrams = send_quantum / u64::from(path.current_mtu());
+                let datagrams = usize::try_from(datagrams).unwrap_or(usize::MAX);
+                max_datagrams.min(NonZeroUsize::new(datagrams).unwrap_or(NonZeroUsize::MIN))
+            }
+            None => max_datagrams,
+        };
+
         // Set the segment size to this path's MTU for on-path data.
-        let pmtu = self.path_data(path_id).current_mtu().into();
+        let pmtu = path.current_mtu().into();
         let mut transmit = TransmitBuf::new(buf, max_datagrams, pmtu);
 
         // Iterate over the available spaces.
