@@ -2327,7 +2327,17 @@ impl Connection {
         // forbids migration, drop the datagram. This could be relaxed to heuristically
         // permit NAT-rebinding-like migration.
         if let Some(known_path) = self.path_mut(path_id) {
-            if network_path.remote != known_path.network_path.remote && !peer_may_probe {
+            // noq#738: like the local_ip comparison below, dual-stack sockets can report
+            // the remote peer's address as an IPv4-mapped-IPv6 address (`::ffff:a.b.c.d`)
+            // on one side of this comparison and a plain IPv4 address on the other,
+            // depending on how the underlying fd was created (observed on Android when a
+            // physical-interface-bound socket is handed to noq via an abstract socket).
+            // Canonicalize both sides' IPs before comparing so this doesn't spuriously
+            // trip the "unrecognized peer" discard.
+            let remote_matches = network_path.remote.port() == known_path.network_path.remote.port()
+                && network_path.remote.ip().to_canonical()
+                    == known_path.network_path.remote.ip().to_canonical();
+            if !remote_matches && !peer_may_probe {
                 trace!(
                     %path_id,
                     %network_path,
