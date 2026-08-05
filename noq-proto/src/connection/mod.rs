@@ -2334,7 +2334,8 @@ impl Connection {
             // physical-interface-bound socket is handed to noq via an abstract socket).
             // Canonicalize both sides' IPs before comparing so this doesn't spuriously
             // trip the "unrecognized peer" discard.
-            let remote_matches = network_path.remote.port() == known_path.network_path.remote.port()
+            let remote_matches = network_path.remote.port()
+                == known_path.network_path.remote.port()
                 && network_path.remote.ip().to_canonical()
                     == known_path.network_path.remote.ip().to_canonical();
             if !remote_matches && !peer_may_probe {
