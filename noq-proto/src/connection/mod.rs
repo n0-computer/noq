@@ -1972,7 +1972,7 @@ impl Connection {
 
         if can_send.other && !need_loss_probe && !can_send.close {
             let path = self.path_data(path_id);
-            if path.in_flight.bytes + bytes_to_send >= path.congestion.window() {
+            if path.in_flight.bytes + bytes_to_send > path.congestion.window() {
                 trace!(
                     ?space_id,
                     %path_id,
