@@ -1349,7 +1349,7 @@ struct CoalescedDatagram {
 }
 
 impl CoalescedDatagram {
-    fn to_connection_event(self, now: Instant, path_id: PathId) -> ConnectionEvent {
+    fn into_connection_event(self, now: Instant, path_id: PathId) -> ConnectionEvent {
         ConnectionEvent(ConnectionEventInner::Datagram(DatagramConnectionEvent {
             now,
             network_path: FourTuple {
@@ -1417,7 +1417,7 @@ fn coalesced_datagram_for_never_opened_path_is_ignored() {
 
     let now = pair.time;
     pair.conn_mut(Client)
-        .handle_event(datagram.to_connection_event(now, never_opened));
+        .handle_event(datagram.into_connection_event(now, never_opened));
 }
 
 #[test]
@@ -1445,7 +1445,7 @@ fn stale_coalesced_datagram_after_path_discard_is_ignored() {
 
     let now = pair.time;
     pair.conn_mut(Client)
-        .handle_event(datagram.to_connection_event(now, PathId::ZERO));
+        .handle_event(datagram.into_connection_event(now, PathId::ZERO));
 }
 
 #[test]
