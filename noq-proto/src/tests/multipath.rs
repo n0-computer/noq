@@ -2336,11 +2336,14 @@ fn open_path_with_explicit_local_ip() -> TestResult {
         addr
     };
 
-    pair.routes = ManyToManyRouting::from_routes(
-        vec![(first_client_addr, 0), (second_client_addr, 1)],
-        vec![(server_addr, 0), (server_addr, 1)],
-    )
-    .into();
+    // `ManyToManyRouting::from_routes` rejects duplicate interface addresses
+    // (added by #721, after this test was originally written), which trips on
+    // the same `server_addr` appearing twice. `add_client_route`/`add_server_route`
+    // don't have that check, so build the same routing table incrementally instead.
+    let mut routing = ManyToManyRouting::simple_symmetric([first_client_addr], [server_addr]);
+    routing.add_client_route(second_client_addr, 0);
+    routing.add_server_route(server_addr, 1);
+    pair.routes = routing.into();
 
     // Open a path with an explicit local_ip, targeting the same server as
     // the initial connection (path 0).
