@@ -23,6 +23,14 @@ pub(super) mod gso {
             return 1;
         }
 
+        // Android Wi-Fi/cellular drivers commonly accept the UDP_SEGMENT
+        // setsockopt but then fail segmented sends with EIO at transmit time,
+        // eating the datagrams. The probe below can't detect that, so don't
+        // attempt GSO on Android at all.
+        if cfg!(target_os = "android") {
+            return 1;
+        }
+
         // As defined in linux/udp.h
         // #define UDP_MAX_SEGMENTS        (1 << 6UL)
         match set_socket_option(socket, libc::SOL_UDP, libc::UDP_SEGMENT, GSO_SIZE) {
