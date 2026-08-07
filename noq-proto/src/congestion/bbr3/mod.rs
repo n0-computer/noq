@@ -668,8 +668,8 @@ impl Bbr3 {
     /// equivalent to BBRUpdateMaxBw <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.5.5>
     fn update_max_bw(&mut self, p: BbrPacket) {
         self.update_round(p);
-        if let Some(rate_sample) = self.rs {
-            if rate_sample.delivery_rate > 0.0
+        if let Some(rate_sample) = self.rs
+            && rate_sample.delivery_rate > 0.0
                 && (rate_sample.delivery_rate >= self.max_bw || !rate_sample.is_app_limited)
             {
                 self.max_bw_filter
@@ -677,7 +677,6 @@ impl Bbr3 {
 
                 self.max_bw = self.max_bw_filter.get_max() as f64;
             }
-        }
     }
 
     /// equivalent to BBRUpdateRound <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.5.1-9>
@@ -810,11 +809,10 @@ impl Bbr3 {
             && self.is_inflight_too_high()
         {
             let mut new_inflight_hi = self.bdp.max(self.inflight_latest);
-            if let Some(rate_sample) = self.rs {
-                if new_inflight_hi < rate_sample.delivered {
+            if let Some(rate_sample) = self.rs
+                && new_inflight_hi < rate_sample.delivered {
                     new_inflight_hi = rate_sample.delivered;
                 }
-            }
             self.inflight_longterm = new_inflight_hi;
             self.full_bw_reached = true;
             self.full_bw_now = true;
@@ -911,24 +909,20 @@ impl Bbr3 {
         if self.ack_phase == AckPhase::ProbeStarting && self.round_start {
             self.ack_phase = AckPhase::ProbeFeedback;
         }
-        if self.ack_phase == AckPhase::ProbeStopping && self.round_start {
-            if let BbrState::ProbeBw(_) = self.state {
-                if let Some(rate_sample) = self.rs {
-                    if !rate_sample.is_app_limited {
+        if self.ack_phase == AckPhase::ProbeStopping && self.round_start
+            && let BbrState::ProbeBw(_) = self.state
+                && let Some(rate_sample) = self.rs
+                    && !rate_sample.is_app_limited {
                         self.advance_max_bw_filter();
                     }
-                }
-            }
-        }
         if !self.is_inflight_too_high() {
             if self.inflight_longterm == u64::MAX {
                 return;
             }
-            if let Some(rate_sample) = self.rs {
-                if rate_sample.tx_in_flight > self.inflight_longterm {
+            if let Some(rate_sample) = self.rs
+                && rate_sample.tx_in_flight > self.inflight_longterm {
                     self.inflight_longterm = rate_sample.tx_in_flight;
                 }
-            }
             if self.state == BbrState::ProbeBw(ProbeBwSubstate::Up) {
                 self.probe_inflight_long_term_upward();
             }
@@ -1052,14 +1046,13 @@ impl Bbr3 {
             }
             None => false,
         };
-        if let Some(rate_sample) = self.rs {
-            if rate_sample.rtt >= Duration::from_secs(0)
+        if let Some(rate_sample) = self.rs
+            && rate_sample.rtt >= Duration::from_secs(0)
                 && (rate_sample.rtt < self.probe_rtt_min_delay || self.probe_rtt_expired)
             {
                 self.probe_rtt_min_delay = rate_sample.rtt;
                 self.probe_rtt_min_stamp = Some(now);
             }
-        }
 
         let min_rtt_expired;
         if let Some(min_rtt_stamp) = self.min_rtt_stamp {
@@ -1092,11 +1085,10 @@ impl Bbr3 {
                 }
             }
         }
-        if let Some(rate_sample) = self.rs {
-            if rate_sample.delivered > 0 {
+        if let Some(rate_sample) = self.rs
+            && rate_sample.delivered > 0 {
                 self.idle_restart = false;
             }
-        }
     }
 
     /// equivalent to BBRHandleProbeRTT <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.3.4.3-4>
@@ -1134,12 +1126,11 @@ impl Bbr3 {
 
     /// equivalent to BBRAdvanceLatestDeliverySignals <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.5.10.3-8>
     fn advance_latest_delivery_signals(&mut self) {
-        if self.loss_round_start {
-            if let Some(rate_sample) = self.rs {
+        if self.loss_round_start
+            && let Some(rate_sample) = self.rs {
                 self.bw_latest = rate_sample.delivery_rate;
                 self.inflight_latest = rate_sample.delivered;
             }
-        }
     }
 
     /// equivalent to BBRBoundBWForModel <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.5.10.3-8>
@@ -1202,13 +1193,12 @@ impl Bbr3 {
 
     /// equivalent to BBRCheckProbeRTTDone <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.3.4.3-4>
     fn check_probe_rtt_done(&mut self, now: Instant) {
-        if let Some(probe_rtt_done_stamp) = self.probe_rtt_done_stamp {
-            if now > probe_rtt_done_stamp {
+        if let Some(probe_rtt_done_stamp) = self.probe_rtt_done_stamp
+            && now > probe_rtt_done_stamp {
                 self.probe_rtt_min_stamp = Some(now);
                 self.restore_cwnd();
                 self.exit_probe_rtt(now);
             }
-        }
     }
 
     /// equivalent to BBRRestoreCwnd <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.6.4.4-13>
@@ -1257,11 +1247,10 @@ impl Bbr3 {
             } else {
                 self.cwnd = Ord::min(self.cwnd, self.max_inflight);
             }
-        } else if self.cwnd < self.max_inflight || self.delivered < self.initial_cwnd {
-            if let Some(rate_sample) = self.rs {
+        } else if (self.cwnd < self.max_inflight || self.delivered < self.initial_cwnd)
+            && let Some(rate_sample) = self.rs {
                 self.cwnd += rate_sample.newly_acked;
             }
-        }
         self.cwnd = Ord::max(self.cwnd, self.min_pipe_cwnd);
         self.bound_cwnd_for_probe_rtt();
         self.bound_cwnd_for_model();
@@ -1390,14 +1379,12 @@ impl Bbr3 {
             if send_time > first_send_time {
                 return true;
             }
-            if send_time == first_send_time {
-                if let Some(rate_sample) = self.rs {
-                    if rate_sample.last_packet.space == space && end_seq > rate_sample.last_end_seq
+            if send_time == first_send_time
+                && let Some(rate_sample) = self.rs
+                    && rate_sample.last_packet.space == space && end_seq > rate_sample.last_end_seq
                     {
                         return true;
                     }
-                }
-            }
         }
         false
     }
@@ -1479,14 +1466,13 @@ impl Bbr3 {
     /// equivalent to BBRHandleInflightTooHigh <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.5.10.2-1>
     fn handle_inflight_too_high(&mut self, now: Instant) {
         self.bw_probe_samples = false;
-        if let Some(rate_sample) = self.rs {
-            if !rate_sample.is_app_limited {
+        if let Some(rate_sample) = self.rs
+            && !rate_sample.is_app_limited {
                 self.inflight_longterm = Ord::max(
                     rate_sample.tx_in_flight,
                     (self.target_inflight() as f64 * BETA) as u64,
                 );
             }
-        }
 
         if self.state == BbrState::ProbeBw(ProbeBwSubstate::Up) {
             self.start_probe_bw_down(now);
@@ -1595,8 +1581,8 @@ impl Bbr3 {
         let p_index_result =
             self.packets[space as usize].binary_search_by_key(&packet_number, |p| p.packet_number);
         let is_newest_packet = self.is_newest_packet(sent, space, packet_number);
-        if let Ok(p_index) = p_index_result {
-            if let Some(p) = self.packets[space as usize].get_mut(p_index) {
+        if let Ok(p_index) = p_index_result
+            && let Some(p) = self.packets[space as usize].get_mut(p_index) {
                 p.acknowledged = true;
                 if let Some(mut rate_sample) = self.rs {
                     rate_sample.rtt = now - p.send_time;
@@ -1648,7 +1634,6 @@ impl Bbr3 {
                     }
                 }
             }
-        }
     }
 
     /// equivalent to GenerateRateSample <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-06.html#section-4.1.2.4>
@@ -1813,7 +1798,7 @@ impl Controller for Bbr3 {
         lost_bytes: u64,
         largest_lost_pn: u64,
     ) {
-        Bbr3::on_congestion_event(
+        Self::on_congestion_event(
             self,
             now,
             sent,
@@ -1826,31 +1811,31 @@ impl Controller for Bbr3 {
     }
 
     fn on_mtu_update(&mut self, new_mtu: u16) {
-        Bbr3::on_mtu_update(self, new_mtu);
+        Self::on_mtu_update(self, new_mtu);
     }
 
     fn window(&self) -> u64 {
-        Bbr3::window(self)
+        Self::window(self)
     }
 
     fn clone_box(&self) -> Box<dyn Controller> {
-        Bbr3::clone_box(self)
+        Self::clone_box(self)
     }
 
     fn initial_window(&self) -> u64 {
-        Bbr3::initial_window(self)
+        Self::initial_window(self)
     }
 
     fn into_any(self: Box<Self>) -> Box<dyn Any> {
-        Bbr3::into_any(self)
+        Self::into_any(self)
     }
 
     fn on_packet_sent(&mut self, now: Instant, bytes: u16, pn: u64) {
-        Bbr3::on_packet_sent(self, now, bytes, pn, SpaceKind::Data);
+        Self::on_packet_sent(self, now, bytes, pn, SpaceKind::Data);
     }
 
     fn on_cwnd_limited(&mut self) {
-        Bbr3::on_cwnd_limited(self);
+        Self::on_cwnd_limited(self);
     }
 
     fn on_ack(
@@ -1862,7 +1847,7 @@ impl Controller for Bbr3 {
         app_limited: bool,
         rtt: &RttEstimator,
     ) {
-        Bbr3::on_ack(
+        Self::on_ack(
             self,
             now,
             sent,
@@ -1881,7 +1866,7 @@ impl Controller for Bbr3 {
         app_limited: bool,
         largest_packet_num_acked: Option<u64>,
     ) {
-        Bbr3::on_end_acks(
+        Self::on_end_acks(
             self,
             now,
             in_flight,
@@ -1892,11 +1877,11 @@ impl Controller for Bbr3 {
     }
 
     fn on_packet_lost(&mut self, lost_bytes: u16, pn: u64, now: Instant) {
-        Bbr3::on_packet_lost(self, lost_bytes, pn, SpaceKind::Data, now);
+        Self::on_packet_lost(self, lost_bytes, pn, SpaceKind::Data, now);
     }
 
     fn on_spurious_congestion_event(&mut self) {
-        Bbr3::on_spurious_congestion_event(self)
+        Self::on_spurious_congestion_event(self)
     }
 
     fn on_ack_frequency_update(
@@ -1904,11 +1889,11 @@ impl Controller for Bbr3 {
         ack_eliciting_threshold: u64,
         requested_max_ack_delay: Duration,
     ) {
-        Bbr3::on_ack_frequency_update(self, ack_eliciting_threshold, requested_max_ack_delay);
+        Self::on_ack_frequency_update(self, ack_eliciting_threshold, requested_max_ack_delay);
     }
 
     fn metrics(&self) -> ControllerMetrics {
-        Bbr3::metrics(self)
+        Self::metrics(self)
     }
 }
 
