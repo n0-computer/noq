@@ -21,7 +21,8 @@ const EXTRA_ACKED_FILTER_LEN: usize = 10;
 
 /// safety mechanism to flag packets as stale within our tracking VecDeque. rounds refer to <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.5.1>.
 /// The value of 10 rounds is picked because normally after max(kTimeThreshold * max(smoothed_rtt, latest_rtt), kGranularity) <https://datatracker.ietf.org/doc/html/rfc9002#section-6.1.2>
-/// the packet should have been declared lost already, this is just to guarantee that the VecDeque doesn't grow indefinitely.
+/// the packet should have been declared lost already, this is just to guarantee that the VecDeque
+/// doesn't grow indefinitely.
 const ROUND_COUNT_WINDOW: u64 = 10;
 
 /// the minimum for the maximum datagram size <https://datatracker.ietf.org/doc/html/rfc9000#section-14>
@@ -35,9 +36,9 @@ const MAX_DATAGRAM_SIZE: u64 = 65527;
 /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-06.html#section-5.6.3>
 const HIGH_PACE_MAX_QUANTUM: u64 = 64 * 1024;
 
-/// equivalent to BBR.StartupPacingGain: A constant specifying the minimum gain value for calculating the pacing rate that will allow
-/// the sending rate to double each round (4 * ln(2) ~= 2.77)
-/// BBRStartupPacingGain; used in Startup mode for BBR.pacing_gain. <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.6.1>
+/// equivalent to BBR.StartupPacingGain: A constant specifying the minimum gain value for
+/// calculating the pacing rate that will allow the sending rate to double each round (4 * ln(2) ~=
+/// 2.77) BBRStartupPacingGain; used in Startup mode for BBR.pacing_gain. <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.6.1>
 const STARTUP_PACING_GAIN: f64 = 2.773;
 
 /// default pacing gain is 1, when cruising, probing for RTT or refilling <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.6.1>
@@ -49,18 +50,20 @@ const PROBE_BW_DOWN_PACING_GAIN: f64 = 0.9;
 /// pacing gain when probing bandwidth up <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.6.1>
 const PROBE_BW_UP_PACING_GAIN: f64 = 1.25;
 
-/// equivalent to BBR.PacingMarginPercent: The static discount factor of 1% used to scale BBR.bw to produce C.pacing_rate.
+/// equivalent to BBR.PacingMarginPercent: The static discount factor of 1% used to scale BBR.bw to
+/// produce C.pacing_rate.
 const PACING_MARGIN_PERCENT: f64 = 1.0;
 
-/// equivalent to BBR.DefaultCwndGain: A constant specifying the minimum gain value that allows the sending rate to double each round (2) BBRStartupCwndGain.
-/// Used by default in most phases for BBR.cwnd_gain.
+/// equivalent to BBR.DefaultCwndGain: A constant specifying the minimum gain value that allows the
+/// sending rate to double each round (2) BBRStartupCwndGain. Used by default in most phases for
+/// BBR.cwnd_gain.
 const DEFAULT_CWND_GAIN: f64 = 2.0;
 
-/// equivalent to BBR.DrainPacingGain: A constant specifying the pacing gain value used in Drain mode,
-/// to attempt to drain the estimated queue at the bottleneck link in one round-trip or less.
-/// As noted in BBRDrainPacingGain, any value at or below 1 / BBRStartupCwndGain = 1 / 2 = 0.5 will theoretically achieve this.
-/// BBR uses the value 0.5, which has been shown to offer good performance when compared with other alternatives.
-/// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-2.4>
+/// equivalent to BBR.DrainPacingGain: A constant specifying the pacing gain value used in Drain
+/// mode, to attempt to drain the estimated queue at the bottleneck link in one round-trip or less.
+/// As noted in BBRDrainPacingGain, any value at or below 1 / BBRStartupCwndGain = 1 / 2 = 0.5 will
+/// theoretically achieve this. BBR uses the value 0.5, which has been shown to offer good
+/// performance when compared with other alternatives. <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-2.4>
 /// <https://github.com/google/bbr/blob/master/Documentation/startup/gain/analysis/bbr_drain_gain.pdf>
 const DRAIN_PACING_GAIN: f64 = 1.0 / DEFAULT_CWND_GAIN;
 
@@ -70,24 +73,30 @@ const PROBE_BW_UP_CWND_GAIN: f64 = 2.25;
 /// cwnd gain used when probing RTT <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.6.1>
 const PROBE_RTT_CWND_GAIN: f64 = 0.5;
 
-/// equivalent to BBR.ProbeRTTDuration: A constant specifying the minimum duration for which ProbeRTT state holds C.inflight to BBR.MinPipeCwnd or fewer packets: 200 ms.
+/// equivalent to BBR.ProbeRTTDuration: A constant specifying the minimum duration for which
+/// ProbeRTT state holds C.inflight to BBR.MinPipeCwnd or fewer packets: 200 ms.
 const PROBE_RTT_DURATION_MS: u64 = 200;
 
-/// equivalent to BBR.ProbeRTTInterval: A constant specifying the minimum time interval between ProbeRTT states: 5 secs.
+/// equivalent to BBR.ProbeRTTInterval: A constant specifying the minimum time interval between
+/// ProbeRTT states: 5 secs.
 const PROBE_RTT_INTERVAL_SEC: u64 = 5;
 
-/// equivalent to BBR.LossThresh: A constant specifying the maximum tolerated per-round-trip packet loss rate when probing for bandwidth (the default is 2%).
+/// equivalent to BBR.LossThresh: A constant specifying the maximum tolerated per-round-trip packet
+/// loss rate when probing for bandwidth (the default is 2%).
 const LOSS_THRESH: f64 = 0.02;
 
-/// equivalent to BBR.Beta: A constant specifying the default multiplicative decrease to make upon each round trip during which the connection detects packet loss (the value is 0.7).
+/// equivalent to BBR.Beta: A constant specifying the default multiplicative decrease to make upon
+/// each round trip during which the connection detects packet loss (the value is 0.7).
 const BETA: f64 = 0.7;
 
-/// equivalent to BBR.Headroom: A constant specifying the multiplicative factor to apply to BBR.inflight_longterm when calculating
-/// a volume of free headroom to try to leave unused in the path
-/// (e.g. free space in the bottleneck buffer or free time slots in the bottleneck link) that can be used by cross traffic (the value is 0.15).
+/// equivalent to BBR.Headroom: A constant specifying the multiplicative factor to apply to
+/// BBR.inflight_longterm when calculating a volume of free headroom to try to leave unused in the
+/// path (e.g. free space in the bottleneck buffer or free time slots in the bottleneck link) that
+/// can be used by cross traffic (the value is 0.15).
 const HEADROOM: f64 = 0.15;
 
-/// equivalent to BBR.MinRTTFilterLen: A constant specifying the length of the BBR.min_rtt min filter window, BBR.MinRTTFilterLen is 10 secs.
+/// equivalent to BBR.MinRTTFilterLen: A constant specifying the length of the BBR.min_rtt min
+/// filter window, BBR.MinRTTFilterLen is 10 secs.
 const MIN_RTT_FILTER_LEN: u64 = 10;
 
 /// multiplier used to check growth when validating if the full bandwidth has been reached
@@ -103,8 +112,8 @@ const MAX_FULL_BW_COUNT: u64 = 3;
 /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-06.html#section-5.3.1.3>
 const STARTUP_FULL_LOSS_CNT: u64 = 6;
 
-/// when setting `bw_probe_up_rounds` when raising our inflight long term slope we don't go above this
-/// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.3.3.6-8>
+/// when setting `bw_probe_up_rounds` when raising our inflight long term slope we don't go above
+/// this <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.3.3.6-8>
 const MAX_LONG_TERM_PROBE_UP_ROUNDS: u32 = 30;
 
 /// equivalent to T_reno_bound: the two candidate values for the round-trip bound used when
@@ -181,15 +190,18 @@ enum AckPhase {
 /// equivalent to P <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-4.1.2.1.2>
 #[derive(Debug, Clone, Copy)]
 struct BbrPacket {
-    /// equivalent to P.delivered: C.delivered when the packet was sent from transport connection C.
+    /// equivalent to P.delivered: C.delivered when the packet was sent from transport connection
+    /// C.
     delivered: u64,
     /// equivalent to P.delivered_time: C.delivered_time when the packet was sent.
     delivered_time: Instant,
     /// equivalent to P.first_send_time: C.first_send_time when the packet was sent.
     first_send_time: Instant,
-    /// equivalent to P.send_time: The pacing departure time selected when the packet was scheduled to be sent.
+    /// equivalent to P.send_time: The pacing departure time selected when the packet was scheduled
+    /// to be sent.
     send_time: Instant,
-    /// equivalent to P.is_app_limited: true if C.app_limited was non-zero when the packet was sent, else false.
+    /// equivalent to P.is_app_limited: true if C.app_limited was non-zero when the packet was
+    /// sent, else false.
     is_app_limited: bool,
     /// equivalent to P.tx_in_flight: C.inflight immediately after the transmission of packet P.
     tx_in_flight: u64,
@@ -202,29 +214,34 @@ struct BbrPacket {
     size: u16,
     /// equivalent to P.lost: C.lost when the packet was sent
     lost: u64,
-    /// used to flag acknowledgement within our VecDeque, a packet can be flagged lost after having been flagged acknowledged
-    /// hence the necessity of this flag being set before we remove it from packets.
+    /// used to flag acknowledgement within our VecDeque, a packet can be flagged lost after having
+    /// been flagged acknowledged hence the necessity of this flag being set before we remove
+    /// it from packets.
     acknowledged: bool,
-    /// once a packet has been acknowledged on a given round it is marked for removal on the next round.
+    /// once a packet has been acknowledged on a given round it is marked for removal on the next
+    /// round.
     stale: bool,
     /// used to mark packets stale if they're far from the current round <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.5.1>
     round_count: u64,
 }
 
-/// Description of a per-ack rate sample state that will allow us to determine a short term evolution of the connection
-/// equivalent to RS <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-2.2>
+/// Description of a per-ack rate sample state that will allow us to determine a short term
+/// evolution of the connection equivalent to RS <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-2.2>
 #[derive(Debug, Clone, Copy)]
 struct BbrRateSample {
-    /// equivalent to RS.delivery_rate: The delivery rate (aka bandwidth) sample obtained from the packet that has just been ACKed.
+    /// equivalent to RS.delivery_rate: The delivery rate (aka bandwidth) sample obtained from the
+    /// packet that has just been ACKed.
     delivery_rate: f64,
     /// equivalent to RS.is_app_limited: The P.is_app_limited from the most recent packet
     ///    delivered; indicates whether the rate sample is application-limited.
     is_app_limited: bool,
     /// equivalent to RS.interval: The length of the sampling interval.
     interval: Duration,
-    /// equivalent to RS.delivered: The volume of data delivered between the transmission of the packet that has just been ACKed and the current time.
+    /// equivalent to RS.delivered: The volume of data delivered between the transmission of the
+    /// packet that has just been ACKed and the current time.
     delivered: u64,
-    /// equivalent to RS.prior_delivered: The P.delivered count from the most recent packet delivered.
+    /// equivalent to RS.prior_delivered: The P.delivered count from the most recent packet
+    /// delivered.
     prior_delivered: u64,
     /// equivalent to RS.send_elapsed: Send time interval calculated from the most recent
     ///    packet delivered (see the "Send Rate" section above).
@@ -232,15 +249,19 @@ struct BbrRateSample {
     /// equivalent to RS.ack_elapsed: ACK time interval calculated from the most recent
     ///    packet delivered (see the "ACK Rate" section above).
     ack_elapsed: Duration,
-    /// equivalent to RS.rtt: The RTT sample calculated based on the most recently-sent packet of the packets that have just been ACKed.
+    /// equivalent to RS.rtt: The RTT sample calculated based on the most recently-sent packet of
+    /// the packets that have just been ACKed.
     rtt: Duration,
-    /// equivalent to RS.tx_in_flight: C.inflight at the time of the transmission of the packet that has just been ACKed
-    /// (the most recently sent packet among packets ACKed by the ACK that was just received).
+    /// equivalent to RS.tx_in_flight: C.inflight at the time of the transmission of the packet
+    /// that has just been ACKed (the most recently sent packet among packets ACKed by the ACK
+    /// that was just received).
     tx_in_flight: u64,
-    /// equivalent to RS.newly_acked: The volume of data in bytes cumulatively or selectively acknowledged upon the ACK that was just received.
+    /// equivalent to RS.newly_acked: The volume of data in bytes cumulatively or selectively
+    /// acknowledged upon the ACK that was just received.
     newly_acked: u64,
-    /// equivalent to RS.lost: The volume of data in bytes that was declared lost between the transmission
-    /// and acknowledgment of the packet that has just been ACKed (the most recently sent packet among packets ACKed by the ACK that was just received).
+    /// equivalent to RS.lost: The volume of data in bytes that was declared lost between the
+    /// transmission and acknowledgment of the packet that has just been ACKed (the most
+    /// recently sent packet among packets ACKed by the ACK that was just received).
     lost: u64,
     /// equivalent to RS.last_end_seq
     last_end_seq: u64,
@@ -250,8 +271,8 @@ struct BbrRateSample {
 
 /// Experimental! Use at your own risk.
 ///
-/// Aims for reduced buffer bloat and improved performance over high bandwidth-delay product networks.
-/// Based on <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html>
+/// Aims for reduced buffer bloat and improved performance over high bandwidth-delay product
+/// networks. Based on <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html>
 /// equivalent to a combination of BBR and C states
 /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-2.4>
 /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-2.1>
@@ -260,30 +281,40 @@ pub struct Bbr3 {
     /// equivalent to C.SMSS The Sender Maximum Send Size in bytes. <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-2.1>
     /// <https://www.rfc-editor.org/rfc/rfc9000#name-datagram-size>
     smss: u64,
-    /// equivalent to C.InitialCwnd: The initial congestion window set by the transport protocol implementation for the connection at initialization time.
+    /// equivalent to C.InitialCwnd: The initial congestion window set by the transport protocol
+    /// implementation for the connection at initialization time.
     initial_cwnd: u64,
-    /// equivalent to C.delivered: The total amount of data delivered so far over the lifetime of the transport connection C.
-    /// This MUST NOT include pure ACK packets. It SHOULD include spurious retransmissions that have been acknowledged as delivered.
+    /// equivalent to C.delivered: The total amount of data delivered so far over the lifetime of
+    /// the transport connection C. This MUST NOT include pure ACK packets. It SHOULD include
+    /// spurious retransmissions that have been acknowledged as delivered.
     delivered: u64,
-    /// equivalent to C.inflight: The connection's best estimate of the number of bytes outstanding in the network.
-    /// This includes the number of bytes that have been sent and have not been acknowledged or marked as lost since their last transmission
-    /// (e.g. "pipe" from RFC6675 or "bytes_in_flight" from RFC9002). This MUST NOT include pure ACK packets.
+    /// equivalent to C.inflight: The connection's best estimate of the number of bytes outstanding
+    /// in the network. This includes the number of bytes that have been sent and have not been
+    /// acknowledged or marked as lost since their last transmission (e.g. "pipe" from RFC6675
+    /// or "bytes_in_flight" from RFC9002). This MUST NOT include pure ACK packets.
     inflight: u64,
-    /// equivalent to C.is_cwnd_limited: True if the connection has fully utilized C.cwnd at any point in the last packet-timed round trip.
-    /// Transport-provided (via `on_cwnd_limited`); snapshotted from `cwnd_limited_this_round` at each round boundary.
+    /// equivalent to C.is_cwnd_limited: True if the connection has fully utilized C.cwnd at any
+    /// point in the last packet-timed round trip. Transport-provided (via `on_cwnd_limited`);
+    /// snapshotted from `cwnd_limited_this_round` at each round boundary.
     is_cwnd_limited: bool,
-    /// ORs every cwnd-blocked send in the current round; snapshotted into `is_cwnd_limited` and cleared when the round advances.
+    /// ORs every cwnd-blocked send in the current round; snapshotted into `is_cwnd_limited` and
+    /// cleared when the round advances.
     cwnd_limited_this_round: bool,
     /// equivalent to BBR.cycle_count: The virtual time used by the BBR.max_bw filter window.
-    /// since the BBR.max_bw_filter only needs to track samples from two time slots: the previous ProbeBW cycle and the current ProbeBW cycle.
+    /// since the BBR.max_bw_filter only needs to track samples from two time slots: the previous
+    /// ProbeBW cycle and the current ProbeBW cycle.
     cycle_count: u64,
-    /// equivalent to C.cwnd: The transport sender's congestion window. When transmitting data, the sending connection ensures that C.inflight does not exceed C.cwnd.
+    /// equivalent to C.cwnd: The transport sender's congestion window. When transmitting data, the
+    /// sending connection ensures that C.inflight does not exceed C.cwnd.
     cwnd: u64,
-    /// equivalent to C.pacing_rate: The current pacing rate for a BBR flow, which controls inter-packet spacing.
+    /// equivalent to C.pacing_rate: The current pacing rate for a BBR flow, which controls
+    /// inter-packet spacing.
     pacing_rate: f64,
-    /// equivalent to C.send_quantum: The maximum size of a data aggregate scheduled and transmitted together as a unit, e.g., to amortize per-packet transmission overheads.
+    /// equivalent to C.send_quantum: The maximum size of a data aggregate scheduled and
+    /// transmitted together as a unit, e.g., to amortize per-packet transmission overheads.
     send_quantum: u64,
-    /// equivalent to BBR.pacing_gain: The dynamic gain factor used to scale BBR.bw to produce C.pacing_rate.
+    /// equivalent to BBR.pacing_gain: The dynamic gain factor used to scale BBR.bw to produce
+    /// C.pacing_rate.
     pacing_gain: f64,
     /// default pacing gain is 1, when cruising, probing for RTT or refilling <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.6.1>
     default_pacing_gain: f64,
@@ -291,26 +322,30 @@ pub struct Bbr3 {
     probe_bw_down_pacing_gain: f64,
     /// pacing gain when probing bandwidth up <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.6.1>
     probe_bw_up_pacing_gain: f64,
-    /// equivalent to BBR.StartupPacingGain: A constant specifying the minimum gain value for calculating the pacing rate that will allow
-    /// the sending rate to double each round (4 * ln(2) ~= 2.77)
-    /// BBRStartupPacingGain; used in Startup mode for BBR.pacing_gain. <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.6.1>
+    /// equivalent to BBR.StartupPacingGain: A constant specifying the minimum gain value for
+    /// calculating the pacing rate that will allow the sending rate to double each round (4 *
+    /// ln(2) ~= 2.77) BBRStartupPacingGain; used in Startup mode for BBR.pacing_gain. <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.6.1>
     startup_pacing_gain: f64,
-    /// equivalent to BBR.DrainPacingGain: A constant specifying the pacing gain value used in Drain mode,
-    /// to attempt to drain the estimated queue at the bottleneck link in one round-trip or less.
-    /// As noted in BBRDrainPacingGain, any value at or below 1 / BBRStartupCwndGain = 1 / 2 = 0.5 will theoretically achieve this.
-    /// BBR uses the value 0.5, which has been shown to offer good performance when compared with other alternatives.
-    /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.6.1>
+    /// equivalent to BBR.DrainPacingGain: A constant specifying the pacing gain value used in
+    /// Drain mode, to attempt to drain the estimated queue at the bottleneck link in one
+    /// round-trip or less. As noted in BBRDrainPacingGain, any value at or below 1 /
+    /// BBRStartupCwndGain = 1 / 2 = 0.5 will theoretically achieve this. BBR uses the value
+    /// 0.5, which has been shown to offer good performance when compared with other alternatives. <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.6.1>
     drain_pacing_gain: f64,
-    /// equivalent to BBR.PacingMarginPercent: The static discount factor of 1% used to scale BBR.bw to produce C.pacing_rate.
+    /// equivalent to BBR.PacingMarginPercent: The static discount factor of 1% used to scale
+    /// BBR.bw to produce C.pacing_rate.
     pacing_margin_percent: f64,
-    /// equivalent to BBR.cwnd_gain: The dynamic gain factor used to scale the estimated BDP to produce a congestion window (C.cwnd).
+    /// equivalent to BBR.cwnd_gain: The dynamic gain factor used to scale the estimated BDP to
+    /// produce a congestion window (C.cwnd).
     cwnd_gain: f64,
-    /// equivalent to BBR.DefaultCwndGain: A constant specifying the minimum gain value that allows the sending rate to double each round (2) BBRStartupCwndGain.
-    /// Used by default in most phases for BBR.cwnd_gain.
+    /// equivalent to BBR.DefaultCwndGain: A constant specifying the minimum gain value that allows
+    /// the sending rate to double each round (2) BBRStartupCwndGain. Used by default in most
+    /// phases for BBR.cwnd_gain.
     default_cwnd_gain: f64,
     /// used to generate random numbers when deciding how long to wait before probing again
-    /// using Pcg32 as it's a fast general purpose random number generator and fits our purpose here
-    /// these numbers will not be security critical as they're only used to decide when to probe the connection next.
+    /// using Pcg32 as it's a fast general purpose random number generator and fits our purpose
+    /// here these numbers will not be security critical as they're only used to decide when to
+    /// probe the connection next.
     probe_rng: Pcg32,
     /// cwnd gain used when probing up <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.6.1>
     probe_bw_up_cwnd_gain: f64,
@@ -322,105 +357,147 @@ pub struct Bbr3 {
     undo_state: BbrState,
     /// equivalent to BBR.round_count: Count of packet-timed round trips elapsed so far.
     round_count: u64,
-    /// equivalent to BBR.round_start: A boolean that BBR sets to true once per packet-timed round trip, on ACKs that advance BBR.round_count.
+    /// equivalent to BBR.round_start: A boolean that BBR sets to true once per packet-timed round
+    /// trip, on ACKs that advance BBR.round_count.
     round_start: bool,
-    /// equivalent to BBR.next_round_delivered: P.delivered value denoting the end of a packet-timed round trip.
+    /// equivalent to BBR.next_round_delivered: P.delivered value denoting the end of a
+    /// packet-timed round trip.
     next_round_delivered: u64,
-    /// equivalent to BBR.idle_restart: A boolean that is true if and only if a connection is restarting after being idle.
+    /// equivalent to BBR.idle_restart: A boolean that is true if and only if a connection is
+    /// restarting after being idle.
     idle_restart: bool,
-    /// equivalent to BBR.MinPipeCwnd: The minimal C.cwnd value BBR targets, to allow pipelining with endpoints that follow an "ACK every other packet" delayed-ACK policy: 4 * C.SMSS.
+    /// equivalent to BBR.MinPipeCwnd: The minimal C.cwnd value BBR targets, to allow pipelining
+    /// with endpoints that follow an "ACK every other packet" delayed-ACK policy: 4 * C.SMSS.
     min_pipe_cwnd: u64,
-    /// equivalent to BBR.max_bw: The windowed maximum recent bandwidth sample, obtained using the BBR delivery rate sampling algorithm in
-    /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-4.1>,
-    /// measured during the current or previous bandwidth probing cycle (or during Startup, if the flow is still in that state). (Part of the long-term model.)
+    /// equivalent to BBR.max_bw: The windowed maximum recent bandwidth sample, obtained using the
+    /// BBR delivery rate sampling algorithm in <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-4.1>,
+    /// measured during the current or previous bandwidth probing cycle (or during Startup, if the
+    /// flow is still in that state). (Part of the long-term model.)
     max_bw: f64,
-    /// equivalent to BBR.bw_shortterm: The short-term maximum sending bandwidth that the algorithm estimates is safe for matching the current network path delivery rate,
-    /// based on any loss signals in the current bandwidth probing cycle. This is generally lower than max_bw. (Part of the short-term model.)
+    /// equivalent to BBR.bw_shortterm: The short-term maximum sending bandwidth that the algorithm
+    /// estimates is safe for matching the current network path delivery rate, based on any
+    /// loss signals in the current bandwidth probing cycle. This is generally lower than max_bw.
+    /// (Part of the short-term model.)
     bw_shortterm: f64,
-    /// equivalent to BBR.undo_bw_shortterm: The short-term maximum sending bandwidth that the algorithm estimates is safe for matching the current network path delivery rate,
-    /// based on any loss signals in the current bandwidth probing cycle. This is generally lower than max_bw. (Part of the short-term model.)
-    /// saved state in case a loss episode is later declared spurious
+    /// equivalent to BBR.undo_bw_shortterm: The short-term maximum sending bandwidth that the
+    /// algorithm estimates is safe for matching the current network path delivery rate,
+    /// based on any loss signals in the current bandwidth probing cycle. This is generally lower
+    /// than max_bw. (Part of the short-term model.) saved state in case a loss episode is
+    /// later declared spurious
     undo_bw_shortterm: f64,
-    /// equivalent to BBR.bw: The maximum sending bandwidth that the algorithm estimates is appropriate for matching the current network path delivery rate,
-    /// given all available signals in the model, at any time scale. It is the min() of max_bw and bw_shortterm.
+    /// equivalent to BBR.bw: The maximum sending bandwidth that the algorithm estimates is
+    /// appropriate for matching the current network path delivery rate, given all available
+    /// signals in the model, at any time scale. It is the min() of max_bw and bw_shortterm.
     bw: f64,
-    /// equivalent to BBR.min_rtt: The windowed minimum round-trip time sample measured over the last BBR.MinRTTFilterLen = 10 seconds.
-    /// This attempts to estimate the two-way propagation delay of the network path when all connections sharing a bottleneck are using BBR,
-    /// but also allows BBR to estimate the value required for a BBR.bdp estimate that allows full throughput if there are legacy loss-based Reno or CUBIC flows sharing the bottleneck.
+    /// equivalent to BBR.min_rtt: The windowed minimum round-trip time sample measured over the
+    /// last BBR.MinRTTFilterLen = 10 seconds. This attempts to estimate the two-way
+    /// propagation delay of the network path when all connections sharing a bottleneck are using
+    /// BBR, but also allows BBR to estimate the value required for a BBR.bdp estimate that
+    /// allows full throughput if there are legacy loss-based Reno or CUBIC flows sharing the
+    /// bottleneck.
     min_rtt: Duration,
-    /// equivalent to BBR.bdp: The estimate of the network path's BDP (Bandwidth-Delay Product), computed as: BBR.bdp = BBR.bw * BBR.min_rtt.
+    /// equivalent to BBR.bdp: The estimate of the network path's BDP (Bandwidth-Delay Product),
+    /// computed as: BBR.bdp = BBR.bw * BBR.min_rtt.
     bdp: u64,
-    /// equivalent to BBR.extra_acked: A volume of data that is the estimate of the recent degree of aggregation in the network path.
+    /// equivalent to BBR.extra_acked: A volume of data that is the estimate of the recent degree
+    /// of aggregation in the network path.
     extra_acked: u64,
-    /// equivalent to BBR.offload_budget: The estimate of the minimum volume of data necessary to achieve full throughput when using sender
-    /// (TSO/GSO) and receiver (LRO, GRO) host offload mechanisms.
+    /// equivalent to BBR.offload_budget: The estimate of the minimum volume of data necessary to
+    /// achieve full throughput when using sender (TSO/GSO) and receiver (LRO, GRO) host
+    /// offload mechanisms.
     offload_budget: u64,
-    /// equivalent to BBR.max_inflight: The estimate of C.inflight required to fully utilize the bottleneck bandwidth available to the flow,
-    /// based on the BDP estimate (BBR.bdp), the aggregation estimate (BBR.extra_acked), the offload budget (BBR.offload_budget), and BBR.MinPipeCwnd.
+    /// equivalent to BBR.max_inflight: The estimate of C.inflight required to fully utilize the
+    /// bottleneck bandwidth available to the flow, based on the BDP estimate (BBR.bdp), the
+    /// aggregation estimate (BBR.extra_acked), the offload budget (BBR.offload_budget), and
+    /// BBR.MinPipeCwnd.
     max_inflight: u64,
-    /// equivalent to BBR.inflight_longterm: The long-term maximum inflight that the algorithm estimates will produce acceptable queue pressure,
-    /// based on signals in the current or previous bandwidth probing cycle, as measured by loss. That is, if a flow is probing for bandwidth,
-    /// and observes that sending a particular inflight causes a loss rate higher than the loss rate threshold,
-    /// it sets inflight_longterm to that volume of data. (Part of the long-term model.)
+    /// equivalent to BBR.inflight_longterm: The long-term maximum inflight that the algorithm
+    /// estimates will produce acceptable queue pressure, based on signals in the current or
+    /// previous bandwidth probing cycle, as measured by loss. That is, if a flow is probing for
+    /// bandwidth, and observes that sending a particular inflight causes a loss rate higher
+    /// than the loss rate threshold, it sets inflight_longterm to that volume of data. (Part
+    /// of the long-term model.)
     inflight_longterm: u64,
-    /// equivalent to BBR.inflight_longterm: The long-term maximum inflight that the algorithm estimates will produce acceptable queue pressure,
-    /// based on signals in the current or previous bandwidth probing cycle, as measured by loss. That is, if a flow is probing for bandwidth,
-    /// and observes that sending a particular inflight causes a loss rate higher than the loss rate threshold,
-    /// it sets inflight_longterm to that volume of data. (Part of the long-term model.)
-    /// saved state in case a loss episode is later declared spurious
+    /// equivalent to BBR.inflight_longterm: The long-term maximum inflight that the algorithm
+    /// estimates will produce acceptable queue pressure, based on signals in the current or
+    /// previous bandwidth probing cycle, as measured by loss. That is, if a flow is probing for
+    /// bandwidth, and observes that sending a particular inflight causes a loss rate higher
+    /// than the loss rate threshold, it sets inflight_longterm to that volume of data. (Part
+    /// of the long-term model.) saved state in case a loss episode is later declared spurious
     undo_inflight_longterm: u64,
     /// equivalent to BBR.inflight_shortterm: Analogous to BBR.bw_shortterm,
-    /// the short-term maximum inflight that the algorithm estimates is safe for matching the current network path delivery process,
-    /// based on any loss signals in the current bandwidth probing cycle. This is generally lower than max_inflight or inflight_longterm. (Part of the short-term model.)
+    /// the short-term maximum inflight that the algorithm estimates is safe for matching the
+    /// current network path delivery process, based on any loss signals in the current
+    /// bandwidth probing cycle. This is generally lower than max_inflight or inflight_longterm.
+    /// (Part of the short-term model.)
     inflight_shortterm: u64,
     /// equivalent to BBR.undo_inflight_shortterm: Analogous to BBR.bw_shortterm,
-    /// the short-term maximum inflight that the algorithm estimates is safe for matching the current network path delivery process,
-    /// based on any loss signals in the current bandwidth probing cycle. This is generally lower than max_inflight or inflight_longterm. (Part of the short-term model.)
-    /// saved state in case a loss episode is later declared spurious
+    /// the short-term maximum inflight that the algorithm estimates is safe for matching the
+    /// current network path delivery process, based on any loss signals in the current
+    /// bandwidth probing cycle. This is generally lower than max_inflight or inflight_longterm.
+    /// (Part of the short-term model.) saved state in case a loss episode is later declared
+    /// spurious
     undo_inflight_shortterm: u64,
     /// equivalent to BBR.bw_latest: a 1-round-trip max of delivered bandwidth (RS.delivery_rate).
     bw_latest: f64,
-    /// equivalent to BBR.inflight_latest: a 1-round-trip max of delivered volume of data (RS.delivered).
+    /// equivalent to BBR.inflight_latest: a 1-round-trip max of delivered volume of data
+    /// (RS.delivered).
     inflight_latest: u64,
-    /// equivalent to BBR.max_bw_filter: A windowed max filter for RS.delivery_rate samples, for estimating BBR.max_bw.
+    /// equivalent to BBR.max_bw_filter: A windowed max filter for RS.delivery_rate samples, for
+    /// estimating BBR.max_bw.
     max_bw_filter: MaxFilter,
-    /// equivalent to BBR.extra_acked_interval_start: The start of the time interval for estimating the excess amount of data acknowledged due to aggregation effects.
+    /// equivalent to BBR.extra_acked_interval_start: The start of the time interval for estimating
+    /// the excess amount of data acknowledged due to aggregation effects.
     extra_acked_interval_start: Option<Instant>,
-    /// equivalent to BBR.extra_acked_delivered: The volume of data marked as delivered since BBR.extra_acked_interval_start.
+    /// equivalent to BBR.extra_acked_delivered: The volume of data marked as delivered since
+    /// BBR.extra_acked_interval_start.
     extra_acked_delivered: u64,
-    /// equivalent to BBR.extra_acked_filter: A windowed max filter for tracking the degree of aggregation in the path.
+    /// equivalent to BBR.extra_acked_filter: A windowed max filter for tracking the degree of
+    /// aggregation in the path.
     extra_acked_filter: MaxFilter,
-    /// equivalent to BBR.full_bw_reached: A boolean that records whether BBR estimates that it has ever fully utilized its available bandwidth over the lifetime of the connection.
+    /// equivalent to BBR.full_bw_reached: A boolean that records whether BBR estimates that it has
+    /// ever fully utilized its available bandwidth over the lifetime of the connection.
     full_bw_reached: bool,
-    /// equivalent to BBR.full_bw_now: A boolean that records whether BBR estimates that it has fully utilized its available bandwidth since it most recetly started looking.
+    /// equivalent to BBR.full_bw_now: A boolean that records whether BBR estimates that it has
+    /// fully utilized its available bandwidth since it most recetly started looking.
     full_bw_now: bool,
-    /// equivalent to BBR.full_bw: A recent baseline BBR.max_bw to estimate if BBR has "filled the pipe" in Startup.
+    /// equivalent to BBR.full_bw: A recent baseline BBR.max_bw to estimate if BBR has "filled the
+    /// pipe" in Startup.
     full_bw: f64,
-    /// equivalent to BBR.full_bw_count: The number of non-app-limited round trips without large increases in BBR.full_bw.
+    /// equivalent to BBR.full_bw_count: The number of non-app-limited round trips without large
+    /// increases in BBR.full_bw.
     full_bw_count: u64,
-    /// equivalent to BBR.min_rtt_stamp: The wall clock time at which the current BBR.min_rtt sample was obtained.
+    /// equivalent to BBR.min_rtt_stamp: The wall clock time at which the current BBR.min_rtt
+    /// sample was obtained.
     min_rtt_stamp: Option<Instant>,
-    /// equivalent to BBR.ProbeRTTDuration: A constant specifying the minimum duration for which ProbeRTT state holds C.inflight to BBR.MinPipeCwnd or fewer packets: 200 ms.
+    /// equivalent to BBR.ProbeRTTDuration: A constant specifying the minimum duration for which
+    /// ProbeRTT state holds C.inflight to BBR.MinPipeCwnd or fewer packets: 200 ms.
     probe_rtt_duration: Duration,
-    /// equivalent to BBR.ProbeRTTInterval: A constant specifying the minimum time interval between ProbeRTT states: 5 secs.
+    /// equivalent to BBR.ProbeRTTInterval: A constant specifying the minimum time interval between
+    /// ProbeRTT states: 5 secs.
     probe_rtt_interval: Duration,
-    /// equivalent to BBR.probe_rtt_min_delay: The minimum RTT sample recorded in the last ProbeRTTInterval.
+    /// equivalent to BBR.probe_rtt_min_delay: The minimum RTT sample recorded in the last
+    /// ProbeRTTInterval.
     probe_rtt_min_delay: Duration,
-    /// equivalent to BBR.probe_rtt_min_stamp: The wall clock time at which the current BBR.probe_rtt_min_delay sample was obtained.
+    /// equivalent to BBR.probe_rtt_min_stamp: The wall clock time at which the current
+    /// BBR.probe_rtt_min_delay sample was obtained.
     probe_rtt_min_stamp: Option<Instant>,
-    /// equivalent to BBR.probe_rtt_expired: A boolean recording whether the BBR.probe_rtt_min_delay has expired and
-    /// is due for a refresh with an application idle period or a transition into ProbeRTT state.
+    /// equivalent to BBR.probe_rtt_expired: A boolean recording whether the
+    /// BBR.probe_rtt_min_delay has expired and is due for a refresh with an application idle
+    /// period or a transition into ProbeRTT state.
     probe_rtt_expired: bool,
     /// equivalent to C.delivered_time: The wall clock time when C.delivered was last updated. <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-4.1.1.2.1>
     delivered_time: Option<Instant>,
-    /// equivalent to C.first_send_time: If packets are in flight, then this holds the send time of the packet that was most recently marked as delivered.
-    /// Else, if the connection was recently idle, then this holds the send time of most recently sent packet.
+    /// equivalent to C.first_send_time: If packets are in flight, then this holds the send time of
+    /// the packet that was most recently marked as delivered. Else, if the connection was
+    /// recently idle, then this holds the send time of most recently sent packet.
     first_send_time: Option<Instant>,
     /// equivalent to C.app_limited: marks the application-limited phase, or 0 if the connection is
     /// not currently application-limited. A byte index into the delivery stream, so a packet sent
     /// after the marker was taken is recognisable by its `P.delivered` exceeding it.
     app_limited: u64,
-    /// equivalent to C.lost: the number of bytes that have been lost during the lifetime of this connection
+    /// equivalent to C.lost: the number of bytes that have been lost during the lifetime of this
+    /// connection
     lost: u64,
     /// collection of packets in flight or just acknowledged / lost, one queue per packet number
     /// space indexed by `SpaceKind as usize`. Packet numbers are only unique and only monotonic
@@ -432,11 +509,14 @@ pub struct Bbr3 {
     rounds_since_bw_probe: u64,
     /// equivalent to BBR.bw_probe_wait: random wait time before entering probing state again
     bw_probe_wait: Duration,
-    /// equivalent to BBR.bw_probe_up_rounds: number of rounds that have been executed in probe up state
+    /// equivalent to BBR.bw_probe_up_rounds: number of rounds that have been executed in probe up
+    /// state
     bw_probe_up_rounds: u32,
-    /// equivalent to BBR.bw_probe_up_acks: volume of data in bytes that has been acknowledged during probe up state
+    /// equivalent to BBR.bw_probe_up_acks: volume of data in bytes that has been acknowledged
+    /// during probe up state
     bw_probe_up_acks: u64,
-    /// equivalent to BBR.probe_up_cnt: count of the number of times we've grown the cwnd during probe up state
+    /// equivalent to BBR.probe_up_cnt: count of the number of times we've grown the cwnd during
+    /// probe up state
     probe_up_cnt: u64,
     /// equivalent to BBR.cycle_stamp: timestamp when we start probing down state
     cycle_stamp: Option<Instant>,
@@ -477,11 +557,13 @@ pub struct Bbr3 {
     reno_rounds_bound: u64,
     /// equivalent to BBR.probe_rtt_done_stamp: timestamp when probe RTT state is finished
     probe_rtt_done_stamp: Option<Instant>,
-    /// equivalent to BBR.probe_rtt_round_done: set once per round when BBR.probe_rtt_done_stamp to check if we need to switch state
+    /// equivalent to BBR.probe_rtt_round_done: set once per round when BBR.probe_rtt_done_stamp to
+    /// check if we need to switch state
     probe_rtt_round_done: bool,
     /// equivalent to BBR.prior_cwnd: cwnd from last round
     prior_cwnd: u64,
-    /// equivalent to BBR.loss_round_start: flag set to true at the very beginning of a round where loss occurred
+    /// equivalent to BBR.loss_round_start: flag set to true at the very beginning of a round where
+    /// loss occurred
     loss_round_start: bool,
     /// equivalent to BBR.drain_start_round: The value of round_count when Drain state started.
     drain_start_round: u64,
@@ -538,7 +620,7 @@ impl Bbr3 {
             cycle_count: 0,
             cwnd: initial_cwnd,
             pacing_rate,
-            send_quantum: 2 * smss, // we start high, but it will be adjusted in set_send_quantum <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-06.html#section-5.6.3>
+            send_quantum: 2 * smss, /* we start high, but it will be adjusted in set_send_quantum <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-06.html#section-5.6.3> */
             pacing_gain: startup_pacing_gain,
             startup_pacing_gain,
             default_pacing_gain,
@@ -556,7 +638,7 @@ impl Bbr3 {
             round_start: true,
             next_round_delivered: 0,
             idle_restart: false,
-            min_pipe_cwnd: 4 * smss, // 4 * C.SMSS as defined in <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-2.7-4>
+            min_pipe_cwnd: 4 * smss, /* 4 * C.SMSS as defined in <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-2.7-4> */
             max_bw: 0.0,
             bw_shortterm: f64::INFINITY,
             undo_bw_shortterm: f64::INFINITY,
@@ -670,13 +752,13 @@ impl Bbr3 {
         self.update_round(p);
         if let Some(rate_sample) = self.rs
             && rate_sample.delivery_rate > 0.0
-                && (rate_sample.delivery_rate >= self.max_bw || !rate_sample.is_app_limited)
-            {
-                self.max_bw_filter
-                    .update_max(self.cycle_count, rate_sample.delivery_rate.round() as u64);
+            && (rate_sample.delivery_rate >= self.max_bw || !rate_sample.is_app_limited)
+        {
+            self.max_bw_filter
+                .update_max(self.cycle_count, rate_sample.delivery_rate.round() as u64);
 
-                self.max_bw = self.max_bw_filter.get_max() as f64;
-            }
+            self.max_bw = self.max_bw_filter.get_max() as f64;
+        }
     }
 
     /// equivalent to BBRUpdateRound <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.5.1-9>
@@ -810,9 +892,10 @@ impl Bbr3 {
         {
             let mut new_inflight_hi = self.bdp.max(self.inflight_latest);
             if let Some(rate_sample) = self.rs
-                && new_inflight_hi < rate_sample.delivered {
-                    new_inflight_hi = rate_sample.delivered;
-                }
+                && new_inflight_hi < rate_sample.delivered
+            {
+                new_inflight_hi = rate_sample.delivered;
+            }
             self.inflight_longterm = new_inflight_hi;
             self.full_bw_reached = true;
             self.full_bw_now = true;
@@ -909,20 +992,23 @@ impl Bbr3 {
         if self.ack_phase == AckPhase::ProbeStarting && self.round_start {
             self.ack_phase = AckPhase::ProbeFeedback;
         }
-        if self.ack_phase == AckPhase::ProbeStopping && self.round_start
+        if self.ack_phase == AckPhase::ProbeStopping
+            && self.round_start
             && let BbrState::ProbeBw(_) = self.state
-                && let Some(rate_sample) = self.rs
-                    && !rate_sample.is_app_limited {
-                        self.advance_max_bw_filter();
-                    }
+            && let Some(rate_sample) = self.rs
+            && !rate_sample.is_app_limited
+        {
+            self.advance_max_bw_filter();
+        }
         if !self.is_inflight_too_high() {
             if self.inflight_longterm == u64::MAX {
                 return;
             }
             if let Some(rate_sample) = self.rs
-                && rate_sample.tx_in_flight > self.inflight_longterm {
-                    self.inflight_longterm = rate_sample.tx_in_flight;
-                }
+                && rate_sample.tx_in_flight > self.inflight_longterm
+            {
+                self.inflight_longterm = rate_sample.tx_in_flight;
+            }
             if self.state == BbrState::ProbeBw(ProbeBwSubstate::Up) {
                 self.probe_inflight_long_term_upward();
             }
@@ -1048,11 +1134,11 @@ impl Bbr3 {
         };
         if let Some(rate_sample) = self.rs
             && rate_sample.rtt >= Duration::from_secs(0)
-                && (rate_sample.rtt < self.probe_rtt_min_delay || self.probe_rtt_expired)
-            {
-                self.probe_rtt_min_delay = rate_sample.rtt;
-                self.probe_rtt_min_stamp = Some(now);
-            }
+            && (rate_sample.rtt < self.probe_rtt_min_delay || self.probe_rtt_expired)
+        {
+            self.probe_rtt_min_delay = rate_sample.rtt;
+            self.probe_rtt_min_stamp = Some(now);
+        }
 
         let min_rtt_expired;
         if let Some(min_rtt_stamp) = self.min_rtt_stamp {
@@ -1086,9 +1172,10 @@ impl Bbr3 {
             }
         }
         if let Some(rate_sample) = self.rs
-            && rate_sample.delivered > 0 {
-                self.idle_restart = false;
-            }
+            && rate_sample.delivered > 0
+        {
+            self.idle_restart = false;
+        }
     }
 
     /// equivalent to BBRHandleProbeRTT <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.3.4.3-4>
@@ -1127,10 +1214,11 @@ impl Bbr3 {
     /// equivalent to BBRAdvanceLatestDeliverySignals <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.5.10.3-8>
     fn advance_latest_delivery_signals(&mut self) {
         if self.loss_round_start
-            && let Some(rate_sample) = self.rs {
-                self.bw_latest = rate_sample.delivery_rate;
-                self.inflight_latest = rate_sample.delivered;
-            }
+            && let Some(rate_sample) = self.rs
+        {
+            self.bw_latest = rate_sample.delivery_rate;
+            self.inflight_latest = rate_sample.delivered;
+        }
     }
 
     /// equivalent to BBRBoundBWForModel <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.5.10.3-8>
@@ -1194,11 +1282,12 @@ impl Bbr3 {
     /// equivalent to BBRCheckProbeRTTDone <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.3.4.3-4>
     fn check_probe_rtt_done(&mut self, now: Instant) {
         if let Some(probe_rtt_done_stamp) = self.probe_rtt_done_stamp
-            && now > probe_rtt_done_stamp {
-                self.probe_rtt_min_stamp = Some(now);
-                self.restore_cwnd();
-                self.exit_probe_rtt(now);
-            }
+            && now > probe_rtt_done_stamp
+        {
+            self.probe_rtt_min_stamp = Some(now);
+            self.restore_cwnd();
+            self.exit_probe_rtt(now);
+        }
     }
 
     /// equivalent to BBRRestoreCwnd <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.6.4.4-13>
@@ -1248,9 +1337,10 @@ impl Bbr3 {
                 self.cwnd = Ord::min(self.cwnd, self.max_inflight);
             }
         } else if (self.cwnd < self.max_inflight || self.delivered < self.initial_cwnd)
-            && let Some(rate_sample) = self.rs {
-                self.cwnd += rate_sample.newly_acked;
-            }
+            && let Some(rate_sample) = self.rs
+        {
+            self.cwnd += rate_sample.newly_acked;
+        }
         self.cwnd = Ord::max(self.cwnd, self.min_pipe_cwnd);
         self.bound_cwnd_for_probe_rtt();
         self.bound_cwnd_for_model();
@@ -1381,10 +1471,11 @@ impl Bbr3 {
             }
             if send_time == first_send_time
                 && let Some(rate_sample) = self.rs
-                    && rate_sample.last_packet.space == space && end_seq > rate_sample.last_end_seq
-                    {
-                        return true;
-                    }
+                && rate_sample.last_packet.space == space
+                && end_seq > rate_sample.last_end_seq
+            {
+                return true;
+            }
         }
         false
     }
@@ -1467,12 +1558,13 @@ impl Bbr3 {
     fn handle_inflight_too_high(&mut self, now: Instant) {
         self.bw_probe_samples = false;
         if let Some(rate_sample) = self.rs
-            && !rate_sample.is_app_limited {
-                self.inflight_longterm = Ord::max(
-                    rate_sample.tx_in_flight,
-                    (self.target_inflight() as f64 * BETA) as u64,
-                );
-            }
+            && !rate_sample.is_app_limited
+        {
+            self.inflight_longterm = Ord::max(
+                rate_sample.tx_in_flight,
+                (self.target_inflight() as f64 * BETA) as u64,
+            );
+        }
 
         if self.state == BbrState::ProbeBw(ProbeBwSubstate::Up) {
             self.start_probe_bw_down(now);
@@ -1582,58 +1674,58 @@ impl Bbr3 {
             self.packets[space as usize].binary_search_by_key(&packet_number, |p| p.packet_number);
         let is_newest_packet = self.is_newest_packet(sent, space, packet_number);
         if let Ok(p_index) = p_index_result
-            && let Some(p) = self.packets[space as usize].get_mut(p_index) {
-                p.acknowledged = true;
-                if let Some(mut rate_sample) = self.rs {
-                    rate_sample.rtt = now - p.send_time;
-                    if is_newest_packet {
-                        rate_sample.prior_delivered = p.delivered;
-                        rate_sample.is_app_limited = p.is_app_limited;
-                        rate_sample.tx_in_flight = p.tx_in_flight;
-                        rate_sample.lost = self.lost.saturating_sub(p.lost);
-                        rate_sample.send_elapsed = p.send_time - p.first_send_time;
-                        rate_sample.ack_elapsed =
-                            self.delivered_time.unwrap_or(now) - p.delivered_time;
-                        rate_sample.last_end_seq = packet_number;
-                        self.first_send_time = Some(p.send_time);
-                        rate_sample.last_packet = *p;
-                        self.rs = Some(rate_sample);
-                        self.update_model_and_state(rate_sample.last_packet, now);
-                        self.update_control_parameters();
-                        // Zero newly_acked after folding so each packet's bytes count once;
-                        // one ACK covers many packets and the model steps run per packet.
-                        if let Some(mut rate_sample) = self.rs {
-                            rate_sample.newly_acked = 0;
-                            self.rs = Some(rate_sample);
-                        }
-                    }
-                } else {
-                    let rate_sample = BbrRateSample {
-                        rtt: rtt.get(),
-                        interval: Duration::ZERO,
-                        delivery_rate: 0.0,
-                        is_app_limited: p.is_app_limited,
-                        delivered: 0,
-                        prior_delivered: p.delivered,
-                        tx_in_flight: p.tx_in_flight,
-                        send_elapsed: p.send_time - p.first_send_time,
-                        ack_elapsed: self.delivered_time.unwrap_or(now) - p.delivered_time,
-                        newly_acked: bytes,
-                        lost: self.lost.saturating_sub(p.lost),
-                        last_end_seq: packet_number,
-                        last_packet: *p,
-                    };
-                    self.rs = Some(rate_sample);
+            && let Some(p) = self.packets[space as usize].get_mut(p_index)
+        {
+            p.acknowledged = true;
+            if let Some(mut rate_sample) = self.rs {
+                rate_sample.rtt = now - p.send_time;
+                if is_newest_packet {
+                    rate_sample.prior_delivered = p.delivered;
+                    rate_sample.is_app_limited = p.is_app_limited;
+                    rate_sample.tx_in_flight = p.tx_in_flight;
+                    rate_sample.lost = self.lost.saturating_sub(p.lost);
+                    rate_sample.send_elapsed = p.send_time - p.first_send_time;
+                    rate_sample.ack_elapsed = self.delivered_time.unwrap_or(now) - p.delivered_time;
+                    rate_sample.last_end_seq = packet_number;
                     self.first_send_time = Some(p.send_time);
+                    rate_sample.last_packet = *p;
+                    self.rs = Some(rate_sample);
                     self.update_model_and_state(rate_sample.last_packet, now);
                     self.update_control_parameters();
-                    // Drain newly_acked after folding, as in the branch above.
+                    // Zero newly_acked after folding so each packet's bytes count once;
+                    // one ACK covers many packets and the model steps run per packet.
                     if let Some(mut rate_sample) = self.rs {
                         rate_sample.newly_acked = 0;
                         self.rs = Some(rate_sample);
                     }
                 }
+            } else {
+                let rate_sample = BbrRateSample {
+                    rtt: rtt.get(),
+                    interval: Duration::ZERO,
+                    delivery_rate: 0.0,
+                    is_app_limited: p.is_app_limited,
+                    delivered: 0,
+                    prior_delivered: p.delivered,
+                    tx_in_flight: p.tx_in_flight,
+                    send_elapsed: p.send_time - p.first_send_time,
+                    ack_elapsed: self.delivered_time.unwrap_or(now) - p.delivered_time,
+                    newly_acked: bytes,
+                    lost: self.lost.saturating_sub(p.lost),
+                    last_end_seq: packet_number,
+                    last_packet: *p,
+                };
+                self.rs = Some(rate_sample);
+                self.first_send_time = Some(p.send_time);
+                self.update_model_and_state(rate_sample.last_packet, now);
+                self.update_control_parameters();
+                // Drain newly_acked after folding, as in the branch above.
+                if let Some(mut rate_sample) = self.rs {
+                    rate_sample.newly_acked = 0;
+                    self.rs = Some(rate_sample);
+                }
             }
+        }
     }
 
     /// equivalent to GenerateRateSample <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-06.html#section-4.1.2.4>
@@ -2041,7 +2133,8 @@ mod test {
             for _ in 0..max_iters {
                 let can_send = self.inflight + self.mss <= self.bbr.window();
                 // Report the cwnd-blocked signal as the connection layer does: always-backlogged,
-                // so whenever the window (not pacing) is what stops the send, the flow is cwnd-limited.
+                // so whenever the window (not pacing) is what stops the send, the flow is
+                // cwnd-limited.
                 if !can_send {
                     self.bbr.on_cwnd_limited();
                 }
@@ -2755,12 +2848,11 @@ mod test {
     /// the code path that ends PROBE_UP on excess loss.
     ///
     /// Same simulator as A.1/A.3/A.5, in two phases:
-    ///  1. Not app-limited, no loss, full-cwnd (identical to A.5) until the flow
-    ///     cycles STARTUP -> DRAIN -> PROBE_BW -> PROBE_UP.
-    ///  2. Once PROBE_UP is entered, the app is throttled to a small fixed window
-    ///     (`APP_WINDOW`, well below cwnd) so every fresh sample is app-limited,
-    ///     and 1-in-`LOSS_PERIOD` packets are dropped -> a per-round loss rate
-    ///     (4%) above `BBR.LossThresh` (2%).
+    ///  1. Not app-limited, no loss, full-cwnd (identical to A.5) until the flow cycles STARTUP ->
+    ///     DRAIN -> PROBE_BW -> PROBE_UP.
+    ///  2. Once PROBE_UP is entered, the app is throttled to a small fixed window (`APP_WINDOW`,
+    ///     well below cwnd) so every fresh sample is app-limited, and 1-in-`LOSS_PERIOD` packets
+    ///     are dropped -> a per-round loss rate (4%) above `BBR.LossThresh` (2%).
     ///
     /// In PROBE_UP `bw_probe_samples` is true, so each lost packet is fed through
     /// `process_lost_packet`; `is_inflight_too_high()` sees the loss exceed
@@ -3969,17 +4061,17 @@ mod test {
     /// number.
     ///
     /// This exercises two mechanisms the draft calls for on aggregating paths:
-    ///  1. The delivery-rate sampler must not be fooled by the burst. A burst delivers
-    ///     `K*MSS` over a near-zero ACK-arrival span, but the underlying packets were *sent*
-    ///     over a much longer span; because `RS.interval = max(send_elapsed, ack_elapsed)`
-    ///     uses the (longer) send span, the sampled rate is capped at the send rate and
-    ///     `BBR.max_bw` tracks the true bottleneck `BW` rather than the instantaneous burst
-    ///     rate. Asserted via `max_bw` staying within a few percent of `BW`.
+    ///  1. The delivery-rate sampler must not be fooled by the burst. A burst delivers `K*MSS` over
+    ///     a near-zero ACK-arrival span, but the underlying packets were *sent* over a much longer
+    ///     span; because `RS.interval = max(send_elapsed, ack_elapsed)` uses the (longer) send
+    ///     span, the sampled rate is capped at the send rate and `BBR.max_bw` tracks the true
+    ///     bottleneck `BW` rather than the instantaneous burst rate. Asserted via `max_bw` staying
+    ///     within a few percent of `BW`.
     ///  2. `BBRUpdateACKAggregation` must estimate the excess data delivered by aggregation
-    ///     (`BBR.extra_acked`) and `BBRUpdateMaxInflight` must add it to the cwnd budget, so
-    ///     that inflight does not throttle throughput on the bursty path. With STARTUP's
-    ///     `cwnd_gain` of 2, `max_inflight = 2*BDP + extra_acked`, so a positive
-    ///     `extra_acked` drives `C.cwnd` above `2 * BDP`. Asserted directly.
+    ///     (`BBR.extra_acked`) and `BBRUpdateMaxInflight` must add it to the cwnd budget, so that
+    ///     inflight does not throttle throughput on the bursty path. With STARTUP's `cwnd_gain` of
+    ///     2, `max_inflight = 2*BDP + extra_acked`, so a positive `extra_acked` drives `C.cwnd`
+    ///     above `2 * BDP`. Asserted directly.
     ///
     /// Despite the aggregation, STARTUP must still ramp (pacing_gain 2.773 doubles the send
     /// rate each round) and discover the full bottleneck bandwidth, exiting to DRAIN on the
@@ -4173,13 +4265,13 @@ mod test {
     ///
     /// Two phases over the same constant-rate FIFO simulator as A.1:
     ///  1. Reach steady state with plain (unaggregated) delivery, one ACK per packet, as in
-    ///     `probe_bw_exits_probe_down_to_probe_cruise_on_inflight`, driving
-    ///     STARTUP -> DRAIN -> PROBE_BW and on into PROBE_CRUISE.
-    ///  2. On entering PROBE_CRUISE, switch the path to aggregate ACKs: completed packets are
-    ///     held and released in bursts on a fixed `AGG_NS` epoch grid (the L2 batching /
-    ///     radio-DRX behaviour A.12 models), so many packets share one delivery instant and
-    ///     the sender sees one ACK "event" cover a burst. The bottleneck still drains at
-    ///     exactly `BW`, so only ACK arrival *timing* is bursty; the average rate is unchanged.
+    ///     `probe_bw_exits_probe_down_to_probe_cruise_on_inflight`, driving STARTUP -> DRAIN ->
+    ///     PROBE_BW and on into PROBE_CRUISE.
+    ///  2. On entering PROBE_CRUISE, switch the path to aggregate ACKs: completed packets are held
+    ///     and released in bursts on a fixed `AGG_NS` epoch grid (the L2 batching / radio-DRX
+    ///     behaviour A.12 models), so many packets share one delivery instant and the sender sees
+    ///     one ACK "event" cover a burst. The bottleneck still drains at exactly `BW`, so only ACK
+    ///     arrival *timing* is bursty; the average rate is unchanged.
     ///
     /// Each burst is fed exactly as the connection layer would (cf. `Connection::on_packet_acked`
     /// looping over the newly-acked packets, then a single `on_end_acks`): one `on_ack` per
@@ -4195,14 +4287,14 @@ mod test {
     ///
     /// Asserts that, in PROBE_CRUISE on the aggregating path:
     ///  - the path genuinely aggregated (some ACK event covered many packets);
-    ///  - `extra_acked` became positive and equalled `extra_acked_filter.get_max()` on every
-    ///    ack, i.e. it is sourced from the windowed max filter, not the instantaneous round;
-    ///  - the windowed max held: within `EXTRA_ACKED_FILTER_LEN` rounds of the peak, a
-    ///    lower-excess round (an inter-ACK silence) never knocked `extra_acked` below that
-    ///    peak (the filter retained it), so the cwnd budget did not collapse between bursts;
-    ///  - `C.cwnd` exceeded `2*BDP` while `extra_acked>0` (the augmentation), and actual
-    ///    inflight rose above `2*BDP` too: the sender kept the pipe full across the silences
-    ///    rather than stalling at the un-augmented budget.
+    ///  - `extra_acked` became positive and equalled `extra_acked_filter.get_max()` on every ack,
+    ///    i.e. it is sourced from the windowed max filter, not the instantaneous round;
+    ///  - the windowed max held: within `EXTRA_ACKED_FILTER_LEN` rounds of the peak, a lower-excess
+    ///    round (an inter-ACK silence) never knocked `extra_acked` below that peak (the filter
+    ///    retained it), so the cwnd budget did not collapse between bursts;
+    ///  - `C.cwnd` exceeded `2*BDP` while `extra_acked>0` (the augmentation), and actual inflight
+    ///    rose above `2*BDP` too: the sender kept the pipe full across the silences rather than
+    ///    stalling at the un-augmented budget.
     #[test]
     fn probe_cruise_reaches_full_bw_with_ack_aggregation() {
         /// packet size in bytes
@@ -4495,40 +4587,39 @@ mod test {
     /// Two phases over one bespoke loop (the shared `Sim` acks one packet per ack; this needs a
     /// delayed-ACK receiver, so it drives the send/ack path directly like A.12/A.13):
     ///  1. Reach steady-state PROBE_BW/PROBE_CRUISE with a plain receiver (one ACK per packet),
-    ///     driving STARTUP -> DRAIN -> PROBE_BW -> PROBE_CRUISE. Capture BDP, `C.cwnd`, the
-    ///     pacing rate and `MinPipeCwnd` at cruise entry.
-    ///  2. Switch to an "ACK every other packet" receiver: completed packets are released in
-    ///     pairs (the second packet's arrival triggers one ACK covering both), the delayed-ACK
-    ///     policy `MinPipeCwnd` exists to serve. Because the 4-packet floor keeps ~4 packets
-    ///     outstanding, a pair is always forming, so the bottleneck never idles waiting on a
-    ///     held ACK, so the pipeline does not stall and throughput stays at `BW`. With only the
-    ///     sub-packet model budget (~1 packet) the receiver would hold its lone packet's ACK
-    ///     forever and the flow would deadlock; the floor is what prevents that. The measurement
-    ///     runs across whole PROBE_BW cycles rather than one cruise sojourn: `TargetInflight()` is
-    ///     a single packet here, so the Reno-coexistence time scale makes every round a probe
-    ///     round. `MinPipeCwnd` is a lower bound on `C.cwnd` in every state, so this does not
-    ///     weaken the check.
+    ///     driving STARTUP -> DRAIN -> PROBE_BW -> PROBE_CRUISE. Capture BDP, `C.cwnd`, the pacing
+    ///     rate and `MinPipeCwnd` at cruise entry.
+    ///  2. Switch to an "ACK every other packet" receiver: completed packets are released in pairs
+    ///     (the second packet's arrival triggers one ACK covering both), the delayed-ACK policy
+    ///     `MinPipeCwnd` exists to serve. Because the 4-packet floor keeps ~4 packets outstanding,
+    ///     a pair is always forming, so the bottleneck never idles waiting on a held ACK, so the
+    ///     pipeline does not stall and throughput stays at `BW`. With only the sub-packet model
+    ///     budget (~1 packet) the receiver would hold its lone packet's ACK forever and the flow
+    ///     would deadlock; the floor is what prevents that. The measurement runs across whole
+    ///     PROBE_BW cycles rather than one cruise sojourn: `TargetInflight()` is a single packet
+    ///     here, so the Reno-coexistence time scale makes every round a probe round. `MinPipeCwnd`
+    ///     is a lower bound on `C.cwnd` in every state, so this does not weaken the check.
     ///
     /// Asserts:
-    ///  - at cruise entry the model budget was genuinely sub-floor (`cwnd_gain*BDP <
-    ///    MinPipeCwnd`, BDP no more than ~2 packets) and `MinPipeCwnd == 4*MSS`;
+    ///  - at cruise entry the model budget was genuinely sub-floor (`cwnd_gain*BDP < MinPipeCwnd`,
+    ///    BDP no more than ~2 packets) and `MinPipeCwnd == 4*MSS`;
     ///  - `C.cwnd` sat exactly at `MinPipeCwnd` (the floor, not the tiny model budget, governs);
     ///  - the pacing rate matched the low link bandwidth (within 5% of `BW`);
     ///  - under the delayed-ACK receiver the pipeline never stalled: pairs genuinely formed,
-    ///    `C.cwnd` never fell below the 4-packet floor, and achieved throughput stayed at
-    ///    `BW` (within 10%).
+    ///    `C.cwnd` never fell below the 4-packet floor, and achieved throughput stayed at `BW`
+    ///    (within 10%).
     #[test]
     fn probe_bw_floors_sub_packet_bdp_at_min_pipe_cwnd() {
         /// packet size in bytes
         const MSS: u64 = 1200;
         /// bottleneck bandwidth: 8 Mbit/s (1 MB/s) in bytes/sec. Two constraints pin this:
         ///  - cruise pacing (~0.99*BW) times 1ms (~990 B) must stay under the `2*SMSS`
-        ///    `set_send_quantum` floor, so `send_quantum` sits at that floor and
-        ///    `offload_budget` (send_quantum + delayed-ACK term) stays below `MinPipeCwnd`
-        ///    (4*SMSS); otherwise the floor can't bind.
-        ///  - it must still be fast enough to reach PROBE_CRUISE well within the 10s min-RTT
-        ///    filter window, so the clean (drained) min-RTT sample from DRAIN survives to cruise
-        ///    rather than aging out and re-latching to a queued value.
+        ///    `set_send_quantum` floor, so `send_quantum` sits at that floor and `offload_budget`
+        ///    (send_quantum + delayed-ACK term) stays below `MinPipeCwnd` (4*SMSS); otherwise the
+        ///    floor can't bind.
+        ///  - it must still be fast enough to reach PROBE_CRUISE well within the 10s min-RTT filter
+        ///    window, so the clean (drained) min-RTT sample from DRAIN survives to cruise rather
+        ///    than aging out and re-latching to a queued value.
         const BW: f64 = 1_000_000.0;
         /// small propagation round-trip time (0.4ms): the propagation BDP `bw*prop` = 400 bytes is
         /// under one packet ("sub-packet BDP"). The measured clean min-RTT is `prop + MSS/BW`
@@ -4801,20 +4892,22 @@ mod test {
     /// A bespoke single-bottleneck FIFO loop (bandwidth changes mid-flight, which the shared `Sim`
     /// can't express; cf. A.12/A.13/A.14, which also drive the path directly) with an always-
     /// backlogged, paced sender. In PROBE_UP the pacing gain (1.25) drives sends above the delivery
-    /// rate, so the flow rides at cwnd (cwnd-limited) and the 25% surplus probes for more bandwidth.
-    ///  1. `BW_LO` = 10 Mbit/s. Ramp cleanly to `BW_LO` in PROBE_BW, then a brief 1-in-`LOSS_PERIOD`
-    ///     loss seeds a finite `inflight_longterm` (a PROBE_UP loss runs `handle_inflight_too_high`);
-    ///     the loss is switched off the instant it fires. Only a finite `inflight_longterm` gives the
-    ///     exponential slope a base to grow from.
-    ///  2. Jump the bottleneck rate 10x (`BW_HI` = 100 Mbit/s). PROBE_BW cycles into PROBE_UP, where
-    ///     `inflight_longterm` is grown back up. Record it at each PROBE_UP round-start; run until
-    ///     `max_bw` reaches `BW_HI`.
+    /// rate, so the flow rides at cwnd (cwnd-limited) and the 25% surplus probes for more
+    /// bandwidth.
+    ///  1. `BW_LO` = 10 Mbit/s. Ramp cleanly to `BW_LO` in PROBE_BW, then a brief
+    ///     1-in-`LOSS_PERIOD` loss seeds a finite `inflight_longterm` (a PROBE_UP loss runs
+    ///     `handle_inflight_too_high`); the loss is switched off the instant it fires. Only a
+    ///     finite `inflight_longterm` gives the exponential slope a base to grow from.
+    ///  2. Jump the bottleneck rate 10x (`BW_HI` = 100 Mbit/s). PROBE_BW cycles into PROBE_UP,
+    ///     where `inflight_longterm` is grown back up. Record it at each PROBE_UP round-start; run
+    ///     until `max_bw` reaches `BW_HI`.
     ///
     /// Asserts:
     ///  - at the bump the flow was in the low-rate regime (`max_bw` well below `BW_HI`);
-    ///  - the additive step added to `inflight_longterm` doubles each round trip: `bw_probe_up_rounds`
-    ///    (the `SMSS << bw_probe_up_rounds` slope) advances once per cwnd-limited round, and the
-    ///    per-round `inflight_longterm` increment grows geometrically (a sustained ~2x run);
+    ///  - the additive step added to `inflight_longterm` doubles each round trip:
+    ///    `bw_probe_up_rounds` (the `SMSS << bw_probe_up_rounds` slope) advances once per
+    ///    cwnd-limited round, and the per-round `inflight_longterm` increment grows geometrically
+    ///    (a sustained ~2x run);
     ///  - the full 100 Mbit/s is rediscovered (`max_bw` >= 97% of `BW_HI`) within a small,
     ///    O(log(BDP)) number of PROBE_UP round trips.
     #[test]
@@ -4971,8 +5064,8 @@ mod test {
                     btl_service_ns = (MSS as f64 / BW_HI * 1e9).round() as u64;
                 }
 
-                // Record (inflight_longterm, bw_probe_up_rounds) once per PROBE_UP round-start after
-                // the bump, and the round the first post-bump PROBE_UP began.
+                // Record (inflight_longterm, bw_probe_up_rounds) once per PROBE_UP round-start
+                // after the bump, and the round the first post-bump PROBE_UP began.
                 if bumped && bbr.state == BbrState::ProbeBw(ProbeBwSubstate::Up) && bbr.round_start
                 {
                     first_up_round.get_or_insert(bbr.round_count);
@@ -5054,10 +5147,10 @@ mod test {
     ///  1. The short-term model reacts within the current probe cycle. A loss round runs
     ///     `loss_lower_bounds`, decaying `BBR.bw_shortterm` by `BETA` (0.7) toward the freshly
     ///     measured `bw_latest`. Because `bw = min(max_bw, bw_shortterm)`, this throttles
-    ///     pacing/cwnd immediately, long before the long-term `max_bw` moves. (Each PROBE_BW
-    ///     refill resets `bw_shortterm` and re-seeds it from the still-stale-high `max_bw`, so per
-    ///     cycle it only steps down ~one `BETA`; the full collapse to the new rate is the filter's
-    ///     job, below.)
+    ///     pacing/cwnd immediately, long before the long-term `max_bw` moves. (Each PROBE_BW refill
+    ///     resets `bw_shortterm` and re-seeds it from the still-stale-high `max_bw`, so per cycle
+    ///     it only steps down ~one `BETA`; the full collapse to the new rate is the filter's job,
+    ///     below.)
     ///  2. The long-term `max_bw` is a max filter over `RS.delivery_rate` keyed on `cycle_count`
     ///     with a window of `MAX_BW_FILTER_LEN` (2). The stale high sample only expires once
     ///     `cycle_count` has advanced past the window, i.e. after ~2 PROBE_BW cycles
@@ -5164,8 +5257,9 @@ mod test {
                 let lost = queue_bytes > BUFFER_BYTES;
 
                 let event_ns = if lost {
-                    // Dropped: never served, so the bottleneck is not advanced. Its loss is detected
-                    // roughly when the packets around it would have been served/acked.
+                    // Dropped: never served, so the bottleneck is not advanced. Its loss is
+                    // detected roughly when the packets around it would have
+                    // been served/acked.
                     service_start + RET_NS
                 } else {
                     let finish = service_start + btl_service_ns;
@@ -5204,8 +5298,9 @@ mod test {
                     bbr.on_end_acks(at(now_ns), inflight, false, Some(p.pn), SpaceKind::Data);
                 }
 
-                // Phase 1 -> 2: once settled in PROBE_BW at the high rate (max_bw ~= BW_HI), cut the
-                // link 10x. The ~1 BDP still in flight now overflows the buffer -> loss.
+                // Phase 1 -> 2: once settled in PROBE_BW at the high rate (max_bw ~= BW_HI), cut
+                // the link 10x. The ~1 BDP still in flight now overflows the buffer
+                // -> loss.
                 if !cut && matches!(bbr.state, BbrState::ProbeBw(_)) && bbr.max_bw >= 0.9 * BW_HI {
                     cut = true;
                     cut_max_bw = bbr.max_bw;
@@ -5213,7 +5308,8 @@ mod test {
                     btl_service_ns = (MSS as f64 / BW_LO * 1e9).round() as u64;
                 }
 
-                // After the cut, watch the short-term model descend and the long-term filter expire.
+                // After the cut, watch the short-term model descend and the long-term filter
+                // expire.
                 if cut {
                     if bbr.bw_shortterm.is_finite() {
                         min_shortterm_after = min_shortterm_after.min(bbr.bw_shortterm);
@@ -5267,40 +5363,46 @@ mod test {
     }
 
     /// A.17: Handling token bucket policers.
-    /// Exercises the short-term loss response (`init_lower_bounds` + `loss_lower_bounds`, driven from
-    /// `adapt_lower_bounds_from_congestion`) settling the flow to a token-bucket policer's token rate:
-    /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.5.10.3-8>
+    /// Exercises the short-term loss response (`init_lower_bounds` + `loss_lower_bounds`, driven
+    /// from `adapt_lower_bounds_from_congestion`) settling the flow to a token-bucket policer's
+    /// token rate: <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.5.10.3-8>
     ///
-    /// A token-bucket policer is not a queue. It holds a bucket of `BURST` bytes that refills at the
-    /// token rate, admits a packet only if a token is available, and *drops* (never buffers) any
-    /// packet that arrives with the bucket empty. This is the classic BBR failure mode: during the
-    /// initial burst every packet passes at line rate, so BBR's `max_bw` filter latches onto a
-    /// delivery rate well above the token rate; once the burst is spent the policer starts dropping,
-    /// and (because the policer adds no delay, so RTT never grows and there is no queueing signal)
-    /// only the short-term model's loss response can pull the flow back down to the token rate.
+    /// A token-bucket policer is not a queue. It holds a bucket of `BURST` bytes that refills at
+    /// the token rate, admits a packet only if a token is available, and *drops* (never
+    /// buffers) any packet that arrives with the bucket empty. This is the classic BBR failure
+    /// mode: during the initial burst every packet passes at line rate, so BBR's `max_bw`
+    /// filter latches onto a delivery rate well above the token rate; once the burst is spent
+    /// the policer starts dropping, and (because the policer adds no delay, so RTT never grows
+    /// and there is no queueing signal) only the short-term model's loss response can pull the
+    /// flow back down to the token rate.
     ///
-    ///  1. The short-term model reacts within the PROBE_BW cruise/down cycle. A loss round there runs
-    ///     `init_lower_bounds` (seeding `bw_shortterm`/`inflight_shortterm` finite from the current
-    ///     `max_bw`/`cwnd`) then `loss_lower_bounds`, decaying `bw_shortterm` by `BETA` toward the
-    ///     measured `bw_latest` and `inflight_shortterm` by `BETA` toward `inflight_latest`. Because
-    ///     `bw = min(max_bw, bw_shortterm)` and the window is capped at `inflight_shortterm`, this
-    ///     throttles pacing and inflight even though the stale-high `max_bw` never moves.
-    ///  2. Repeated across cycles the short-term bounds settle the flow so its send rate matches the
-    ///     token rate: the bucket stays near empty but drops become rare rather than continuous.
+    ///  1. The short-term model reacts within the PROBE_BW cruise/down cycle. A loss round there
+    ///     runs `init_lower_bounds` (seeding `bw_shortterm`/`inflight_shortterm` finite from the
+    ///     current `max_bw`/`cwnd`) then `loss_lower_bounds`, decaying `bw_shortterm` by `BETA`
+    ///     toward the measured `bw_latest` and `inflight_shortterm` by `BETA` toward
+    ///     `inflight_latest`. Because `bw = min(max_bw, bw_shortterm)` and the window is capped at
+    ///     `inflight_shortterm`, this throttles pacing and inflight even though the stale-high
+    ///     `max_bw` never moves.
+    ///  2. Repeated across cycles the short-term bounds settle the flow so its send rate matches
+    ///     the token rate: the bucket stays near empty but drops become rare rather than
+    ///     continuous.
     ///
-    /// Bespoke single-bottleneck loop in the spirit of A.15/A.16, with the FIFO buffer replaced by a
-    /// token bucket (refill at `TOKEN_RATE`, cap `BURST`, no queue). A packet passes iff a token is
-    /// available on arrival, otherwise it is dropped with only propagation delay (no serialization,
-    /// no queueing), so RTT is constant and loss is the only congestion signal. Run for a fixed
-    /// simulated duration; the last `WINDOW_NS` is the stable-point measurement window.
+    /// Bespoke single-bottleneck loop in the spirit of A.15/A.16, with the FIFO buffer replaced by
+    /// a token bucket (refill at `TOKEN_RATE`, cap `BURST`, no queue). A packet passes iff a
+    /// token is available on arrival, otherwise it is dropped with only propagation delay (no
+    /// serialization, no queueing), so RTT is constant and loss is the only congestion signal.
+    /// Run for a fixed simulated duration; the last `WINDOW_NS` is the stable-point measurement
+    /// window.
     ///
     /// Asserts:
-    ///  - the flow reaches PROBE_BW (past STARTUP) with a burst-inflated `max_bw` above the token rate;
+    ///  - the flow reaches PROBE_BW (past STARTUP) with a burst-inflated `max_bw` above the token
+    ///    rate;
     ///  - once the burst is exhausted and the policer drops, the short-term model engages:
-    ///    `bw_shortterm` drops below the stale-high `max_bw` and `inflight_shortterm` becomes finite;
+    ///    `bw_shortterm` drops below the stale-high `max_bw` and `inflight_shortterm` becomes
+    ///    finite;
     ///  - the flow settles to a stable operating point conforming to the token rate: over the late
-    ///    window the delivered goodput tracks `TOKEN_RATE` and the loss rate stays low (no excessive
-    ///    continuous loss).
+    ///    window the delivered goodput tracks `TOKEN_RATE` and the loss rate stays low (no
+    ///    excessive continuous loss).
     #[test]
     fn probe_bw_settles_to_token_rate_under_policer() {
         /// packet size in bytes
@@ -5349,7 +5451,8 @@ mod test {
         let mut pn: u64 = 0;
 
         // Token bucket: starts full, refills at TOKEN_RATE up to BURST, drained MSS per admitted
-        // packet. Advanced by packet arrival time (send_ns + FWD_NS), which is monotonic in send_ns.
+        // packet. Advanced by packet arrival time (send_ns + FWD_NS), which is monotonic in
+        // send_ns.
         let mut tokens: f64 = BURST;
         let mut last_refill_ns: u64 = 0;
 
@@ -5461,16 +5564,17 @@ mod test {
         let goodput = win_acked as f64 / win_secs.max(1e-9);
         let loss_rate = win_lost as f64 / (win_acked + win_lost).max(1) as f64;
 
-        // The flow reached PROBE_BW past STARTUP, with a burst-inflated max_bw above the token rate.
+        // The flow reached PROBE_BW past STARTUP, with a burst-inflated max_bw above the token
+        // rate.
         assert!(reached_probe_bw, "flow never reached PROBE_BW");
         assert!(
             max_bw_at_probe_bw > TOKEN_RATE,
             "the burst should inflate max_bw above the token rate on reaching PROBE_BW, got {max_bw_at_probe_bw}"
         );
 
-        // The short-term model engaged on the policer's drops: bw_shortterm fell below the stale-high
-        // max_bw (throttling via bw = min(max_bw, bw_shortterm)), and inflight_shortterm went finite
-        // (capping the window).
+        // The short-term model engaged on the policer's drops: bw_shortterm fell below the
+        // stale-high max_bw (throttling via bw = min(max_bw, bw_shortterm)), and
+        // inflight_shortterm went finite (capping the window).
         assert!(
             min_shortterm_after < max_bw_at_probe_bw,
             "bw_shortterm should drop below the stale-high max_bw {max_bw_at_probe_bw}, got {min_shortterm_after}"
@@ -5501,41 +5605,44 @@ mod test {
     ///
     /// Packet reordering (later packets delivered while earlier ones sit apparently missing) makes
     /// the transport's loss detector declare a Fast Recovery that never really happened: the "lost"
-    /// packets were only reordered, and arrive (or are DSACK'd) shortly after. BBR guards against this
-    /// by snapshotting the pre-loss model on every declared loss (`note_loss` -> `save_state_upon_loss`)
-    /// and restoring it if the transport later reports the episode spurious (in QUIC, the original
-    /// packet's delivery is confirmed by packet number / a DSACK-equivalent, so the retransmission was
-    /// spurious). The connection layer signals this via `Controller::on_spurious_congestion_event`.
+    /// packets were only reordered, and arrive (or are DSACK'd) shortly after. BBR guards against
+    /// this by snapshotting the pre-loss model on every declared loss (`note_loss` ->
+    /// `save_state_upon_loss`) and restoring it if the transport later reports the episode
+    /// spurious (in QUIC, the original packet's delivery is confirmed by packet number / a
+    /// DSACK-equivalent, so the retransmission was spurious). The connection layer signals this
+    /// via `Controller::on_spurious_congestion_event`.
     ///
     /// The reordering is introduced while the flow is in PROBE_UP:
     ///  1. Reach PROBE_UP loss-free, so the short-term model is at its reset sentinels
-    ///     (`bw_shortterm` = +inf, `inflight_shortterm` = u64::MAX) and `inflight_longterm` is still
-    ///     u64::MAX (only a loss makes it finite). Snapshot those.
+    ///     (`bw_shortterm` = +inf, `inflight_shortterm` = u64::MAX) and `inflight_longterm` is
+    ///     still u64::MAX (only a loss makes it finite). Snapshot those.
     ///  2. Declare the oldest still-in-flight packets lost, a reordering picture: later packets are
     ///     being delivered while these earlier ones look missing. Feed them one at a time until the
-    ///     accumulated loss trips `is_inflight_too_high` (> `LOSS_THRESH` of tx_in_flight): that runs
-    ///     `handle_inflight_too_high`, which clamps `inflight_longterm` to a finite value and moves
-    ///     PROBE_UP -> PROBE_DOWN. Stop declaring losses the instant the state leaves PROBE_UP, so the
-    ///     last `note_loss` (which runs before the transition inside the same call) saved
-    ///     `undo_state` = PROBE_UP.
+    ///     accumulated loss trips `is_inflight_too_high` (> `LOSS_THRESH` of tx_in_flight): that
+    ///     runs `handle_inflight_too_high`, which clamps `inflight_longterm` to a finite value and
+    ///     moves PROBE_UP -> PROBE_DOWN. Stop declaring losses the instant the state leaves
+    ///     PROBE_UP, so the last `note_loss` (which runs before the transition inside the same
+    ///     call) saved `undo_state` = PROBE_UP.
     ///  3. The transport detects the loss was spurious -> `on_spurious_congestion_event`.
     ///
     /// Asserts:
     ///  - `save_state_upon_loss` captured the pre-loss PROBE_UP model into the undo fields:
-    ///    `undo_state` = PROBE_UP, `undo_bw_shortterm` = +inf, `undo_inflight_shortterm` = u64::MAX,
-    ///    `undo_inflight_longterm` = u64::MAX.
+    ///    `undo_state` = PROBE_UP, `undo_bw_shortterm` = +inf, `undo_inflight_shortterm` =
+    ///    u64::MAX, `undo_inflight_longterm` = u64::MAX.
     ///  - the spurious Fast Recovery actually moved the flow off PROBE_UP and clamped
     ///    `inflight_longterm` finite.
-    ///  - `on_spurious_congestion_event` restored the saved model: `bw_shortterm`/`inflight_shortterm`
-    ///    to `max(current, undo)` (their +inf/u64::MAX sentinels) and `inflight_longterm` back to
-    ///    u64::MAX, and seamlessly returned the flow to its previous state, PROBE_UP.
+    ///  - `on_spurious_congestion_event` restored the saved model:
+    ///    `bw_shortterm`/`inflight_shortterm` to `max(current, undo)` (their +inf/u64::MAX
+    ///    sentinels) and `inflight_longterm` back to u64::MAX, and seamlessly returned the flow to
+    ///    its previous state, PROBE_UP.
     ///
     /// Note on the short-term fields: for a spurious episode that restores to PROBE_UP they are
     /// necessarily at their sentinels. `adapt_lower_bounds_from_congestion` skips PROBE_UP, so no
     /// loss taken in PROBE_UP moves them; and any loss taken *after* the PROBE_UP -> PROBE_DOWN
     /// transition would re-run `note_loss` and overwrite `undo_state` to PROBE_DOWN (losing the
-    /// return-to-PROBE_UP). So the meaningful restored quantities here are `inflight_longterm` and the
-    /// state; the short-term fields are verified saved and restored at their reset sentinels.
+    /// return-to-PROBE_UP). So the meaningful restored quantities here are `inflight_longterm` and
+    /// the state; the short-term fields are verified saved and restored at their reset
+    /// sentinels.
     #[test]
     fn probe_up_restores_state_on_spurious_loss_detection() {
         /// packet size in bytes
@@ -5589,15 +5696,16 @@ mod test {
                 break;
             }
             let cwnd = bbr.window();
-            // Always-backlogged, paced sender (as in A.15/A.16/A.17): report the cwnd-blocked signal
-            // exactly as the connection layer does whenever the window (not pacing) stops the send.
+            // Always-backlogged, paced sender (as in A.15/A.16/A.17): report the cwnd-blocked
+            // signal exactly as the connection layer does whenever the window (not
+            // pacing) stops the send.
             let can_send = inflight + MSS <= cwnd;
             if !can_send {
                 bbr.on_cwnd_limited();
             }
             let next_ack = flight.front().map(|p| p.ack_ns);
-            // Once in PROBE_UP we stop sending and drain the reordering burst out of the queue, so a
-            // send is only due while we have not yet snapshotted PROBE_UP.
+            // Once in PROBE_UP we stop sending and drain the reordering burst out of the queue, so
+            // a send is only due while we have not yet snapshotted PROBE_UP.
             let do_send =
                 pre.is_none() && can_send && next_ack.is_none_or(|ack| next_send_ns <= ack);
 
@@ -5639,17 +5747,19 @@ mod test {
                 // Before PROBE_UP: normal delivery, ramping the flow up.
                 // In PROBE_UP: introduce reordering by declaring the oldest still-in-flight packets
                 // lost (later packets are being delivered while these look missing). Keep declaring
-                // until the accumulated loss trips is_inflight_too_high and the flow leaves PROBE_UP;
-                // these declarations are spurious: the packets were only reordered.
+                // until the accumulated loss trips is_inflight_too_high and the flow leaves
+                // PROBE_UP; these declarations are spurious: the packets were only
+                // reordered.
                 let reordering =
                     pre.is_some() && bbr.state == BbrState::ProbeBw(ProbeBwSubstate::Up);
                 if reordering {
                     bbr.on_packet_lost(MSS as u16, p.pn, SpaceKind::Data, at(now_ns));
 
-                    // The moment handle_inflight_too_high moved us off PROBE_UP, record the episode:
-                    // the undo snapshot save_state_upon_loss captured on this loss, plus the post-loss
-                    // state and inflight_longterm. The last note_loss ran while still in PROBE_UP, so
-                    // undo_state is PROBE_UP.
+                    // The moment handle_inflight_too_high moved us off PROBE_UP, record the
+                    // episode: the undo snapshot save_state_upon_loss captured
+                    // on this loss, plus the post-loss
+                    // state and inflight_longterm. The last note_loss ran while still in PROBE_UP,
+                    // so undo_state is PROBE_UP.
                     if bbr.state != BbrState::ProbeBw(ProbeBwSubstate::Up) {
                         episode = Some((
                             (
@@ -5769,45 +5879,50 @@ mod test {
     /// Where A.18 covers a spurious *Fast* Recovery (later packets keep being delivered while a few
     /// earlier ones look missing), this covers a spurious *RTO* Recovery: acknowledgements stop
     /// arriving entirely, the transport's PTO/RTO timer fires, and the whole outstanding tail is
-    /// declared lost in one burst. The tail was not really lost: the ACKs (or the packets) were only
-    /// delayed by reordering on the path, so once the delayed acknowledgements arrive (in QUIC the
-    /// original packet numbers confirm the delivery, a DSACK-equivalent), the episode is reported
-    /// spurious and the model must be rolled back.
+    /// declared lost in one burst. The tail was not really lost: the ACKs (or the packets) were
+    /// only delayed by reordering on the path, so once the delayed acknowledgements arrive (in
+    /// QUIC the original packet numbers confirm the delivery, a DSACK-equivalent), the episode
+    /// is reported spurious and the model must be rolled back.
     ///
     /// Both recovery kinds reach BBR through the same loss path: the connection layer calls
     /// `on_packet_lost` per timed-out packet, which runs `process_lost_packet` -> `note_loss` ->
     /// `save_state_upon_loss`. (bbr3's `on_congestion_event` only acts on ECN, so a non-ECN RTO /
-    /// persistent-congestion batch reaches BBR purely as these per-packet losses; see the trait note
-    /// on `on_congestion_event`.) The RTO character here is the *shape* of the loss: a single tail
-    /// burst with no interleaved deliveries, i.e. a timeout, not a SACK-driven Fast Recovery.
+    /// persistent-congestion batch reaches BBR purely as these per-packet losses; see the trait
+    /// note on `on_congestion_event`.) The RTO character here is the *shape* of the loss: a
+    /// single tail burst with no interleaved deliveries, i.e. a timeout, not a SACK-driven Fast
+    /// Recovery.
     ///
     /// The timeout is introduced while the flow is in PROBE_UP:
-    ///  1. Reach PROBE_UP loss-free with a full window outstanding, so the short-term model is at its
-    ///     reset sentinels (`bw_shortterm` = +inf, `inflight_shortterm` = u64::MAX) and
+    ///  1. Reach PROBE_UP loss-free with a full window outstanding, so the short-term model is at
+    ///     its reset sentinels (`bw_shortterm` = +inf, `inflight_shortterm` = u64::MAX) and
     ///     `inflight_longterm` is still u64::MAX (only a loss makes it finite). Snapshot those.
-    ///  2. Simulate the RTO: stop delivering ACKs and time out the entire outstanding tail, declaring
-    ///     the packets lost oldest-first in one burst. Feed them until the accumulated loss trips
-    ///     `is_inflight_too_high` (> `LOSS_THRESH` of tx_in_flight): that runs
+    ///  2. Simulate the RTO: stop delivering ACKs and time out the entire outstanding tail,
+    ///     declaring the packets lost oldest-first in one burst. Feed them until the accumulated
+    ///     loss trips `is_inflight_too_high` (> `LOSS_THRESH` of tx_in_flight): that runs
     ///     `handle_inflight_too_high`, which clamps `inflight_longterm` to a finite value and moves
-    ///     PROBE_UP -> PROBE_DOWN. Stop the instant the state leaves PROBE_UP, so the last `note_loss`
-    ///     (which runs before the transition inside the same call) saved `undo_state` = PROBE_UP.
+    ///     PROBE_UP -> PROBE_DOWN. Stop the instant the state leaves PROBE_UP, so the last
+    ///     `note_loss` (which runs before the transition inside the same call) saved `undo_state` =
+    ///     PROBE_UP.
     ///  3. The delayed acknowledgements arrive; the transport detects the RTO was spurious ->
     ///     `on_spurious_congestion_event`.
     ///
     /// Asserts:
     ///  - `save_state_upon_loss` captured the pre-loss PROBE_UP model into the undo fields:
-    ///    `undo_state` = PROBE_UP, `undo_bw_shortterm` = +inf, `undo_inflight_shortterm` = u64::MAX,
-    ///    `undo_inflight_longterm` = u64::MAX.
-    ///  - the spurious RTO actually moved the flow off PROBE_UP and clamped `inflight_longterm` finite.
-    ///  - `on_spurious_congestion_event` restored the saved model: `bw_shortterm`/`inflight_shortterm`
-    ///    to `max(current, undo)` (their +inf/u64::MAX sentinels) and `inflight_longterm` back to
-    ///    u64::MAX, and seamlessly returned the flow to its previous state, PROBE_UP.
+    ///    `undo_state` = PROBE_UP, `undo_bw_shortterm` = +inf, `undo_inflight_shortterm` =
+    ///    u64::MAX, `undo_inflight_longterm` = u64::MAX.
+    ///  - the spurious RTO actually moved the flow off PROBE_UP and clamped `inflight_longterm`
+    ///    finite.
+    ///  - `on_spurious_congestion_event` restored the saved model:
+    ///    `bw_shortterm`/`inflight_shortterm` to `max(current, undo)` (their +inf/u64::MAX
+    ///    sentinels) and `inflight_longterm` back to u64::MAX, and seamlessly returned the flow to
+    ///    its previous state, PROBE_UP.
     ///
-    /// Note on the short-term fields: as in A.18, for a spurious episode that restores to PROBE_UP they
-    /// are necessarily at their sentinels (`adapt_lower_bounds_from_congestion` skips PROBE_UP, and any
-    /// loss taken *after* the PROBE_UP -> PROBE_DOWN transition would overwrite `undo_state`). So the
-    /// meaningful restored quantities here are `inflight_longterm` and the state; the short-term fields
-    /// are verified saved and restored at their reset sentinels.
+    /// Note on the short-term fields: as in A.18, for a spurious episode that restores to PROBE_UP
+    /// they are necessarily at their sentinels (`adapt_lower_bounds_from_congestion` skips
+    /// PROBE_UP, and any loss taken *after* the PROBE_UP -> PROBE_DOWN transition would
+    /// overwrite `undo_state`). So the meaningful restored quantities here are
+    /// `inflight_longterm` and the state; the short-term fields are verified saved and restored
+    /// at their reset sentinels.
     #[test]
     fn probe_up_restores_state_on_spurious_rto_detection() {
         /// packet size in bytes
@@ -5862,16 +5977,16 @@ mod test {
             }
             let cwnd = bbr.window();
             // Always-backlogged, paced sender (as in A.15/A.16/A.17/A.18): report the cwnd-blocked
-            // signal exactly as the connection layer does whenever the window (not pacing) stops the
-            // send.
+            // signal exactly as the connection layer does whenever the window (not pacing) stops
+            // the send.
             let can_send = inflight + MSS <= cwnd;
             if !can_send {
                 bbr.on_cwnd_limited();
             }
             let next_ack = flight.front().map(|p| p.ack_ns);
             // Once in PROBE_UP we stop sending: the RTO scenario is a *silence*, no more packets go
-            // out and no ACKs come back while the outstanding tail times out. A send is only due while
-            // we have not yet snapshotted PROBE_UP.
+            // out and no ACKs come back while the outstanding tail times out. A send is only due
+            // while we have not yet snapshotted PROBE_UP.
             let do_send =
                 pre.is_none() && can_send && next_ack.is_none_or(|ack| next_send_ns <= ack);
 
@@ -5911,20 +6026,22 @@ mod test {
                 inflight -= MSS;
 
                 // Before PROBE_UP: normal delivery, ramping the flow up.
-                // In PROBE_UP: the RTO has fired, no ACKs are arriving, so the whole outstanding tail
-                // times out. Declare the packets lost oldest-first, in one burst with no interleaved
-                // deliveries (a timeout, not a Fast Recovery). Keep declaring until the accumulated
-                // loss trips is_inflight_too_high and the flow leaves PROBE_UP; these declarations are
+                // In PROBE_UP: the RTO has fired, no ACKs are arriving, so the whole outstanding
+                // tail times out. Declare the packets lost oldest-first, in one
+                // burst with no interleaved deliveries (a timeout, not a Fast
+                // Recovery). Keep declaring until the accumulated loss trips
+                // is_inflight_too_high and the flow leaves PROBE_UP; these declarations are
                 // spurious: the tail was only delayed by reordering, not lost.
                 let rto_timeout =
                     pre.is_some() && bbr.state == BbrState::ProbeBw(ProbeBwSubstate::Up);
                 if rto_timeout {
                     bbr.on_packet_lost(MSS as u16, p.pn, SpaceKind::Data, at(now_ns));
 
-                    // The moment handle_inflight_too_high moved us off PROBE_UP, record the episode:
-                    // the undo snapshot save_state_upon_loss captured on this loss, plus the post-loss
-                    // state and inflight_longterm. The last note_loss ran while still in PROBE_UP, so
-                    // undo_state is PROBE_UP.
+                    // The moment handle_inflight_too_high moved us off PROBE_UP, record the
+                    // episode: the undo snapshot save_state_upon_loss captured
+                    // on this loss, plus the post-loss
+                    // state and inflight_longterm. The last note_loss ran while still in PROBE_UP,
+                    // so undo_state is PROBE_UP.
                     if bbr.state != BbrState::ProbeBw(ProbeBwSubstate::Up) {
                         episode = Some((
                             (
@@ -6338,24 +6455,22 @@ mod test {
     /// modest, as in A.18/A.19, so a short oldest-first loss burst trips
     /// `is_inflight_too_high`, `lost > LOSS_THRESH * tx_in_flight`):
     ///
-    ///  1. Establish. Reach PROBE_UP loss-free, then declare the oldest in-flight
-    ///     packets lost until the accumulated loss trips `is_inflight_too_high`.
-    ///     `handle_inflight_too_high` clamps `inflight_longterm` from `u64::MAX` to a
-    ///     finite value and moves PROBE_UP -> PROBE_DOWN. Loss injection then stops;
-    ///     this is the "established `inflight_longterm`" precondition.
-    ///  2. Ride loss-free back up. PROBE_DOWN -> (cruise) -> refill -> PROBE_UP again.
-    ///     With `inflight_longterm` now finite, `adapt_long_term_model` /
-    ///     `probe_inflight_long_term_upward` carry it forward (it only ever grows) as
-    ///     the standing long-term operating point.
+    ///  1. Establish. Reach PROBE_UP loss-free, then declare the oldest in-flight packets lost
+    ///     until the accumulated loss trips `is_inflight_too_high`. `handle_inflight_too_high`
+    ///     clamps `inflight_longterm` from `u64::MAX` to a finite value and moves PROBE_UP ->
+    ///     PROBE_DOWN. Loss injection then stops; this is the "established `inflight_longterm`"
+    ///     precondition.
+    ///  2. Ride loss-free back up. PROBE_DOWN -> (cruise) -> refill -> PROBE_UP again. With
+    ///     `inflight_longterm` now finite, `adapt_long_term_model` /
+    ///     `probe_inflight_long_term_upward` carry it forward (it only ever grows) as the standing
+    ///     long-term operating point.
     ///  3. Deciding loss. In this second PROBE_UP, before any bandwidth plateau forms
-    ///     (`start_probe_bw_up` resets `full_bw`, and a plateau needs
-    ///     `MAX_FULL_BW_COUNT` rounds, so injecting immediately keeps `full_bw_now`
-    ///     false, `BBRIsTimeToGoDown`/`maybe_go_down` never fires), declare the
-    ///     oldest in-flight packets lost until `is_inflight_too_high` trips again.
-    ///     Because the sample is non-app-limited, `handle_inflight_too_high` runs the
-    ///     reduction and resets `inflight_longterm` to
-    ///     `max(tx_in_flight, target_inflight * BETA)` (below the established value)
-    ///     then aborts PROBE_UP straight into PROBE_DOWN.
+    ///     (`start_probe_bw_up` resets `full_bw`, and a plateau needs `MAX_FULL_BW_COUNT` rounds,
+    ///     so injecting immediately keeps `full_bw_now` false, `BBRIsTimeToGoDown`/`maybe_go_down`
+    ///     never fires), declare the oldest in-flight packets lost until `is_inflight_too_high`
+    ///     trips again. Because the sample is non-app-limited, `handle_inflight_too_high` runs the
+    ///     reduction and resets `inflight_longterm` to `max(tx_in_flight, target_inflight * BETA)`
+    ///     (below the established value) then aborts PROBE_UP straight into PROBE_DOWN.
     ///
     /// Asserts on the deciding loss that: `inflight_longterm` was established finite
     /// (and, only ever growing, was still >= that value entering the loss); the
@@ -6405,12 +6520,14 @@ mod test {
         let mut pn: u64 = 0;
         let btl_service_ns: u64 = (MSS as f64 / BW * 1e9).round() as u64;
 
-        // Episode 1: the value inflight_longterm was clamped to when the first PROBE_UP loss made it
-        // finite (from u64::MAX). Marks the "established" precondition and switches episode 1 off.
+        // Episode 1: the value inflight_longterm was clamped to when the first PROBE_UP loss made
+        // it finite (from u64::MAX). Marks the "established" precondition and switches
+        // episode 1 off.
         let mut established: Option<u64> = None;
-        // Episode 2 (deciding loss): (inflight_longterm before/after the deciding loss, the deciding
-        // sample's tx_in_flight, target_inflight = min(bdp, cwnd) at the loss, whether the sample was
-        // app-limited, full_bw_now at the edge, and the post-loss state).
+        // Episode 2 (deciding loss): (inflight_longterm before/after the deciding loss, the
+        // deciding sample's tx_in_flight, target_inflight = min(bdp, cwnd) at the loss,
+        // whether the sample was app-limited, full_bw_now at the edge, and the post-loss
+        // state).
         let mut ep2: Option<(u64, u64, u64, u64, bool, bool, BbrState)> = None;
 
         for _ in 0..5_000_000 {
@@ -6425,10 +6542,11 @@ mod test {
             let next_ack = flight.front().map(|p| p.ack_ns);
 
             let in_up = bbr.state == BbrState::ProbeBw(ProbeBwSubstate::Up);
-            // Drop (declare oldest-first lost) whenever in PROBE_UP and the relevant episode is still
-            // pending: episode 1 while inflight_longterm is unset, episode 2 (still pending, ep2 None)
-            // on the next PROBE_UP. Between the two (any non-PROBE_UP state) delivery is loss-free,
-            // so inflight_longterm carries forward untouched and the flow rides back up to PROBE_UP.
+            // Drop (declare oldest-first lost) whenever in PROBE_UP and the relevant episode is
+            // still pending: episode 1 while inflight_longterm is unset, episode 2
+            // (still pending, ep2 None) on the next PROBE_UP. Between the two (any
+            // non-PROBE_UP state) delivery is loss-free, so inflight_longterm carries
+            // forward untouched and the flow rides back up to PROBE_UP.
             let dropping = in_up && (established.is_none() || ep2.is_none());
             let do_send = !dropping && can_send && next_ack.is_none_or(|ack| next_send_ns <= ack);
 
@@ -6458,8 +6576,8 @@ mod test {
                     // The PROBE_UP -> PROBE_DOWN transition happens inside on_packet_lost (via
                     // handle_inflight_too_high), never on an ack, so any Up->Down move here is
                     // attributable to this loss. inflight_longterm is only touched by the tripping
-                    // loss (non-tripping burst losses leave it unchanged), so `before` captured here
-                    // is exactly the pre-reduction value.
+                    // loss (non-tripping burst losses leave it unchanged), so `before` captured
+                    // here is exactly the pre-reduction value.
                     let before = bbr.inflight_longterm;
                     let was_up = bbr.state == BbrState::ProbeBw(ProbeBwSubstate::Up);
                     bbr.on_packet_lost(MSS as u16, p.pn, SpaceKind::Data, at(now_ns));
@@ -6468,10 +6586,12 @@ mod test {
                             // Episode 1: the first loss clamped inflight_longterm finite.
                             established = Some(bbr.inflight_longterm);
                         } else {
-                            // Episode 2: the deciding loss scaled the established value down. Read the
-                            // formula inputs (tx_in_flight was set to inflight_at_loss, target_inflight
-                            // = min(bdp, cwnd)) live: set_cwnd does not run inside the loss path, so
-                            // bdp/cwnd match what handle_inflight_too_high used.
+                            // Episode 2: the deciding loss scaled the established value down. Read
+                            // the formula inputs (tx_in_flight was set
+                            // to inflight_at_loss, target_inflight
+                            // = min(bdp, cwnd)) live: set_cwnd does not run inside the loss path,
+                            // so bdp/cwnd match what
+                            // handle_inflight_too_high used.
                             let txif = bbr.rs.map(|rs| rs.tx_in_flight).unwrap();
                             let target = Ord::min(bbr.bdp, bbr.cwnd);
                             ep2 = Some((
@@ -6508,8 +6628,9 @@ mod test {
         let (before, after, txif, target, app_lim, full_bw_now, post_state) =
             ep2.expect("episode 2 deciding loss never fired out of PROBE_UP");
 
-        // Precondition: inflight_longterm was established finite by episode 1, and (only ever growing
-        // between the episodes, loss-free) was still >= that value entering the deciding loss.
+        // Precondition: inflight_longterm was established finite by episode 1, and (only ever
+        // growing between the episodes, loss-free) was still >= that value entering the
+        // deciding loss.
         assert!(
             established < u64::MAX,
             "episode 1 should have clamped inflight_longterm finite"
@@ -6520,8 +6641,8 @@ mod test {
              finite value carried forward (before {before} vs established {established})"
         );
 
-        // The deciding loss sample was non-application-limited, so handle_inflight_too_high runs the
-        // reduction rather than skipping it (the A.6 path).
+        // The deciding loss sample was non-application-limited, so handle_inflight_too_high runs
+        // the reduction rather than skipping it (the A.6 path).
         assert!(
             !app_lim,
             "deciding loss sample should be non-application-limited so the reduction applies"
@@ -6568,15 +6689,15 @@ mod test {
     /// here; only the "ignore low app-limited samples" behavior is.)
     ///
     /// Same single-bottleneck simulator as A.5/A.6, run in two phases:
-    ///  1. Not application-limited, no loss, full-cwnd until the flow cycles
-    ///     STARTUP -> DRAIN -> PROBE_BW, which establishes `max_bw` at ~`BW` (set
-    ///     from the non-app-limited STARTUP delivery-rate samples).
-    ///  2. The moment PROBE_BW is entered the app is throttled to a small fixed
-    ///     window (`APP_WINDOW`, far below the ~1*BDP..2*BDP cwnd) and every sent
-    ///     packet is stamped app-limited, exactly as A.6. The pipe drains to
-    ///     `APP_WINDOW` during the PROBE_DOWN phase, so by the time the probe timer
-    ///     fires the cycle into PROBE_REFILL every in-flight sample is app-limited
-    ///     and its delivery rate (~`APP_WINDOW / RTT`) sits well below `max_bw`.
+    ///  1. Not application-limited, no loss, full-cwnd until the flow cycles STARTUP -> DRAIN ->
+    ///     PROBE_BW, which establishes `max_bw` at ~`BW` (set from the non-app-limited STARTUP
+    ///     delivery-rate samples).
+    ///  2. The moment PROBE_BW is entered the app is throttled to a small fixed window
+    ///     (`APP_WINDOW`, far below the ~1*BDP..2*BDP cwnd) and every sent packet is stamped
+    ///     app-limited, exactly as A.6. The pipe drains to `APP_WINDOW` during the PROBE_DOWN
+    ///     phase, so by the time the probe timer fires the cycle into PROBE_REFILL every in-flight
+    ///     sample is app-limited and its delivery rate (~`APP_WINDOW / RTT`) sits well below
+    ///     `max_bw`.
     ///
     /// Across that PROBE_REFILL round trip each ack carries an app-limited sample
     /// with `RS.delivery_rate < BBR.max_bw`, so `update_max_bw`'s guard is false and
