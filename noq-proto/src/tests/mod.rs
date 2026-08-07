@@ -1,8 +1,13 @@
 use std::{
+    any::Any,
     convert::TryInto,
     mem,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
-    sync::Arc,
+    num::NonZeroUsize,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use assert_matches::assert_matches;
@@ -31,6 +36,7 @@ use crate::{
     StreamEvent, Transmit, TransportConfig, TransportErrorCode, VarInt, WriteError,
     cid_generator::{ConnectionIdGenerator, RandomConnectionIdGenerator},
     coding::{Decodable, Encodable},
+    congestion::{Controller, ControllerFactory, ControllerMetrics},
     crypto::rustls::{QuicServerConfig, configured_provider},
     frame::{self, Frame, FrameStruct},
     packet::{FixedLengthConnectionIdParser, PartialDecode},
@@ -4414,7 +4420,6 @@ impl Controller for PacingOnlyController {
         _is_ecn: bool,
         _lost_bytes: u64,
         _largest_lost: u64,
-        _space: SpaceId,
     ) {
     }
 
@@ -4509,7 +4514,6 @@ impl Controller for FixedQuantumController {
         _is_ecn: bool,
         _lost_bytes: u64,
         _largest_lost: u64,
-        _space: SpaceId,
     ) {
     }
 
@@ -4555,7 +4559,7 @@ fn send_quantum_bounds_the_gso_batch() {
     /// Datagrams the reported quantum should permit per batch.
     const QUANTUM_DATAGRAMS: usize = 3;
     /// Datagrams the caller is willing to accept, well above the quantum.
-    const MAX_DATAGRAMS: usize = 10;
+    const MAX_DATAGRAMS: NonZeroUsize = NonZeroUsize::new(10).expect("non zero");
 
     let _guard = subscribe();
 
