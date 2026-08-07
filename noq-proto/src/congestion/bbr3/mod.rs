@@ -9,9 +9,8 @@ use rand_pcg::Pcg32;
 
 use crate::RttEstimator;
 use crate::congestion::bbr3::max_filter::MaxFilter;
-use crate::congestion::{
-    BASE_DATAGRAM_SIZE, Controller, ControllerFactory, ControllerMetrics, SpaceId,
-};
+use crate::congestion::{BASE_DATAGRAM_SIZE, Controller, ControllerFactory, ControllerMetrics};
+use crate::connection::SpaceKind;
 use crate::{Duration, Instant};
 
 /// equivalent to BBR.MaxBwFilterLen <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-2.10>
@@ -198,7 +197,7 @@ struct BbrPacket {
     packet_number: u64,
     /// packet number space the packet was sent in; each space numbers independently from zero, so
     /// `packet_number` only identifies a packet together with this
-    space: SpaceId,
+    space: SpaceKind,
     /// packet size in bytes
     size: u16,
     /// equivalent to P.lost: C.lost when the packet was sent
@@ -424,7 +423,7 @@ pub struct Bbr3 {
     /// equivalent to C.lost: the number of bytes that have been lost during the lifetime of this connection
     lost: u64,
     /// collection of packets in flight or just acknowledged / lost, one queue per packet number
-    /// space indexed by `SpaceId as usize`. Packet numbers are only unique and only monotonic
+    /// space indexed by `SpaceKind as usize`. Packet numbers are only unique and only monotonic
     /// within a space, so the queues must be kept separate for the ordered lookups below to hold.
     packets: [VecDeque<BbrPacket>; 3],
     /// equivalent to RS: Per-ACK Rate Sample State <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-2.2>
@@ -458,7 +457,7 @@ pub struct Bbr3 {
     /// `loss_events_in_round`, used to collapse a contiguous run of lost packet numbers into
     /// the single "discontiguous sequence range" the spec counts. Cleared at each loss-round
     /// boundary so the first loss of a round always opens a new range.
-    last_lost_packet: Option<(SpaceId, u64)>,
+    last_lost_packet: Option<(SpaceKind, u64)>,
     /// The time when loss was first detected, causing the connection to enter fast recovery. A
     /// congestion event for a packet sent after this time starts a new recovery episode, while
     /// losses of packets sent at or before it belong to the episode already underway.
@@ -1386,7 +1385,7 @@ impl Bbr3 {
     ///
     /// The `P.packet_id > RS.last_acked_packet_id` tie-break only orders two packets of the same
     /// space, since every space numbers independently from zero.
-    fn is_newest_packet(&self, send_time: Instant, space: SpaceId, end_seq: u64) -> bool {
+    fn is_newest_packet(&self, send_time: Instant, space: SpaceKind, end_seq: u64) -> bool {
         if let Some(first_send_time) = self.first_send_time {
             if send_time > first_send_time {
                 return true;
@@ -1404,7 +1403,7 @@ impl Bbr3 {
     }
 
     /// equivalent to BBRHandleLostPacket <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.5.10.2-11>
-    fn process_lost_packet(&mut self, packet_index: usize, space: SpaceId, now: Instant) {
+    fn process_lost_packet(&mut self, packet_index: usize, space: SpaceKind, now: Instant) {
         let p = self.packets[space as usize][packet_index];
         self.enter_recovery(now, p.send_time);
         self.note_loss(space, p.packet_number);
@@ -1433,7 +1432,7 @@ impl Bbr3 {
     /// number order within a packet number space, so a range ends wherever the next lost packet
     /// number is not the successor of the previous one.
     /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-06.html#section-5.3.1.3>
-    fn note_loss(&mut self, space: SpaceId, packet_number: u64) {
+    fn note_loss(&mut self, space: SpaceKind, packet_number: u64) {
         if !self.loss_in_round {
             self.loss_round_delivered = self.delivered;
         }
@@ -1541,8 +1540,9 @@ impl Bbr3 {
         self.next_round_delivered = self.delivered;
     }
 }
-impl Controller for Bbr3 {
-    fn on_packet_sent(&mut self, now: Instant, bytes: u16, packet_number: u64, space: SpaceId) {
+
+impl Bbr3 {
+    fn on_packet_sent(&mut self, now: Instant, bytes: u16, pn: u64, space: SpaceKind) {
         self.handle_restart_from_idle(now);
         if self.inflight == 0 {
             self.first_send_time = Some(now);
@@ -1557,7 +1557,7 @@ impl Controller for Bbr3 {
             send_time: now,
             is_app_limited: self.app_limited != 0,
             tx_in_flight: self.inflight,
-            packet_number,
+            packet_number: pn,
             space,
             size: bytes,
             lost: self.lost,
@@ -1581,7 +1581,7 @@ impl Controller for Bbr3 {
         sent: Instant,
         bytes: u64,
         packet_number: u64,
-        space: SpaceId,
+        space: SpaceKind,
         _app_limited: bool,
         rtt: &RttEstimator,
     ) {
@@ -1658,7 +1658,7 @@ impl Controller for Bbr3 {
         in_flight: u64,
         app_limited: bool,
         largest_packet_num_acked: Option<u64>,
-        _space: SpaceId,
+        _space: SpaceKind,
     ) {
         self.inflight = in_flight;
         if largest_packet_num_acked.is_some() {
@@ -1704,14 +1704,14 @@ impl Controller for Bbr3 {
         is_persistent_congestion: bool,
         is_ecn: bool,
         lost_bytes: u64,
-        largest_lost: u64,
-        space: SpaceId,
+        largest_lost_pn: u64,
+        space: SpaceKind,
     ) {
         // only process ecn here, regular packet loss is detected per packet in on_packet_lost.
         if is_ecn {
             self.lost += lost_bytes;
             let p_index_result = self.packets[space as usize]
-                .binary_search_by_key(&largest_lost, |p| p.packet_number);
+                .binary_search_by_key(&largest_lost_pn, |p| p.packet_number);
             if let Ok(p_index) = p_index_result {
                 self.process_lost_packet(p_index, space, now);
             }
@@ -1725,7 +1725,7 @@ impl Controller for Bbr3 {
         &mut self,
         lost_bytes: u16,
         packet_number: u64,
-        space: SpaceId,
+        space: SpaceKind,
         now: Instant,
     ) {
         let lost_bytes_64 = lost_bytes as u64;
@@ -1798,6 +1798,117 @@ impl Controller for Bbr3 {
 
     fn into_any(self: Box<Self>) -> Box<dyn Any> {
         self
+    }
+}
+
+// TODO(@divma): We need to expand the Controller trait to receive the SpaceKind. The current
+// implementation simply uses SpaceKind::Data, which is wrong for PathId::Zero
+impl Controller for Bbr3 {
+    fn on_congestion_event(
+        &mut self,
+        now: Instant,
+        sent: Instant,
+        is_persistent_congestion: bool,
+        is_ecn: bool,
+        lost_bytes: u64,
+        largest_lost_pn: u64,
+    ) {
+        Bbr3::on_congestion_event(
+            self,
+            now,
+            sent,
+            is_persistent_congestion,
+            is_ecn,
+            lost_bytes,
+            largest_lost_pn,
+            SpaceKind::Data,
+        );
+    }
+
+    fn on_mtu_update(&mut self, new_mtu: u16) {
+        Bbr3::on_mtu_update(self, new_mtu);
+    }
+
+    fn window(&self) -> u64 {
+        Bbr3::window(self)
+    }
+
+    fn clone_box(&self) -> Box<dyn Controller> {
+        Bbr3::clone_box(self)
+    }
+
+    fn initial_window(&self) -> u64 {
+        Bbr3::initial_window(self)
+    }
+
+    fn into_any(self: Box<Self>) -> Box<dyn Any> {
+        Bbr3::into_any(self)
+    }
+
+    fn on_packet_sent(&mut self, now: Instant, bytes: u16, pn: u64) {
+        Bbr3::on_packet_sent(self, now, bytes, pn, SpaceKind::Data);
+    }
+
+    fn on_cwnd_limited(&mut self) {
+        Bbr3::on_cwnd_limited(self);
+    }
+
+    fn on_ack(
+        &mut self,
+        now: Instant,
+        sent: Instant,
+        bytes: u64,
+        pn: u64,
+        app_limited: bool,
+        rtt: &RttEstimator,
+    ) {
+        Bbr3::on_ack(
+            self,
+            now,
+            sent,
+            bytes,
+            pn,
+            SpaceKind::Data,
+            app_limited,
+            rtt,
+        );
+    }
+
+    fn on_end_acks(
+        &mut self,
+        now: Instant,
+        in_flight: u64,
+        app_limited: bool,
+        largest_packet_num_acked: Option<u64>,
+    ) {
+        Bbr3::on_end_acks(
+            self,
+            now,
+            in_flight,
+            app_limited,
+            largest_packet_num_acked,
+            SpaceKind::Data,
+        );
+    }
+
+    fn on_packet_lost(&mut self, lost_bytes: u16, pn: u64, now: Instant) {
+        Bbr3::on_packet_lost(self, lost_bytes, pn, SpaceKind::Data, now);
+    }
+
+    fn on_spurious_congestion_event(&mut self) {
+        Bbr3::on_spurious_congestion_event(self)
+    }
+
+    fn on_ack_frequency_update(
+        &mut self,
+        ack_eliciting_threshold: u64,
+        requested_max_ack_delay: Duration,
+    ) {
+        Bbr3::on_ack_frequency_update(self, ack_eliciting_threshold, requested_max_ack_delay);
+    }
+
+    fn metrics(&self) -> ControllerMetrics {
+        Bbr3::metrics(self)
     }
 }
 
@@ -1966,7 +2077,7 @@ mod test {
                         self.base + Duration::from_nanos(send_ns),
                         self.mss as u16,
                         self.pn,
-                        SpaceId::Data,
+                        SpaceKind::Data,
                     );
                     self.inflight += self.mss;
                     self.flight.push_back(SimPacket {
@@ -1997,12 +2108,12 @@ mod test {
                         send_at,
                         self.mss,
                         p.pn,
-                        SpaceId::Data,
+                        SpaceKind::Data,
                         false,
                         &self.rtt_est,
                     );
                     self.bbr
-                        .on_end_acks(now_at, self.inflight, false, Some(p.pn), SpaceId::Data);
+                        .on_end_acks(now_at, self.inflight, false, Some(p.pn), SpaceKind::Data);
 
                     if on_ack(&mut self.bbr, self.now_ns, self.inflight, p.pn).is_break() {
                         return;
@@ -2200,7 +2311,7 @@ mod test {
                 let ack_ns = finish + RET_NS;
                 let lost = pn % LOSS_PERIOD == LOSS_PERIOD - 1;
 
-                bbr.on_packet_sent(at(send_ns), MSS as u16, pn, SpaceId::Data);
+                bbr.on_packet_sent(at(send_ns), MSS as u16, pn, SpaceKind::Data);
                 inflight += MSS;
                 flight.push_back(InFlight {
                     pn,
@@ -2217,7 +2328,7 @@ mod test {
                 now_ns = now_ns.max(p.ack_ns);
                 inflight -= MSS;
                 if p.lost {
-                    bbr.on_packet_lost(MSS as u16, p.pn, SpaceId::Data, at(now_ns));
+                    bbr.on_packet_lost(MSS as u16, p.pn, SpaceKind::Data, at(now_ns));
                 } else {
                     rtt_est.update(Duration::ZERO, Duration::from_nanos(now_ns - p.send_ns));
                     bbr.on_ack(
@@ -2225,7 +2336,7 @@ mod test {
                         at(p.send_ns),
                         MSS,
                         p.pn,
-                        SpaceId::Data,
+                        SpaceKind::Data,
                         true,
                         &rtt_est,
                     );
@@ -2245,7 +2356,7 @@ mod test {
                 }
                 // Sample before on_end_acks clears the rate sample's loss fields.
                 observed_high_loss |= bbr.is_inflight_too_high();
-                bbr.on_end_acks(at(now_ns), inflight, true, Some(p.pn), SpaceId::Data);
+                bbr.on_end_acks(at(now_ns), inflight, true, Some(p.pn), SpaceKind::Data);
                 if bbr.state == BbrState::Drain {
                     transition = Some((bbr.full_bw_count, bbr.full_bw_now, bbr.full_bw_reached));
                     break;
@@ -2466,7 +2577,7 @@ mod test {
                 btl_free_ns = finish;
                 let ack_ns = finish + RET_NS;
 
-                bbr.on_packet_sent(at(send_ns), MSS as u16, pn, SpaceId::Data);
+                bbr.on_packet_sent(at(send_ns), MSS as u16, pn, SpaceKind::Data);
                 inflight += MSS;
                 flight.push_back(InFlight {
                     pn,
@@ -2486,11 +2597,11 @@ mod test {
                     at(p.send_ns),
                     MSS,
                     p.pn,
-                    SpaceId::Data,
+                    SpaceKind::Data,
                     false,
                     &rtt_est,
                 );
-                bbr.on_end_acks(at(now_ns), inflight, false, Some(p.pn), SpaceId::Data);
+                bbr.on_end_acks(at(now_ns), inflight, false, Some(p.pn), SpaceKind::Data);
 
                 // STARTUP -> DRAIN edge: cut the link (over-estimate), record round
                 if bbr.state == BbrState::Drain && drain_start_round.is_none() {
@@ -2764,7 +2875,7 @@ mod test {
                 // free so the flow reaches PROBE_UP exactly as in A.5.
                 let lost = app_limited_phase && pn % LOSS_PERIOD == LOSS_PERIOD - 1;
 
-                bbr.on_packet_sent(at(send_ns), MSS as u16, pn, SpaceId::Data);
+                bbr.on_packet_sent(at(send_ns), MSS as u16, pn, SpaceKind::Data);
                 inflight += MSS;
                 flight.push_back(InFlight {
                     pn,
@@ -2793,7 +2904,7 @@ mod test {
                     // move seen here is attributable to this loss.
                     let before_ilt = bbr.inflight_longterm;
                     let was_up = bbr.state == BbrState::ProbeBw(ProbeBwSubstate::Up);
-                    bbr.on_packet_lost(MSS as u16, p.pn, SpaceId::Data, at(now_ns));
+                    bbr.on_packet_lost(MSS as u16, p.pn, SpaceKind::Data, at(now_ns));
                     if was_up && bbr.state == BbrState::ProbeBw(ProbeBwSubstate::Down) {
                         let app_lim = bbr.rs.is_some_and(|rs| rs.is_app_limited);
                         go_down =
@@ -2807,7 +2918,7 @@ mod test {
                         at(p.send_ns),
                         MSS,
                         p.pn,
-                        SpaceId::Data,
+                        SpaceKind::Data,
                         app_limited_phase,
                         &rtt_est,
                     );
@@ -2816,7 +2927,7 @@ mod test {
                         inflight,
                         app_limited_phase,
                         Some(p.pn),
-                        SpaceId::Data,
+                        SpaceKind::Data,
                     );
 
                     // Flip to the application-limited, lossy phase the moment
@@ -2986,7 +3097,7 @@ mod test {
                 // first packet on. Same shape as A.2/A.6.
                 bbr.app_limited = Ord::max(bbr.delivered + bbr.inflight, 1);
 
-                bbr.on_packet_sent(at(send_ns), MSS as u16, pn, SpaceId::Data);
+                bbr.on_packet_sent(at(send_ns), MSS as u16, pn, SpaceKind::Data);
                 inflight += MSS;
                 flight.push_back(InFlight {
                     pn,
@@ -3007,11 +3118,11 @@ mod test {
                     at(p.send_ns),
                     MSS,
                     p.pn,
-                    SpaceId::Data,
+                    SpaceKind::Data,
                     true,
                     &rtt_est,
                 );
-                bbr.on_end_acks(at(now_ns), inflight, true, Some(p.pn), SpaceId::Data);
+                bbr.on_end_acks(at(now_ns), inflight, true, Some(p.pn), SpaceKind::Data);
 
                 // Record the sample's app-limited flag, but only for STARTUP
                 // rounds: PROBE_RTT deliberately clamps cwnd to min_pipe_cwnd
@@ -3661,7 +3772,7 @@ mod test {
                 btl_free_ns = finish;
                 let ack_ns = finish + RET_NS;
 
-                bbr.on_packet_sent(at(send_ns), MSS as u16, pn, SpaceId::Data);
+                bbr.on_packet_sent(at(send_ns), MSS as u16, pn, SpaceKind::Data);
                 inflight += MSS;
                 flight.push_back(InFlight {
                     pn,
@@ -3681,11 +3792,11 @@ mod test {
                     at(p.send_ns),
                     MSS,
                     p.pn,
-                    SpaceId::Data,
+                    SpaceKind::Data,
                     false,
                     &rtt_est,
                 );
-                bbr.on_end_acks(at(now_ns), inflight, false, Some(p.pn), SpaceId::Data);
+                bbr.on_end_acks(at(now_ns), inflight, false, Some(p.pn), SpaceKind::Data);
 
                 if bbr.full_bw_reached && matches!(bbr.state, BbrState::ProbeBw(_)) {
                     reached_probe_bw = true;
@@ -3711,11 +3822,11 @@ mod test {
                 at(p.send_ns),
                 MSS,
                 p.pn,
-                SpaceId::Data,
+                SpaceKind::Data,
                 false,
                 &rtt_est,
             );
-            bbr.on_end_acks(at(now_ns), inflight, false, Some(p.pn), SpaceId::Data);
+            bbr.on_end_acks(at(now_ns), inflight, false, Some(p.pn), SpaceKind::Data);
         }
         assert_eq!(
             inflight, 0,
@@ -3754,7 +3865,7 @@ mod test {
             btl_free_ns = finish;
             let ack_ns = finish + RET_NS;
 
-            bbr.on_packet_sent(at(send_ns), MSS as u16, pn, SpaceId::Data);
+            bbr.on_packet_sent(at(send_ns), MSS as u16, pn, SpaceKind::Data);
             inflight += MSS;
             flight.push_back(InFlight {
                 pn,
@@ -3791,7 +3902,7 @@ mod test {
                 btl_free_ns = finish;
                 let ack_ns = finish + RET_NS;
 
-                bbr.on_packet_sent(at(send_ns), MSS as u16, pn, SpaceId::Data);
+                bbr.on_packet_sent(at(send_ns), MSS as u16, pn, SpaceKind::Data);
                 inflight += MSS;
                 flight.push_back(InFlight {
                     pn,
@@ -3811,11 +3922,11 @@ mod test {
                     at(p.send_ns),
                     MSS,
                     p.pn,
-                    SpaceId::Data,
+                    SpaceKind::Data,
                     false,
                     &rtt_est,
                 );
-                bbr.on_end_acks(at(now_ns), inflight, false, Some(p.pn), SpaceId::Data);
+                bbr.on_end_acks(at(now_ns), inflight, false, Some(p.pn), SpaceKind::Data);
 
                 if p.pn == resume_pn {
                     // Snapshot right after the restarting packet's ack: the re-probe was
@@ -3962,7 +4073,7 @@ mod test {
                 // released to the sender together (identical ack_ns == one ACK event).
                 let ack_ns = finish.div_ceil(AGG_NS) * AGG_NS + RET_NS;
 
-                bbr.on_packet_sent(at(send_ns), MSS as u16, pn, SpaceId::Data);
+                bbr.on_packet_sent(at(send_ns), MSS as u16, pn, SpaceKind::Data);
                 inflight += MSS;
                 flight.push_back(InFlight {
                     pn,
@@ -3996,12 +4107,18 @@ mod test {
                         at(p.send_ns),
                         MSS,
                         p.pn,
-                        SpaceId::Data,
+                        SpaceKind::Data,
                         false,
                         &rtt_est,
                     );
                 }
-                bbr.on_end_acks(at(now_ns), inflight, false, Some(largest_pn), SpaceId::Data);
+                bbr.on_end_acks(
+                    at(now_ns),
+                    inflight,
+                    false,
+                    Some(largest_pn),
+                    SpaceKind::Data,
+                );
 
                 if bbr.state == BbrState::Startup {
                     max_extra_acked = max_extra_acked.max(bbr.extra_acked);
@@ -4194,7 +4311,7 @@ mod test {
                     finish + RET_NS
                 };
 
-                bbr.on_packet_sent(at(send_ns), MSS as u16, pn, SpaceId::Data);
+                bbr.on_packet_sent(at(send_ns), MSS as u16, pn, SpaceKind::Data);
                 inflight += MSS;
                 flight.push_back(InFlight {
                     pn,
@@ -4228,12 +4345,18 @@ mod test {
                         at(p.send_ns),
                         MSS,
                         p.pn,
-                        SpaceId::Data,
+                        SpaceKind::Data,
                         false,
                         &rtt_est,
                     );
                 }
-                bbr.on_end_acks(at(now_ns), inflight, false, Some(largest_pn), SpaceId::Data);
+                bbr.on_end_acks(
+                    at(now_ns),
+                    inflight,
+                    false,
+                    Some(largest_pn),
+                    SpaceKind::Data,
+                );
 
                 let in_cruise = bbr.state == BbrState::ProbeBw(ProbeBwSubstate::Cruise);
 
@@ -4523,7 +4646,7 @@ mod test {
                     arrival_ns
                 };
 
-                bbr.on_packet_sent(at(send_ns), MSS as u16, pn, SpaceId::Data);
+                bbr.on_packet_sent(at(send_ns), MSS as u16, pn, SpaceKind::Data);
                 inflight += MSS;
                 flight.push_back(InFlight {
                     pn,
@@ -4555,12 +4678,18 @@ mod test {
                         at(p.send_ns),
                         MSS,
                         p.pn,
-                        SpaceId::Data,
+                        SpaceKind::Data,
                         false,
                         &rtt_est,
                     );
                 }
-                bbr.on_end_acks(at(now_ns), inflight, false, Some(largest_pn), SpaceId::Data);
+                bbr.on_end_acks(
+                    at(now_ns),
+                    inflight,
+                    false,
+                    Some(largest_pn),
+                    SpaceKind::Data,
+                );
 
                 let in_cruise = bbr.state == BbrState::ProbeBw(ProbeBwSubstate::Cruise);
 
@@ -4802,7 +4931,7 @@ mod test {
                     && matches!(bbr.state, BbrState::ProbeBw(_))
                     && pn % LOSS_PERIOD == LOSS_PERIOD - 1;
 
-                bbr.on_packet_sent(at(send_ns), MSS as u16, pn, SpaceId::Data);
+                bbr.on_packet_sent(at(send_ns), MSS as u16, pn, SpaceKind::Data);
                 inflight += MSS;
                 flight.push_back(InFlight {
                     pn,
@@ -4818,7 +4947,7 @@ mod test {
                 now_ns = now_ns.max(p.event_ns);
                 inflight -= MSS;
                 if p.lost {
-                    bbr.on_packet_lost(MSS as u16, p.pn, SpaceId::Data, at(now_ns));
+                    bbr.on_packet_lost(MSS as u16, p.pn, SpaceKind::Data, at(now_ns));
                 } else {
                     rtt_est.update(Duration::ZERO, Duration::from_nanos(now_ns - p.send_ns));
                     bbr.on_ack(
@@ -4826,11 +4955,11 @@ mod test {
                         at(p.send_ns),
                         MSS,
                         p.pn,
-                        SpaceId::Data,
+                        SpaceKind::Data,
                         false,
                         &rtt_est,
                     );
-                    bbr.on_end_acks(at(now_ns), inflight, false, Some(p.pn), SpaceId::Data);
+                    bbr.on_end_acks(at(now_ns), inflight, false, Some(p.pn), SpaceKind::Data);
                 }
 
                 // Turn the seeding loss on once cleanly ramped to BW_LO, off the instant
@@ -5059,7 +5188,7 @@ mod test {
                     finish + RET_NS
                 };
 
-                bbr.on_packet_sent(at(send_ns), MSS as u16, pn, SpaceId::Data);
+                bbr.on_packet_sent(at(send_ns), MSS as u16, pn, SpaceKind::Data);
                 inflight += MSS;
                 flight.push_back(InFlight {
                     pn,
@@ -5075,7 +5204,7 @@ mod test {
                 now_ns = now_ns.max(p.event_ns);
                 inflight -= MSS;
                 if p.lost {
-                    bbr.on_packet_lost(MSS as u16, p.pn, SpaceId::Data, at(now_ns));
+                    bbr.on_packet_lost(MSS as u16, p.pn, SpaceKind::Data, at(now_ns));
                 } else {
                     rtt_est.update(Duration::ZERO, Duration::from_nanos(now_ns - p.send_ns));
                     bbr.on_ack(
@@ -5083,11 +5212,11 @@ mod test {
                         at(p.send_ns),
                         MSS,
                         p.pn,
-                        SpaceId::Data,
+                        SpaceKind::Data,
                         false,
                         &rtt_est,
                     );
-                    bbr.on_end_acks(at(now_ns), inflight, false, Some(p.pn), SpaceId::Data);
+                    bbr.on_end_acks(at(now_ns), inflight, false, Some(p.pn), SpaceKind::Data);
                 }
 
                 // Phase 1 -> 2: once settled in PROBE_BW at the high rate (max_bw ~= BW_HI), cut the
@@ -5282,7 +5411,7 @@ mod test {
                 // packets are detected, purely after propagation.
                 let event_ns = arrival + RET_NS;
 
-                bbr.on_packet_sent(at(send_ns), MSS as u16, pn, SpaceId::Data);
+                bbr.on_packet_sent(at(send_ns), MSS as u16, pn, SpaceKind::Data);
                 inflight += MSS;
                 flight.push_back(InFlight {
                     pn,
@@ -5298,7 +5427,7 @@ mod test {
                 now_ns = now_ns.max(p.event_ns);
                 inflight -= MSS;
                 if p.lost {
-                    bbr.on_packet_lost(MSS as u16, p.pn, SpaceId::Data, at(now_ns));
+                    bbr.on_packet_lost(MSS as u16, p.pn, SpaceKind::Data, at(now_ns));
                 } else {
                     rtt_est.update(Duration::ZERO, Duration::from_nanos(now_ns - p.send_ns));
                     bbr.on_ack(
@@ -5306,11 +5435,11 @@ mod test {
                         at(p.send_ns),
                         MSS,
                         p.pn,
-                        SpaceId::Data,
+                        SpaceKind::Data,
                         false,
                         &rtt_est,
                     );
-                    bbr.on_end_acks(at(now_ns), inflight, false, Some(p.pn), SpaceId::Data);
+                    bbr.on_end_acks(at(now_ns), inflight, false, Some(p.pn), SpaceKind::Data);
                 }
 
                 if !reached_probe_bw && matches!(bbr.state, BbrState::ProbeBw(_)) {
@@ -5496,7 +5625,7 @@ mod test {
                 btl_free_ns = finish;
                 let ack_ns = finish + RET_NS;
 
-                bbr.on_packet_sent(at(send_ns), MSS as u16, pn, SpaceId::Data);
+                bbr.on_packet_sent(at(send_ns), MSS as u16, pn, SpaceKind::Data);
                 inflight += MSS;
                 flight.push_back(InFlight {
                     pn,
@@ -5530,7 +5659,7 @@ mod test {
                 let reordering =
                     pre.is_some() && bbr.state == BbrState::ProbeBw(ProbeBwSubstate::Up);
                 if reordering {
-                    bbr.on_packet_lost(MSS as u16, p.pn, SpaceId::Data, at(now_ns));
+                    bbr.on_packet_lost(MSS as u16, p.pn, SpaceKind::Data, at(now_ns));
 
                     // The moment handle_inflight_too_high moved us off PROBE_UP, record the episode:
                     // the undo snapshot save_state_upon_loss captured on this loss, plus the post-loss
@@ -5555,11 +5684,11 @@ mod test {
                         at(p.send_ns),
                         MSS,
                         p.pn,
-                        SpaceId::Data,
+                        SpaceKind::Data,
                         false,
                         &rtt_est,
                     );
-                    bbr.on_end_acks(at(now_ns), inflight, false, Some(p.pn), SpaceId::Data);
+                    bbr.on_end_acks(at(now_ns), inflight, false, Some(p.pn), SpaceKind::Data);
                 }
             } else {
                 panic!("simulation stalled: window full but nothing in flight");
@@ -5770,7 +5899,7 @@ mod test {
                 btl_free_ns = finish;
                 let ack_ns = finish + RET_NS;
 
-                bbr.on_packet_sent(at(send_ns), MSS as u16, pn, SpaceId::Data);
+                bbr.on_packet_sent(at(send_ns), MSS as u16, pn, SpaceKind::Data);
                 inflight += MSS;
                 flight.push_back(InFlight {
                     pn,
@@ -5805,7 +5934,7 @@ mod test {
                 let rto_timeout =
                     pre.is_some() && bbr.state == BbrState::ProbeBw(ProbeBwSubstate::Up);
                 if rto_timeout {
-                    bbr.on_packet_lost(MSS as u16, p.pn, SpaceId::Data, at(now_ns));
+                    bbr.on_packet_lost(MSS as u16, p.pn, SpaceKind::Data, at(now_ns));
 
                     // The moment handle_inflight_too_high moved us off PROBE_UP, record the episode:
                     // the undo snapshot save_state_upon_loss captured on this loss, plus the post-loss
@@ -5830,11 +5959,11 @@ mod test {
                         at(p.send_ns),
                         MSS,
                         p.pn,
-                        SpaceId::Data,
+                        SpaceKind::Data,
                         false,
                         &rtt_est,
                     );
-                    bbr.on_end_acks(at(now_ns), inflight, false, Some(p.pn), SpaceId::Data);
+                    bbr.on_end_acks(at(now_ns), inflight, false, Some(p.pn), SpaceKind::Data);
                 }
             } else {
                 panic!("simulation stalled: window full but nothing in flight");
@@ -6052,7 +6181,7 @@ mod test {
                 btl_free_ns = finish;
                 let ack_ns = finish + RET_NS;
 
-                bbr.on_packet_sent(at(send_ns), MSS as u16, pn, SpaceId::Data);
+                bbr.on_packet_sent(at(send_ns), MSS as u16, pn, SpaceKind::Data);
                 inflight += MSS;
                 flight.push_back(InFlight {
                     pn,
@@ -6077,11 +6206,11 @@ mod test {
                     at(p.send_ns),
                     MSS,
                     p.pn,
-                    SpaceId::Data,
+                    SpaceKind::Data,
                     true,
                     &rtt_est,
                 );
-                bbr.on_end_acks(at(now_ns), inflight, true, Some(p.pn), SpaceId::Data);
+                bbr.on_end_acks(at(now_ns), inflight, true, Some(p.pn), SpaceKind::Data);
 
                 full_bw_reached_ever |= bbr.full_bw_reached;
 
@@ -6327,7 +6456,7 @@ mod test {
                 btl_free_ns = finish;
                 let ack_ns = finish + RET_NS;
 
-                bbr.on_packet_sent(at(send_ns), MSS as u16, pn, SpaceId::Data);
+                bbr.on_packet_sent(at(send_ns), MSS as u16, pn, SpaceKind::Data);
                 inflight += MSS;
                 flight.push_back(InFlight {
                     pn,
@@ -6348,7 +6477,7 @@ mod test {
                     // is exactly the pre-reduction value.
                     let before = bbr.inflight_longterm;
                     let was_up = bbr.state == BbrState::ProbeBw(ProbeBwSubstate::Up);
-                    bbr.on_packet_lost(MSS as u16, p.pn, SpaceId::Data, at(now_ns));
+                    bbr.on_packet_lost(MSS as u16, p.pn, SpaceKind::Data, at(now_ns));
                     if was_up && bbr.state != BbrState::ProbeBw(ProbeBwSubstate::Up) {
                         if established.is_none() {
                             // Episode 1: the first loss clamped inflight_longterm finite.
@@ -6378,11 +6507,11 @@ mod test {
                         at(p.send_ns),
                         MSS,
                         p.pn,
-                        SpaceId::Data,
+                        SpaceKind::Data,
                         false,
                         &rtt_est,
                     );
-                    bbr.on_end_acks(at(now_ns), inflight, false, Some(p.pn), SpaceId::Data);
+                    bbr.on_end_acks(at(now_ns), inflight, false, Some(p.pn), SpaceKind::Data);
                 }
             } else {
                 panic!("simulation stalled: window full but nothing in flight");
@@ -6589,7 +6718,7 @@ mod test {
                 btl_free_ns = finish;
                 let ack_ns = finish + RET_NS;
 
-                bbr.on_packet_sent(at(send_ns), MSS as u16, pn, SpaceId::Data);
+                bbr.on_packet_sent(at(send_ns), MSS as u16, pn, SpaceKind::Data);
                 inflight += MSS;
                 flight.push_back(InFlight {
                     pn,
@@ -6623,7 +6752,7 @@ mod test {
                     at(p.send_ns),
                     MSS,
                     p.pn,
-                    SpaceId::Data,
+                    SpaceKind::Data,
                     app_limited_phase,
                     &rtt_est,
                 );
@@ -6635,7 +6764,7 @@ mod test {
                     inflight,
                     app_limited_phase,
                     Some(p.pn),
-                    SpaceId::Data,
+                    SpaceKind::Data,
                 );
 
                 // Flip to the application-limited phase the moment PROBE_BW is entered,
