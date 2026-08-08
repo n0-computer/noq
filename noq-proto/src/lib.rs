@@ -367,7 +367,18 @@ const MAX_STREAM_COUNT: u64 = 1 << 60;
 /// paths exist with the same remote, but different local IP interfaces.
 ///
 /// `FourTuple` implements `From<SocketAddr>`, which expands to [`Self::from_remote`].
-#[derive(Hash, Eq, PartialEq, Copy, Clone)]
+///
+/// noq#738: `PartialEq`/`Eq`/`Hash` are hand-written (see below) to canonicalize
+/// IPv4-mapped-IPv6 addresses (`::ffff:a.b.c.d`) down to plain IPv4 *only for
+/// comparison/hashing purposes* — the `remote`/`local_ip` fields themselves are left
+/// exactly as constructed. Canonicalizing the stored value instead (i.e. in `new()`)
+/// was tried and reverted: it changes the address family of what gets handed to the
+/// OS for sending (`Transmit::destination`), which is unverified on non-Linux
+/// platforms (this crate's CI is Linux-only) and broke IPv6-vs-IPv4 autodetection in
+/// the `noq` crate's `normalize_network_path`. Comparing canonically without mutating
+/// storage gets the same "fix it once, every downstream comparison benefits" property
+/// without either risk.
+#[derive(Copy, Clone)]
 pub struct FourTuple {
     /// The remote side of this tuple.
     remote: SocketAddr,
@@ -377,6 +388,51 @@ pub struct FourTuple {
     /// When we send, we can only specify the `src_ip`, not the source port.
     /// So even if we track the port, we won't be able to make use of it.
     local_ip: Option<IpAddr>,
+}
+
+/// noq#738: canonicalizes an [`IpAddr`] for comparison purposes (see [`FourTuple`]'s
+/// docs) without changing any stored/emitted address.
+fn canonical_ip(ip: IpAddr) -> IpAddr {
+    ip.to_canonical()
+}
+
+/// noq#738: canonical comparison key for a `remote: SocketAddr`. `to_canonical()`
+/// folds `::ffff:a.b.c.d` down to plain IPv4; the scope_id is kept for addresses that
+/// stay IPv6, because `FourTuple::new()` deliberately preserves it for link-local and
+/// multicast remotes (see the comment there) — two different link-local interfaces
+/// must not compare equal just because their canonicalized IP matches. A mapped
+/// address canonicalizes to V4, which has no scope, so it gets 0.
+pub(crate) fn remote_key(addr: SocketAddr) -> (IpAddr, u16, u32) {
+    let ip = addr.ip().to_canonical();
+    let scope = match addr {
+        SocketAddr::V6(v6) if ip.is_ipv6() => v6.scope_id(),
+        _ => 0,
+    };
+    (ip, addr.port(), scope)
+}
+
+/// noq#738: whether two `remote: SocketAddr`s refer to the same peer, ignoring the
+/// mapped-IPv4-vs-plain-IPv4 representation difference that motivated this fix. Used
+/// everywhere a raw `remote == remote` comparison would otherwise bypass
+/// [`FourTuple`]'s canonicalizing `PartialEq`.
+pub(crate) fn same_remote(a: SocketAddr, b: SocketAddr) -> bool {
+    remote_key(a) == remote_key(b)
+}
+
+impl PartialEq for FourTuple {
+    fn eq(&self, other: &Self) -> bool {
+        remote_key(self.remote) == remote_key(other.remote)
+            && self.local_ip.map(canonical_ip) == other.local_ip.map(canonical_ip)
+    }
+}
+
+impl Eq for FourTuple {}
+
+impl std::hash::Hash for FourTuple {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        remote_key(self.remote).hash(state);
+        self.local_ip.map(canonical_ip).hash(state);
+    }
 }
 
 impl FourTuple {
@@ -433,7 +489,10 @@ impl FourTuple {
     /// - `a.is_probably_same_path(b)`
     /// - `b.is_probably_same_path(a)`
     pub(crate) fn is_probably_same_path(&self, other: &Self) -> bool {
-        self.remote == other.remote && (self.local_ip.is_none() || self.local_ip == other.local_ip)
+        // noq#738: canonicalize both sides, same rationale as `FourTuple`'s `PartialEq`.
+        same_remote(self.remote, other.remote)
+            && (self.local_ip.is_none()
+                || self.local_ip.map(canonical_ip) == other.local_ip.map(canonical_ip))
     }
 }
 
@@ -462,5 +521,43 @@ impl fmt::Debug for FourTuple {
 impl From<SocketAddr> for FourTuple {
     fn from(value: SocketAddr) -> Self {
         Self::from_remote(value)
+    }
+}
+
+#[cfg(test)]
+mod four_tuple_tests {
+    use std::collections::HashSet;
+
+    use super::*;
+
+    /// noq#738: two `FourTuple`s differing only by IPv4-mapped-IPv6 vs plain-IPv4
+    /// representation must compare (and hash) equal.
+    #[test]
+    fn four_tuple_eq_ignores_mapped_v4_representation() {
+        let mapped = FourTuple::from_remote("[::ffff:1.2.3.4]:443".parse().unwrap());
+        let plain = FourTuple::from_remote("1.2.3.4:443".parse().unwrap());
+        assert_eq!(mapped, plain);
+
+        let mut set = HashSet::new();
+        set.insert(mapped);
+        set.insert(plain);
+        assert_eq!(set.len(), 1);
+    }
+
+    /// noq#738 fix regression: two link-local `FourTuple`s that differ only in
+    /// `scope_id` (i.e. reachable via different network interfaces) must NOT
+    /// compare equal, even though their canonicalized IP is identical. An earlier
+    /// version of this fix dropped `scope_id` from the comparison entirely, which
+    /// silently collapsed distinct interfaces into a single path.
+    #[test]
+    fn four_tuple_eq_preserves_link_local_scope_id() {
+        let iface_a = FourTuple::from_remote("[fe80::1%3]:443".parse().unwrap());
+        let iface_b = FourTuple::from_remote("[fe80::1%5]:443".parse().unwrap());
+        assert_ne!(iface_a, iface_b);
+
+        let mut set = HashSet::new();
+        set.insert(iface_a);
+        set.insert(iface_b);
+        assert_eq!(set.len(), 2);
     }
 }
