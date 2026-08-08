@@ -569,11 +569,12 @@ mod four_tuple_tests {
     /// The inverse of [`four_tuple_eq_preserves_link_local_scope_id`]: for a
     /// *global* (non-link-local, non-multicast) IPv6 address, `FourTuple::new()`
     /// deliberately zeroes `scope_id` before storing (it's only meaningful for
-    /// link-local/multicast scopes). Two `FourTuple`s built from the same global
-    /// address but with different (bogus/leftover) scope_ids on the input must
-    /// still compare equal — if a future change made `remote_key()` preserve
-    /// scope_id unconditionally instead of relying on `new()` having already
-    /// zeroed it, this would start failing silently.
+    /// link-local/multicast scopes) -- so by the time `remote_key()` runs, a
+    /// global address's `scope_id` is already 0 regardless of what was on the
+    /// input. This locks in that zeroing: two `FourTuple`s built from the same
+    /// global address but with different (bogus/leftover) scope_ids on the input
+    /// must still compare equal. If `FourTuple::new()` ever stopped zeroing
+    /// scope_id for global addresses, this would start failing.
     #[test]
     fn four_tuple_eq_zeroes_scope_id_for_global_v6() {
         let a = FourTuple::from_remote("[2001:db8::1%3]:443".parse().unwrap());
@@ -602,10 +603,14 @@ mod four_tuple_tests {
     }
 
     /// [`FourTuple::is_probably_same_path`] duplicates the canonicalizing
-    /// comparison independently of the derived-then-hand-written `PartialEq`
-    /// (it has its own asymmetric "only compare local_ip if self has one" rule,
-    /// so it can't just delegate to `==`) -- test it directly so a future change
-    /// can't fix one and silently leave the other on raw comparison.
+    /// `remote` comparison independently of the derived-then-hand-written
+    /// `PartialEq` (it can't just delegate to `==`, since it has its own
+    /// asymmetric "only compare local_ip if self has one" rule on top) -- test
+    /// the remote-canonicalization half directly so a future change can't fix
+    /// `PartialEq` and silently leave this one on a raw comparison. Both sides
+    /// have `local_ip: None` here, so this doesn't exercise the asymmetric rule
+    /// itself -- that's covered transitively elsewhere (e.g. connection-level
+    /// tests), not by this pair.
     #[test]
     fn is_probably_same_path_ignores_mapped_v4_representation() {
         let mapped = FourTuple::from_remote("[::ffff:1.2.3.4]:443".parse().unwrap());
