@@ -419,10 +419,16 @@ pub(crate) fn same_remote(a: SocketAddr, b: SocketAddr) -> bool {
     remote_key(a) == remote_key(b)
 }
 
+/// noq#738: same rationale as [`same_remote`], for `local_ip: Option<IpAddr>`
+/// comparisons. Used everywhere a raw `local_ip == local_ip` comparison would
+/// otherwise bypass [`FourTuple`]'s canonicalizing `PartialEq`.
+pub(crate) fn same_local_ip(a: Option<IpAddr>, b: Option<IpAddr>) -> bool {
+    a.map(canonical_ip) == b.map(canonical_ip)
+}
+
 impl PartialEq for FourTuple {
     fn eq(&self, other: &Self) -> bool {
-        remote_key(self.remote) == remote_key(other.remote)
-            && self.local_ip.map(canonical_ip) == other.local_ip.map(canonical_ip)
+        same_remote(self.remote, other.remote) && same_local_ip(self.local_ip, other.local_ip)
     }
 }
 
@@ -491,8 +497,7 @@ impl FourTuple {
     pub(crate) fn is_probably_same_path(&self, other: &Self) -> bool {
         // noq#738: canonicalize both sides, same rationale as `FourTuple`'s `PartialEq`.
         same_remote(self.remote, other.remote)
-            && (self.local_ip.is_none()
-                || self.local_ip.map(canonical_ip) == other.local_ip.map(canonical_ip))
+            && (self.local_ip.is_none() || same_local_ip(self.local_ip, other.local_ip))
     }
 }
 

@@ -19,7 +19,7 @@ use tracing::{debug, error, trace, trace_span, warn};
 use crate::{
     Dir, Duration, EndpointConfig, FourTuple, Frame, INITIAL_MTU, Instant, MAX_CID_SIZE,
     MAX_STREAM_COUNT, MIN_INITIAL_SIZE, Side, StreamId, TIMER_GRANULARITY, TokenStore, Transmit,
-    TransportError, TransportErrorCode, VarInt, same_remote,
+    TransportError, TransportErrorCode, VarInt, same_local_ip, same_remote,
     cid_generator::ConnectionIdGenerator,
     cid_queue::CidQueue,
     config::{ServerConfig, TransportConfig},
@@ -2341,15 +2341,7 @@ impl Connection {
 
             if known_path.network_path.local_ip.is_some()
                 && network_path.local_ip.is_some()
-                && known_path
-                    .network_path
-                    .local_ip
-                    .as_ref()
-                    .map(std::net::IpAddr::to_canonical)
-                    != network_path
-                        .local_ip
-                        .as_ref()
-                        .map(std::net::IpAddr::to_canonical)
+                && !same_local_ip(known_path.network_path.local_ip, network_path.local_ip)
                 && !local_ip_may_migrate
             {
                 trace!(
@@ -5579,7 +5571,7 @@ impl Connection {
             if path_data
                 .network_path
                 .local_ip
-                .is_some_and(|ip| ip.to_canonical() != new_local_ip.to_canonical())
+                .is_some_and(|ip| !same_local_ip(Some(ip), Some(new_local_ip)))
             {
                 debug!(
                     %path_id,
