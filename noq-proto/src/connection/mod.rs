@@ -6985,12 +6985,8 @@ impl Connection {
                 .is_some_and(|pns| pns.pending_path_responses.has_pending_on_path(network_path));
 
         // Stream control frames are checked in PacketSpace::can_send, only check data here.
-        let other = self.streams.can_send_stream_data()
-            || self
-                .datagrams
-                .outgoing
-                .front()
-                .is_some_and(|x| x.size(true) <= max_size);
+        let other =
+            self.streams.can_send_stream_data() || self.datagrams.outgoing.can_send_1rtt(max_size);
 
         // All `false` fields are set in PacketSpace::can_send.
         SendableFrames {
