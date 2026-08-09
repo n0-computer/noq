@@ -876,7 +876,7 @@ impl PathResponses {
         let existing = self
             .pending
             .iter_mut()
-            .find(|x| x.network_path.same_remote(&network_path));
+            .find(|x| x.network_path.is_same_remote(&network_path));
         if let Some(existing) = existing {
             // Update a queued response
             if existing.packet <= packet {

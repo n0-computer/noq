@@ -413,7 +413,7 @@ fn remote_key(addr: SocketAddr) -> (IpAddr, u16, u32) {
 
 impl PartialEq for FourTuple {
     fn eq(&self, other: &Self) -> bool {
-        self.same_remote(other) && self.same_local_ip(other)
+        self.is_same_remote(other) && self.is_same_local_ip(other)
     }
 }
 
@@ -473,12 +473,12 @@ impl FourTuple {
     /// mapped-IPv4-vs-plain-IPv4 representation difference that motivated this fix.
     /// Used everywhere a raw `remote == remote` comparison would otherwise bypass
     /// this canonicalization (see the type-level docs above).
-    pub(crate) fn same_remote(&self, other: &Self) -> bool {
+    pub(crate) fn is_same_remote(&self, other: &Self) -> bool {
         remote_key(self.remote) == remote_key(other.remote)
     }
 
-    /// noq#738: same rationale as [`Self::same_remote`], for `local_ip`.
-    pub(crate) fn same_local_ip(&self, other: &Self) -> bool {
+    /// noq#738: same rationale as [`Self::is_same_remote`], for `local_ip`.
+    pub(crate) fn is_same_local_ip(&self, other: &Self) -> bool {
         self.local_ip.map(canonical_ip) == other.local_ip.map(canonical_ip)
     }
 
@@ -493,7 +493,7 @@ impl FourTuple {
     /// - `a.is_probably_same_path(b)`
     /// - `b.is_probably_same_path(a)`
     pub(crate) fn is_probably_same_path(&self, other: &Self) -> bool {
-        self.same_remote(other) && (self.local_ip.is_none() || self.same_local_ip(other))
+        self.is_same_remote(other) && (self.local_ip.is_none() || self.is_same_local_ip(other))
     }
 }
 
