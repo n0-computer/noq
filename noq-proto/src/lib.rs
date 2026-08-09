@@ -531,8 +531,8 @@ mod four_tuple_tests {
 
     use super::*;
 
-    /// noq#738: two `FourTuple`s differing only by IPv4-mapped-IPv6 vs plain-IPv4
-    /// representation must compare (and hash) equal.
+    /// noq#738: mapped vs. plain IPv4 representations of the same peer must be
+    /// equal (and hash equal).
     #[test]
     fn four_tuple_eq_ignores_mapped_v4_representation() {
         let mapped = FourTuple::from_remote("[::ffff:1.2.3.4]:443".parse().unwrap());
@@ -545,11 +545,9 @@ mod four_tuple_tests {
         assert_eq!(set.len(), 1);
     }
 
-    /// Same as [`four_tuple_eq_ignores_mapped_v4_representation`], but for
-    /// `local_ip` instead of `remote` -- this is the half of the fix that the
-    /// original bug report actually depends on (`open_path()`'s `local_ip`
-    /// argument), and unlike `remote` it's never exercised by
-    /// `FourTuple::from_remote` (which always sets `local_ip: None`).
+    /// Same as [`four_tuple_eq_ignores_mapped_v4_representation`] for `local_ip` --
+    /// the half `open_path()`'s bug report actually depends on, and never
+    /// exercised by `FourTuple::from_remote` (`local_ip: None`).
     #[test]
     fn four_tuple_eq_ignores_mapped_v4_representation_for_local_ip() {
         let remote = "9.9.9.9:443".parse().unwrap();
@@ -563,11 +561,9 @@ mod four_tuple_tests {
         assert_eq!(set.len(), 1);
     }
 
-    /// noq#738 fix regression: two link-local `FourTuple`s that differ only in
-    /// `scope_id` (i.e. reachable via different network interfaces) must NOT
-    /// compare equal, even though their canonicalized IP is identical. An earlier
-    /// version of this fix dropped `scope_id` from the comparison entirely, which
-    /// silently collapsed distinct interfaces into a single path.
+    /// noq#738 regression: link-local `FourTuple`s differing only in `scope_id`
+    /// (different interfaces) must NOT compare equal -- an earlier fix draft
+    /// dropped `scope_id` entirely, collapsing distinct interfaces into one path.
     #[test]
     fn four_tuple_eq_preserves_link_local_scope_id() {
         let iface_a = FourTuple::from_remote("[fe80::1%3]:443".parse().unwrap());
@@ -580,15 +576,9 @@ mod four_tuple_tests {
         assert_eq!(set.len(), 2);
     }
 
-    /// The inverse of [`four_tuple_eq_preserves_link_local_scope_id`]: for a
-    /// *global* (non-link-local, non-multicast) IPv6 address, `FourTuple::new()`
-    /// deliberately zeroes `scope_id` before storing (it's only meaningful for
-    /// link-local/multicast scopes) -- so by the time `canonical_remote()` runs, a
-    /// global address's `scope_id` is already 0 regardless of what was on the
-    /// input. This locks in that zeroing: two `FourTuple`s built from the same
-    /// global address but with different (bogus/leftover) scope_ids on the input
-    /// must still compare equal. If `FourTuple::new()` ever stopped zeroing
-    /// scope_id for global addresses, this would start failing.
+    /// Inverse of [`four_tuple_eq_preserves_link_local_scope_id`]: for a *global*
+    /// IPv6 address, `FourTuple::new()` already zeroes `scope_id` on construction,
+    /// so bogus input scope_ids must still compare equal here.
     #[test]
     fn four_tuple_eq_zeroes_scope_id_for_global_v6() {
         let a = FourTuple::from_remote("[2001:db8::1%3]:443".parse().unwrap());
@@ -601,9 +591,8 @@ mod four_tuple_tests {
         assert_eq!(set.len(), 1);
     }
 
-    /// Mirrors [`four_tuple_eq_preserves_link_local_scope_id`] for the other half
-    /// of `FourTuple::new()`'s `requires_scope_id` condition (multicast, not just
-    /// unicast link-local).
+    /// Mirrors [`four_tuple_eq_preserves_link_local_scope_id`] for multicast
+    /// addresses.
     #[test]
     fn four_tuple_eq_preserves_multicast_scope_id() {
         let iface_a = FourTuple::from_remote("[ff02::1%3]:443".parse().unwrap());
@@ -616,16 +605,11 @@ mod four_tuple_tests {
         assert_eq!(set.len(), 2);
     }
 
-    /// [`FourTuple::is_probably_same_path`] duplicates the canonicalizing
-    /// `remote` comparison independently of the derived-then-hand-written
-    /// `PartialEq` (it can't just delegate to `==`, since it has its own
-    /// asymmetric "only compare local_ip if self has one" rule on top) -- test
-    /// the remote-canonicalization half directly so a future change can't fix
-    /// `PartialEq` and silently leave this one on a raw comparison. Both sides
-    /// have `local_ip: None` here, so this doesn't exercise the asymmetric
-    /// `local_ip` rule itself -- see
-    /// [`is_probably_same_path_ignores_mapped_v4_representation_for_local_ip`]
-    /// for that.
+    /// `is_probably_same_path` re-implements the canonicalizing `remote`
+    /// comparison independently of `PartialEq`, so it needs its own coverage.
+    /// `local_ip: None` here; see
+    /// [`is_probably_same_path_ignores_mapped_v4_representation_for_local_ip`] for
+    /// the `Some` case.
     #[test]
     fn is_probably_same_path_ignores_mapped_v4_representation() {
         let mapped = FourTuple::from_remote("[::ffff:1.2.3.4]:443".parse().unwrap());
@@ -634,12 +618,10 @@ mod four_tuple_tests {
         assert!(plain.is_probably_same_path(&mapped));
     }
 
-    /// Exercises the asymmetric `local_ip` branch that
-    /// [`is_probably_same_path_ignores_mapped_v4_representation`] deliberately
-    /// leaves untested: when `self.local_ip` is `Some(..)`,
-    /// `is_probably_same_path` requires the full (canonicalizing) `FourTuple`
-    /// equality, not just a `remote` match. A representation-only difference in
-    /// `local_ip` must not break that.
+    /// The `local_ip: Some(..)` counterpart of
+    /// [`is_probably_same_path_ignores_mapped_v4_representation`]: a
+    /// representation-only difference in `local_ip` must not break the
+    /// full-equality branch.
     #[test]
     fn is_probably_same_path_ignores_mapped_v4_representation_for_local_ip() {
         let remote = "9.9.9.9:443".parse().unwrap();
@@ -649,10 +631,8 @@ mod four_tuple_tests {
         assert!(plain.is_probably_same_path(&mapped));
     }
 
-    /// Same as above, for the `scope_id` half of the fix. `scope_id` only exists
-    /// on `remote: SocketAddr` (`Ipv6Addr`/`IpAddr` -- and so `local_ip` -- has no
-    /// such field; `"...%3".parse::<IpAddr>()` doesn't even parse), so this
-    /// varies `remote`, not `local_ip`.
+    /// Same as above for `scope_id`. Only `remote` can vary here -- `local_ip:
+    /// IpAddr` has no `scope_id` field.
     #[test]
     fn is_probably_same_path_distinguishes_link_local_scope_id() {
         let iface_a = FourTuple::from_remote("[fe80::1%3]:443".parse().unwrap());
