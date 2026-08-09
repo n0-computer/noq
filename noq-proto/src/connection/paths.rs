@@ -12,7 +12,7 @@ use super::{
 };
 use crate::{
     ConnectionId, Duration, FourTuple, Instant, TIMER_GRANULARITY, TransportConfig,
-    TransportErrorCode, VarInt, same_remote,
+    TransportErrorCode, VarInt,
     coding::{self, Decodable, Encodable},
     congestion,
     connection::{MAX_BACKOFF_EXPONENT, MAX_PTO_INTERVAL},
@@ -872,12 +872,11 @@ impl PathResponses {
             token,
             network_path,
         };
-        // noq#738: canonicalize both sides before comparing, same rationale as
-        // `FourTuple`'s `PartialEq`.
+        // noq#738: same rationale as `FourTuple`'s `PartialEq`.
         let existing = self
             .pending
             .iter_mut()
-            .find(|x| same_remote(x.network_path.remote, network_path.remote));
+            .find(|x| x.network_path.same_remote(&network_path));
         if let Some(existing) = existing {
             // Update a queued response
             if existing.packet <= packet {
