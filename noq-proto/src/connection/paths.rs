@@ -1202,4 +1202,29 @@ mod tests {
         // outside range saturates
         assert_eq!(PathId::MAX.saturating_add(1u8), PathId::MAX)
     }
+
+    /// noq#738 regression: two `PATH_CHALLENGE`s arriving on `FourTuple`s that
+    /// differ only by mapped-IPv4-vs-plain-IPv4 representation of the same peer
+    /// must be coalesced into a single pending response, not tracked as two
+    /// distinct (and therefore never-matching) paths.
+    #[test]
+    fn push_coalesces_mapped_v4_representation() {
+        let mapped = FourTuple::from_remote("[::ffff:1.2.3.4]:443".parse().unwrap());
+        let plain = FourTuple::from_remote("1.2.3.4:443".parse().unwrap());
+
+        let mut responses = PathResponses::default();
+        responses.push(1, 0xaaaa, mapped);
+        responses.push(2, 0xbbbb, plain);
+
+        assert_eq!(
+            responses.pending.len(),
+            1,
+            "the same peer under different address representations must coalesce \
+             into a single pending response"
+        );
+        assert_eq!(
+            responses.pending[0].token, 0xbbbb,
+            "the later (higher packet number) response should have been queued"
+        );
+    }
 }

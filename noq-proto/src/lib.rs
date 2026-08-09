@@ -545,6 +545,24 @@ mod four_tuple_tests {
         assert_eq!(set.len(), 1);
     }
 
+    /// Same as [`four_tuple_eq_ignores_mapped_v4_representation`], but for
+    /// `local_ip` instead of `remote` -- this is the half of the fix that the
+    /// original bug report actually depends on (`open_path()`'s `local_ip`
+    /// argument), and unlike `remote` it's never exercised by
+    /// `FourTuple::from_remote` (which always sets `local_ip: None`).
+    #[test]
+    fn four_tuple_eq_ignores_mapped_v4_representation_for_local_ip() {
+        let remote = "9.9.9.9:443".parse().unwrap();
+        let mapped = FourTuple::new(remote, Some("::ffff:1.2.3.4".parse().unwrap()));
+        let plain = FourTuple::new(remote, Some("1.2.3.4".parse().unwrap()));
+        assert_eq!(mapped, plain);
+
+        let mut set = HashSet::new();
+        set.insert(mapped);
+        set.insert(plain);
+        assert_eq!(set.len(), 1);
+    }
+
     /// noq#738 fix regression: two link-local `FourTuple`s that differ only in
     /// `scope_id` (i.e. reachable via different network interfaces) must NOT
     /// compare equal, even though their canonicalized IP is identical. An earlier
@@ -604,13 +622,29 @@ mod four_tuple_tests {
     /// asymmetric "only compare local_ip if self has one" rule on top) -- test
     /// the remote-canonicalization half directly so a future change can't fix
     /// `PartialEq` and silently leave this one on a raw comparison. Both sides
-    /// have `local_ip: None` here, so this doesn't exercise the asymmetric rule
-    /// itself -- that's covered transitively elsewhere (e.g. connection-level
-    /// tests), not by this pair.
+    /// have `local_ip: None` here, so this doesn't exercise the asymmetric
+    /// `local_ip` rule itself -- see
+    /// [`is_probably_same_path_ignores_mapped_v4_representation_for_local_ip`]
+    /// for that.
     #[test]
     fn is_probably_same_path_ignores_mapped_v4_representation() {
         let mapped = FourTuple::from_remote("[::ffff:1.2.3.4]:443".parse().unwrap());
         let plain = FourTuple::from_remote("1.2.3.4:443".parse().unwrap());
+        assert!(mapped.is_probably_same_path(&plain));
+        assert!(plain.is_probably_same_path(&mapped));
+    }
+
+    /// Exercises the asymmetric `local_ip` branch that
+    /// [`is_probably_same_path_ignores_mapped_v4_representation`] deliberately
+    /// leaves untested: when `self.local_ip` is `Some(..)`,
+    /// `is_probably_same_path` requires the full (canonicalizing) `FourTuple`
+    /// equality, not just a `remote` match. A representation-only difference in
+    /// `local_ip` must not break that.
+    #[test]
+    fn is_probably_same_path_ignores_mapped_v4_representation_for_local_ip() {
+        let remote = "9.9.9.9:443".parse().unwrap();
+        let mapped = FourTuple::new(remote, Some("::ffff:1.2.3.4".parse().unwrap()));
+        let plain = FourTuple::new(remote, Some("1.2.3.4".parse().unwrap()));
         assert!(mapped.is_probably_same_path(&plain));
         assert!(plain.is_probably_same_path(&mapped));
     }
