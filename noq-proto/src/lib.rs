@@ -433,13 +433,14 @@ impl FourTuple {
         self.local_ip
     }
 
-    /// noq#738: canonical comparison key for `remote`. `to_canonical()` folds
-    /// `::ffff:a.b.c.d` down to plain IPv4; the scope_id is kept for addresses that
-    /// stay IPv6, because [`Self::new`] deliberately preserves it for link-local and
-    /// multicast remotes — two different link-local interfaces must not compare
-    /// equal just because their canonicalized IP matches. A mapped address
-    /// canonicalizes to V4, which has no scope, so it gets 0.
-    fn remote_key(&self) -> (IpAddr, u16, u32) {
+    /// noq#738: canonicalizes `remote` for comparison/hashing purposes (see the
+    /// type-level docs above). `to_canonical()` folds `::ffff:a.b.c.d` down to plain
+    /// IPv4; the scope_id is kept for addresses that stay IPv6, because [`Self::new`]
+    /// deliberately preserves it for link-local and multicast remotes — two different
+    /// link-local interfaces must not compare equal just because their canonicalized
+    /// IP matches. A mapped address canonicalizes to V4, which has no scope, so it
+    /// gets 0.
+    fn canonical_remote(&self) -> (IpAddr, u16, u32) {
         let ip = self.remote.ip().to_canonical();
         let scope = match self.remote {
             SocketAddr::V6(v6) if ip.is_ipv6() => v6.scope_id(),
@@ -448,9 +449,8 @@ impl FourTuple {
         (ip, self.remote.port(), scope)
     }
 
-    /// noq#738: canonical comparison key for `local_ip`, same rationale as
-    /// [`Self::remote_key`].
-    fn local_ip_key(&self) -> Option<IpAddr> {
+    /// noq#738: same rationale as [`Self::canonical_remote`], for `local_ip`.
+    fn canonical_local_ip(&self) -> Option<IpAddr> {
         self.local_ip.map(|ip| ip.to_canonical())
     }
 
@@ -459,12 +459,12 @@ impl FourTuple {
     /// Used everywhere a raw `remote == remote` comparison would otherwise bypass
     /// this canonicalization (see the type-level docs above).
     pub(crate) fn is_same_remote(&self, other: &Self) -> bool {
-        self.remote_key() == other.remote_key()
+        self.canonical_remote() == other.canonical_remote()
     }
 
     /// noq#738: same rationale as [`Self::is_same_remote`], for `local_ip`.
     pub(crate) fn is_same_local_ip(&self, other: &Self) -> bool {
-        self.local_ip_key() == other.local_ip_key()
+        self.canonical_local_ip() == other.canonical_local_ip()
     }
 
     /// Returns whether we think the other address probably represents the same path
@@ -492,8 +492,8 @@ impl Eq for FourTuple {}
 
 impl std::hash::Hash for FourTuple {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.remote_key().hash(state);
-        self.local_ip_key().hash(state);
+        self.canonical_remote().hash(state);
+        self.canonical_local_ip().hash(state);
     }
 }
 
@@ -565,7 +565,7 @@ mod four_tuple_tests {
     /// The inverse of [`four_tuple_eq_preserves_link_local_scope_id`]: for a
     /// *global* (non-link-local, non-multicast) IPv6 address, `FourTuple::new()`
     /// deliberately zeroes `scope_id` before storing (it's only meaningful for
-    /// link-local/multicast scopes) -- so by the time `remote_key()` runs, a
+    /// link-local/multicast scopes) -- so by the time `canonical_remote()` runs, a
     /// global address's `scope_id` is already 0 regardless of what was on the
     /// input. This locks in that zeroing: two `FourTuple`s built from the same
     /// global address but with different (bogus/leftover) scope_ids on the input
