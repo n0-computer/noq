@@ -872,7 +872,6 @@ impl PathResponses {
             token,
             network_path,
         };
-        // noq#738: same rationale as `FourTuple`'s `PartialEq`.
         let existing = self
             .pending
             .iter_mut()

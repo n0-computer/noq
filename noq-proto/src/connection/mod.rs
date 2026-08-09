@@ -2327,9 +2327,6 @@ impl Connection {
         // forbids migration, drop the datagram. This could be relaxed to heuristically
         // permit NAT-rebinding-like migration.
         if let Some(known_path) = self.path_mut(path_id) {
-            // noq#738: `FourTuple::is_same_remote` canonicalizes mapped-IPv4-vs-plain-IPv4
-            // representations, same rationale as the local_ip comparison below and
-            // `FourTuple`'s `PartialEq`.
             if !network_path.is_same_remote(&known_path.network_path) && !peer_may_probe {
                 trace!(
                     %path_id,
@@ -4988,7 +4985,6 @@ impl Connection {
                     let path = &mut self
                         .path_mut(path_id)
                         .expect("payload is processed only after the path becomes known");
-                    // noq#738: same rationale as `FourTuple`'s `PartialEq`.
                     if network_path.is_same_remote(&path.network_path) {
                         // PATH_CHALLENGE on active path, possible off-path packet
                         // forwarding attack. Send a non-probing packet to recover the
@@ -5286,7 +5282,6 @@ impl Connection {
                     let space_open_status =
                         self.spaces[SpaceKind::Data].for_path(path_id).open_status;
                     let path = self.path_data_mut(path_id);
-                    // noq#738: same rationale as `FourTuple`'s `PartialEq`.
                     if path.network_path.is_same_remote(&network_path) {
                         if let Some(updated) = path.update_observed_addr_report(observed)
                             && space_open_status == OpenStatus::Informed
@@ -5568,9 +5563,9 @@ impl Connection {
             && let Some(new_local_ip) = network_path.local_ip
         {
             let path_data = self.path_data_mut(path_id);
-            // noq#738: same rationale as `FourTuple`'s `PartialEq`. `network_path.local_ip`
-            // is `Some(new_local_ip)` per the `let Some` guard above, so comparing against
-            // `network_path` itself covers the `new_local_ip` side.
+            // `network_path.local_ip` is `Some(new_local_ip)` per the `let Some` guard
+            // above, so comparing against `network_path` itself covers the
+            // `new_local_ip` side.
             if path_data.network_path.local_ip.is_some()
                 && !path_data.network_path.is_same_local_ip(&network_path)
             {
@@ -5585,7 +5580,6 @@ impl Connection {
         }
 
         // If the peer migrated to a new address, trigger migration.
-        // noq#738: same rationale as `FourTuple`'s `PartialEq`.
         if self.peer_may_migrate()
             && (migrate_on_any_packet || !is_probing_packet)
             && is_largest_received_pn

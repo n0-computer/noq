@@ -390,42 +390,6 @@ pub struct FourTuple {
     local_ip: Option<IpAddr>,
 }
 
-/// noq#738: canonicalizes an [`IpAddr`] for comparison purposes (see [`FourTuple`]'s
-/// docs) without changing any stored/emitted address.
-fn canonical_ip(ip: IpAddr) -> IpAddr {
-    ip.to_canonical()
-}
-
-/// noq#738: canonical comparison key for a `remote: SocketAddr`. `to_canonical()`
-/// folds `::ffff:a.b.c.d` down to plain IPv4; the scope_id is kept for addresses that
-/// stay IPv6, because `FourTuple::new()` deliberately preserves it for link-local and
-/// multicast remotes (see the comment there) — two different link-local interfaces
-/// must not compare equal just because their canonicalized IP matches. A mapped
-/// address canonicalizes to V4, which has no scope, so it gets 0.
-fn remote_key(addr: SocketAddr) -> (IpAddr, u16, u32) {
-    let ip = addr.ip().to_canonical();
-    let scope = match addr {
-        SocketAddr::V6(v6) if ip.is_ipv6() => v6.scope_id(),
-        _ => 0,
-    };
-    (ip, addr.port(), scope)
-}
-
-impl PartialEq for FourTuple {
-    fn eq(&self, other: &Self) -> bool {
-        self.is_same_remote(other) && self.is_same_local_ip(other)
-    }
-}
-
-impl Eq for FourTuple {}
-
-impl std::hash::Hash for FourTuple {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        remote_key(self.remote).hash(state);
-        self.local_ip.map(canonical_ip).hash(state);
-    }
-}
-
 impl FourTuple {
     /// Creates a new [`FourTuple`].
     pub fn new(mut remote: SocketAddr, local_ip: Option<IpAddr>) -> Self {
@@ -469,17 +433,38 @@ impl FourTuple {
         self.local_ip
     }
 
+    /// noq#738: canonical comparison key for `remote`. `to_canonical()` folds
+    /// `::ffff:a.b.c.d` down to plain IPv4; the scope_id is kept for addresses that
+    /// stay IPv6, because [`Self::new`] deliberately preserves it for link-local and
+    /// multicast remotes — two different link-local interfaces must not compare
+    /// equal just because their canonicalized IP matches. A mapped address
+    /// canonicalizes to V4, which has no scope, so it gets 0.
+    fn remote_key(&self) -> (IpAddr, u16, u32) {
+        let ip = self.remote.ip().to_canonical();
+        let scope = match self.remote {
+            SocketAddr::V6(v6) if ip.is_ipv6() => v6.scope_id(),
+            _ => 0,
+        };
+        (ip, self.remote.port(), scope)
+    }
+
+    /// noq#738: canonical comparison key for `local_ip`, same rationale as
+    /// [`Self::remote_key`].
+    fn local_ip_key(&self) -> Option<IpAddr> {
+        self.local_ip.map(|ip| ip.to_canonical())
+    }
+
     /// noq#738: whether `self` and `other` share the same remote peer, ignoring the
     /// mapped-IPv4-vs-plain-IPv4 representation difference that motivated this fix.
     /// Used everywhere a raw `remote == remote` comparison would otherwise bypass
     /// this canonicalization (see the type-level docs above).
     pub(crate) fn is_same_remote(&self, other: &Self) -> bool {
-        remote_key(self.remote) == remote_key(other.remote)
+        self.remote_key() == other.remote_key()
     }
 
     /// noq#738: same rationale as [`Self::is_same_remote`], for `local_ip`.
     pub(crate) fn is_same_local_ip(&self, other: &Self) -> bool {
-        self.local_ip.map(canonical_ip) == other.local_ip.map(canonical_ip)
+        self.local_ip_key() == other.local_ip_key()
     }
 
     /// Returns whether we think the other address probably represents the same path
@@ -494,6 +479,21 @@ impl FourTuple {
     /// - `b.is_probably_same_path(a)`
     pub(crate) fn is_probably_same_path(&self, other: &Self) -> bool {
         self.is_same_remote(other) && (self.local_ip.is_none() || self.is_same_local_ip(other))
+    }
+}
+
+impl PartialEq for FourTuple {
+    fn eq(&self, other: &Self) -> bool {
+        self.is_same_remote(other) && self.is_same_local_ip(other)
+    }
+}
+
+impl Eq for FourTuple {}
+
+impl std::hash::Hash for FourTuple {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.remote_key().hash(state);
+        self.local_ip_key().hash(state);
     }
 }
 
