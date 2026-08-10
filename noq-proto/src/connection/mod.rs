@@ -1325,9 +1325,12 @@ impl Connection {
         // Handshake and Data(PathId::ZERO) spaces.
         let mut last_packet_number = None;
 
-        // If we end up not sending anything, we need to know if that was because there was
-        // nothing to send or because we were congestion blocked.
-        let mut congestion_blocked = false;
+        // Set when either the congestion window or the pacer held a send back; drives
+        // `app_limited`, since neither case means the application ran dry.
+        let mut send_blocked = false;
+        // Set only when the congestion window itself was full. This is the spec's
+        // `C.is_cwnd_limited`, which a pacing delay must not stand in for.
+        let mut cwnd_blocked = false;
 
         let path = self.path_data(path_id);
 
@@ -1366,12 +1369,21 @@ impl Connection {
                 connection_close_pending,
                 pad_datagram,
             ) {
-                PollPathSpaceStatus::NothingToSend {
-                    congestion_blocked: cb,
-                } => {
-                    congestion_blocked |= cb;
+                PollPathSpaceStatus::NothingToSend { path_blocked } => {
                     // Continue checking other spaces, tail-loss probes may need to be sent
                     // in all spaces.
+                    match path_blocked {
+                        PathBlocked::No => {}
+                        PathBlocked::AntiAmplification => {
+                            // TODO(@divma): this differs from quinn
+                            send_blocked = true;
+                        }
+                        PathBlocked::Congestion => {
+                            cwnd_blocked = true;
+                            send_blocked = true;
+                        }
+                        PathBlocked::Pacing => send_blocked = true,
+                    }
                 }
                 PollPathSpaceStatus::WrotePacket {
                     last_packet_number: pn,
@@ -1396,7 +1408,7 @@ impl Connection {
             }
         }
 
-        if last_packet_number.is_some() || congestion_blocked {
+        if last_packet_number.is_some() || send_blocked {
             self.qlog.emit_recovery_metrics(
                 path_id,
                 &mut self
@@ -1408,8 +1420,13 @@ impl Connection {
             );
         }
 
-        self.path_data_mut(path_id).app_limited =
-            last_packet_number.is_none() && !congestion_blocked;
+        let path = self.path_data_mut(path_id);
+
+        path.app_limited = last_packet_number.is_none() && !send_blocked;
+
+        if cwnd_blocked {
+            path.congestion.on_cwnd_limited();
+        }
 
         match last_packet_number {
             Some(last_packet_number) => {
@@ -1514,7 +1531,7 @@ impl Connection {
                             trace!(?space_id, %path_id, "nothing to send in space");
                         }
                         PollPathSpaceStatus::NothingToSend {
-                            congestion_blocked: false,
+                            path_blocked: PathBlocked::No,
                         }
                     }
                 };
@@ -1524,20 +1541,16 @@ impl Connection {
             // if we will need to start a new datagram. If we are coalescing into an already
             // started datagram we do not need to check congestion control again.
             if transmit.datagram_remaining_mut() == 0 {
-                let congestion_blocked =
+                let path_blocked =
                     self.path_congestion_check(space_id, path_id, transmit, &can_send, now);
-                if congestion_blocked != PathBlocked::No {
+                if path_blocked != PathBlocked::No {
                     // Previous iterations of this loop may have built packets already.
                     return match last_packet_number {
                         Some(pn) => PollPathSpaceStatus::WrotePacket {
                             last_packet_number: pn,
                             pad_datagram,
                         },
-                        None => {
-                            return PollPathSpaceStatus::NothingToSend {
-                                congestion_blocked: true,
-                            };
-                        }
+                        None => PollPathSpaceStatus::NothingToSend { path_blocked },
                     };
                 }
 
@@ -1551,11 +1564,7 @@ impl Connection {
                             last_packet_number: pn,
                             pad_datagram,
                         },
-                        None => {
-                            return PollPathSpaceStatus::NothingToSend {
-                                congestion_blocked: false,
-                            };
-                        }
+                        None => PollPathSpaceStatus::NothingToSend { path_blocked },
                     };
                 }
 
@@ -1619,7 +1628,7 @@ impl Connection {
                 // datagram and try and start another packet here. Then be stopped by the
                 // same confidentiality limit.
                 return PollPathSpaceStatus::NothingToSend {
-                    congestion_blocked: false,
+                    path_blocked: PathBlocked::No,
                 };
             };
             last_packet_number = Some(builder.packet_number);
@@ -7246,10 +7255,11 @@ pub trait NetworkChangeHint: fmt::Debug + 'static {
 /// Return value for [`Connection::poll_transmit_path_space`].
 #[derive(Debug)]
 enum PollPathSpaceStatus {
-    /// Nothing to send in the space, nothing was written into the [`TransmitBuf`].
+    /// Nothing was written into the [`TransmitBuf`].
     NothingToSend {
-        /// If true there was data to send but congestion control did not allow so.
-        congestion_blocked: bool,
+        /// [`PathBlocked`] helps differentiate whether the path had something but was blocked by
+        /// the congestoin window/pacing vs the path having no data queued for sending.
+        path_blocked: PathBlocked,
     },
     /// One or more packets have been written into the [`TransmitBuf`].
     WrotePacket {
