@@ -368,17 +368,21 @@ const MAX_STREAM_COUNT: u64 = 1 << 60;
 ///
 /// `FourTuple` implements `From<SocketAddr>`, which expands to [`Self::from_remote`].
 ///
-/// noq#738: `PartialEq`/`Eq`/`Hash` are hand-written (see below) to canonicalize
-/// IPv4-mapped-IPv6 addresses (`::ffff:a.b.c.d`) down to plain IPv4 *only for
-/// comparison/hashing purposes* — the `remote`/`local_ip` fields themselves are left
-/// exactly as constructed. Canonicalizing the stored value instead (i.e. in `new()`)
-/// was tried and reverted: it changes the address family of what gets handed to the
-/// OS for sending (`Transmit::destination`), which is unverified on non-Linux
-/// platforms (this crate's CI is Linux-only) and broke IPv6-vs-IPv4 autodetection in
-/// the `noq` crate's `normalize_network_path`. Comparing canonically without mutating
-/// storage gets the same "fix it once, every downstream comparison benefits" property
-/// without either risk.
-#[derive(Copy, Clone)]
+/// noq#738: [`Self::is_same_remote`]/[`Self::is_same_local_ip`] canonicalize
+/// IPv4-mapped-IPv6 addresses (`::ffff:a.b.c.d`) down to plain IPv4 *only for the
+/// comparison itself* — the `remote`/`local_ip` fields themselves are left exactly
+/// as constructed, and `PartialEq`/`Eq`/`Hash` stay derived (plain structural
+/// equality). Two things were deliberately avoided:
+/// - Canonicalizing the stored value instead (i.e. in `new()`): changes the address
+///   family of what gets handed to the OS for sending (`Transmit::destination`),
+///   which is unverified on non-Linux platforms (this crate's CI is Linux-only) and
+///   broke IPv6-vs-IPv4 autodetection in the `noq` crate's `normalize_network_path`.
+/// - Overriding `PartialEq`/`Eq`/`Hash` on the type itself: `FourTuple` is public
+///   API, used directly as a `HashMap`/`HashSet` key in a few other places (e.g. the
+///   `noq` crate's `Endpoint` routing table); changing what "equal" means there is a
+///   much bigger, less obviously safe change than fixing the handful of call sites
+///   that actually need to ignore the mapped-vs-plain distinction.
+#[derive(Hash, Eq, PartialEq, Copy, Clone)]
 pub struct FourTuple {
     /// The remote side of this tuple.
     remote: SocketAddr,
@@ -482,21 +486,6 @@ impl FourTuple {
     }
 }
 
-impl PartialEq for FourTuple {
-    fn eq(&self, other: &Self) -> bool {
-        self.is_same_remote(other) && self.is_same_local_ip(other)
-    }
-}
-
-impl Eq for FourTuple {}
-
-impl std::hash::Hash for FourTuple {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.canonical_remote().hash(state);
-        self.canonical_local_ip().hash(state);
-    }
-}
-
 impl fmt::Display for FourTuple {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("(local: ")?;
@@ -527,82 +516,67 @@ impl From<SocketAddr> for FourTuple {
 
 #[cfg(test)]
 mod four_tuple_tests {
-    use std::collections::HashSet;
-
     use super::*;
 
-    /// noq#738: mapped vs. plain IPv4 representations of the same peer must be
-    /// equal (and hash equal).
+    /// noq#738: mapped vs. plain IPv4 representations of the same peer must compare
+    /// equal via [`FourTuple::is_same_remote`] (structural `PartialEq` stays
+    /// derived and unaware of this -- see the type-level docs above).
     #[test]
-    fn four_tuple_eq_ignores_mapped_v4_representation() {
+    fn is_same_remote_ignores_mapped_v4_representation() {
         let mapped = FourTuple::from_remote("[::ffff:1.2.3.4]:443".parse().unwrap());
         let plain = FourTuple::from_remote("1.2.3.4:443".parse().unwrap());
-        assert_eq!(mapped, plain);
-
-        let mut set = HashSet::new();
-        set.insert(mapped);
-        set.insert(plain);
-        assert_eq!(set.len(), 1);
+        assert!(mapped.is_same_remote(&plain));
+        assert!(plain.is_same_remote(&mapped));
+        assert_ne!(mapped, plain, "structural PartialEq must stay derived");
     }
 
-    /// Same as [`four_tuple_eq_ignores_mapped_v4_representation`] for `local_ip` --
-    /// the half `open_path()`'s bug report actually depends on, and never
-    /// exercised by `FourTuple::from_remote` (`local_ip: None`).
+    /// Same as [`is_same_remote_ignores_mapped_v4_representation`] for
+    /// [`FourTuple::is_same_local_ip`] -- the half `open_path()`'s bug report
+    /// actually depends on, and never exercised by `FourTuple::from_remote`
+    /// (`local_ip: None`).
     #[test]
-    fn four_tuple_eq_ignores_mapped_v4_representation_for_local_ip() {
+    fn is_same_local_ip_ignores_mapped_v4_representation() {
         let remote = "9.9.9.9:443".parse().unwrap();
         let mapped = FourTuple::new(remote, Some("::ffff:1.2.3.4".parse().unwrap()));
         let plain = FourTuple::new(remote, Some("1.2.3.4".parse().unwrap()));
-        assert_eq!(mapped, plain);
-
-        let mut set = HashSet::new();
-        set.insert(mapped);
-        set.insert(plain);
-        assert_eq!(set.len(), 1);
+        assert!(mapped.is_same_local_ip(&plain));
+        assert!(plain.is_same_local_ip(&mapped));
+        assert_ne!(mapped, plain, "structural PartialEq must stay derived");
     }
 
     /// noq#738 regression: link-local `FourTuple`s differing only in `scope_id`
-    /// (different interfaces) must NOT compare equal -- an earlier fix draft
-    /// dropped `scope_id` entirely, collapsing distinct interfaces into one path.
+    /// (different interfaces) must NOT compare same via `is_same_remote` -- an
+    /// earlier fix draft dropped `scope_id` entirely, collapsing distinct
+    /// interfaces into one path.
     #[test]
-    fn four_tuple_eq_preserves_link_local_scope_id() {
+    fn is_same_remote_preserves_link_local_scope_id() {
         let iface_a = FourTuple::from_remote("[fe80::1%3]:443".parse().unwrap());
         let iface_b = FourTuple::from_remote("[fe80::1%5]:443".parse().unwrap());
-        assert_ne!(iface_a, iface_b);
-
-        let mut set = HashSet::new();
-        set.insert(iface_a);
-        set.insert(iface_b);
-        assert_eq!(set.len(), 2);
+        assert!(!iface_a.is_same_remote(&iface_b));
+        assert!(!iface_b.is_same_remote(&iface_a));
     }
 
-    /// Inverse of [`four_tuple_eq_preserves_link_local_scope_id`]: for a *global*
+    /// Inverse of [`is_same_remote_preserves_link_local_scope_id`]: for a *global*
     /// IPv6 address, `FourTuple::new()` already zeroes `scope_id` on construction,
-    /// so bogus input scope_ids must still compare equal here.
+    /// so bogus input scope_ids must still compare equal here (both via
+    /// `is_same_remote` and structural `PartialEq`, since `new()` normalizes the
+    /// stored value in this case).
     #[test]
-    fn four_tuple_eq_zeroes_scope_id_for_global_v6() {
+    fn is_same_remote_zeroes_scope_id_for_global_v6() {
         let a = FourTuple::from_remote("[2001:db8::1%3]:443".parse().unwrap());
         let b = FourTuple::from_remote("[2001:db8::1%5]:443".parse().unwrap());
+        assert!(a.is_same_remote(&b));
         assert_eq!(a, b);
-
-        let mut set = HashSet::new();
-        set.insert(a);
-        set.insert(b);
-        assert_eq!(set.len(), 1);
     }
 
-    /// Mirrors [`four_tuple_eq_preserves_link_local_scope_id`] for multicast
+    /// Mirrors [`is_same_remote_preserves_link_local_scope_id`] for multicast
     /// addresses.
     #[test]
-    fn four_tuple_eq_preserves_multicast_scope_id() {
+    fn is_same_remote_preserves_multicast_scope_id() {
         let iface_a = FourTuple::from_remote("[ff02::1%3]:443".parse().unwrap());
         let iface_b = FourTuple::from_remote("[ff02::1%5]:443".parse().unwrap());
-        assert_ne!(iface_a, iface_b);
-
-        let mut set = HashSet::new();
-        set.insert(iface_a);
-        set.insert(iface_b);
-        assert_eq!(set.len(), 2);
+        assert!(!iface_a.is_same_remote(&iface_b));
+        assert!(!iface_b.is_same_remote(&iface_a));
     }
 
     /// `is_probably_same_path` re-implements the canonicalizing `remote`
