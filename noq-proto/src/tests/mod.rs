@@ -29,9 +29,9 @@ use tracing::info;
 use crate::{
     AckFrequencyConfig, ApplicationClose, ClientConfig, Connection, ConnectionClose,
     ConnectionError, ConnectionEvent, ConnectionHandle, DEFAULT_SUPPORTED_VERSIONS, Datagram,
-    DatagramEvent, Dir, Duration, Endpoint, EndpointConfig, Event, FinishError, FourTuple,
-    HashedConnectionIdGenerator, Instant, MIN_INITIAL_SIZE, PathEvent, PathId, PathStatus,
-    ReadError, ReadableError, RecvStream, SendDatagramError, ServerConfig,
+    DatagramEvent, Dir, Duration, EcnCodepoint, Endpoint, EndpointConfig, Event, FinishError,
+    FourTuple, HashedConnectionIdGenerator, Instant, MIN_INITIAL_SIZE, PathEvent, PathId,
+    PathStatus, ReadError, ReadableError, RecvStream, SendDatagramError, ServerConfig,
     Side::*,
     StreamEvent, Transmit, TransportConfig, TransportErrorCode, VarInt, WriteError,
     cid_generator::{ConnectionIdGenerator, RandomConnectionIdGenerator},
@@ -1346,9 +1346,31 @@ fn initial_retransmit() {
     );
 }
 
-#[test]
-fn stale_coalesced_datagram_after_path_discard_is_ignored() {
-    let _guard = subscribe();
+struct CoalescedDatagram {
+    first_decode: PartialDecode,
+    remaining: Option<BytesMut>,
+    ecn: Option<EcnCodepoint>,
+    remote: SocketAddr,
+    dst_ip: Option<IpAddr>,
+}
+
+impl CoalescedDatagram {
+    fn into_connection_event(self, now: Instant, path_id: PathId) -> ConnectionEvent {
+        ConnectionEvent(ConnectionEventInner::Datagram(DatagramConnectionEvent {
+            now,
+            network_path: FourTuple {
+                remote: self.remote,
+                local_ip: self.dst_ip,
+            },
+            path_id,
+            ecn: self.ecn,
+            first_decode: self.first_decode,
+            remaining: self.remaining,
+        }))
+    }
+}
+
+fn connect_capturing_coalesced_datagram() -> (ConnPair, CoalescedDatagram) {
     let (mut pair, client_cfg) = ConnPair::builder().enable_multipath().build_pair();
 
     let client_ch = pair.begin_connect(client_cfg);
@@ -1357,7 +1379,7 @@ fn stale_coalesced_datagram_after_path_discard_is_ignored() {
 
     let cid_parser =
         FixedLengthConnectionIdParser::new(RandomConnectionIdGenerator::default().cid_len());
-    let (first_decode, remaining, ecn, remote, dst_ip) = pair
+    let datagram = pair
         .client
         .inbound
         .iter()
@@ -1371,13 +1393,13 @@ fn stale_coalesced_datagram_after_path_discard_is_ignored() {
                 return None;
             };
 
-            remaining.is_some().then_some((
+            remaining.is_some().then_some(CoalescedDatagram {
                 first_decode,
                 remaining,
-                inbound.ecn,
-                inbound.remote,
-                inbound.dst_ip,
-            ))
+                ecn: inbound.ecn,
+                remote: inbound.remote,
+                dst_ip: inbound.dst_ip,
+            })
         })
         .expect("server should have queued a coalesced handshake datagram for client");
 
@@ -1385,7 +1407,30 @@ fn stale_coalesced_datagram_after_path_discard_is_ignored() {
     let server_ch = pair.server.assert_accept();
     pair.finish_connect(client_ch, server_ch);
 
-    let mut pair = ConnPair::new(pair, client_ch, server_ch);
+    (ConnPair::new(pair, client_ch, server_ch), datagram)
+}
+
+#[test]
+fn coalesced_datagram_for_never_opened_path_is_ignored() {
+    let _guard = subscribe();
+    let (mut pair, datagram) = connect_capturing_coalesced_datagram();
+
+    let never_opened = PathId::from(7u32);
+    assert!(
+        !pair.paths(Client).contains(&never_opened),
+        "path 7 must not exist"
+    );
+
+    let now = pair.time;
+    pair.conn_mut(Client)
+        .handle_event(datagram.into_connection_event(now, never_opened));
+}
+
+#[test]
+fn stale_coalesced_datagram_after_path_discard_is_ignored() {
+    let _guard = subscribe();
+    let (mut pair, datagram) = connect_capturing_coalesced_datagram();
+
     let path_id = pair
         .open_path(
             Client,
@@ -1406,19 +1451,7 @@ fn stale_coalesced_datagram_after_path_discard_is_ignored() {
 
     let now = pair.time;
     pair.conn_mut(Client)
-        .handle_event(ConnectionEvent(ConnectionEventInner::Datagram(
-            DatagramConnectionEvent {
-                now,
-                network_path: FourTuple {
-                    remote,
-                    local_ip: dst_ip,
-                },
-                path_id: PathId::ZERO,
-                ecn,
-                first_decode,
-                remaining,
-            },
-        )));
+        .handle_event(datagram.into_connection_event(now, PathId::ZERO));
 }
 
 #[test]
