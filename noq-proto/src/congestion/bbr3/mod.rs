@@ -3206,10 +3206,11 @@ mod test {
                 // (below APP_WINDOW), so its samples are cwnd-limited by design and
                 // are not part of the app-limited premise.
                 if let Some(rs) = bbr.rs
-                    && bbr.state == BbrState::Startup {
-                        samples_seen += 1;
-                        all_samples_app_limited &= rs.is_app_limited;
-                    }
+                    && bbr.state == BbrState::Startup
+                {
+                    samples_seen += 1;
+                    all_samples_app_limited &= rs.is_app_limited;
+                }
                 max_full_bw_count = max_full_bw_count.max(bbr.full_bw_count);
                 full_bw_now_ever |= bbr.full_bw_now;
                 full_bw_reached_ever |= bbr.full_bw_reached;
