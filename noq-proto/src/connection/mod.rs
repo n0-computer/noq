@@ -4583,8 +4583,8 @@ impl Connection {
                     })
                     .unwrap_or_default();
                 if self.total_authed_packets > 1
-                            || packet.payload.len() <= 16 // token + 16 byte tag
-                            || !is_valid_retry
+                    || packet.payload.len() <= 16 // token + 16 byte tag
+                    || !is_valid_retry
                 {
                     trace!("discarding invalid Retry");
                     // - After the client has received and processed an Initial or Retry packet from
@@ -6172,6 +6172,10 @@ impl Connection {
 
             self.ack_frequency
                 .ack_frequency_sent(path_id, builder.packet_number, max_ack_delay);
+            path.congestion.on_ack_frequency_update(
+                config.ack_eliciting_threshold.into_inner(),
+                max_ack_delay,
+            );
         }
 
         // PATH_CHALLENGE (on-path)
