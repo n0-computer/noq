@@ -22,3 +22,8 @@ default-filter = 'test(~proptests::)'
 slow-timeout = { period = "5s", terminate-after = 3 }
 fail-fast = false
 default-filter = 'all()'
+
+[[profile.ci.overrides]]
+filter = 'test(congestion::bbr3)'
+platform = 'cfg(target_env = "musl")'
+slow-timeout = { period = "5s", terminate-after = 5 }
