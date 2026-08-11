@@ -1375,7 +1375,6 @@ impl Connection {
                     match path_blocked {
                         PathBlocked::No => {}
                         PathBlocked::AntiAmplification => {
-                            // TODO(@divma): this differs from quinn
                             send_blocked = true;
                         }
                         PathBlocked::Congestion => {
