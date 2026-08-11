@@ -3,7 +3,7 @@ use std::{
     collections::{BTreeMap, VecDeque, btree_map},
     convert::TryFrom,
     fmt, io, mem,
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr, SocketAddrV6},
     num::{NonZeroU32, NonZeroUsize},
     sync::Arc,
 };
@@ -171,6 +171,18 @@ pub struct Connection {
     /// deterministically select the next PathId to send on.
     // TODO(flub): well does it really? But deterministic is nice for now.
     paths: BTreeMap<PathId, PathState>,
+    /// Whether paths on this connection use an IPv6-capable socket.
+    ///
+    /// This is fixed from the initial network path's remote address at connection creation
+    /// instead of derived from the current set of paths. Path normalization must remain stable
+    /// even if paths are later abandoned or discarded.
+    ///
+    /// `noq-proto` does not receive `Endpoint::rebind()` events from the `noq` crate. A rebind
+    /// can replace the underlying OS socket with one that has a different address family, but that
+    /// signal currently exists only in `noq`'s wrapper-level connection event enum and does not
+    /// cross this crate boundary. If socket-family-changing rebinds need to update this value,
+    /// that requires explicit cross-crate plumbing rather than another live-derived predicate here.
+    socket_family_ipv6: bool,
     /// Counter to uniquely identify every [`PathData`] created in this connection.
     ///
     /// Each [`PathData`] gets a [`PathData::generation`] that is unique among all
@@ -373,6 +385,7 @@ impl Connection {
                     prev: None,
                 },
             )]),
+            socket_family_ipv6: false,
             path_generation_counter: 0,
             allow_mtud,
             state,
@@ -430,6 +443,7 @@ impl Connection {
             n0_nat_traversal: Default::default(),
             qlog,
         };
+        this.set_socket_family(network_path.remote.is_ipv6());
         if path_validated {
             this.on_path_validated(PathId::ZERO);
         }
@@ -537,6 +551,7 @@ impl Connection {
         initial_status: PathStatus,
         now: Instant,
     ) -> Result<(PathId, bool), PathError> {
+        let network_path = self.normalize_network_path(network_path)?;
         let existing_open_path = self.paths.iter().find(|(id, path)| {
             network_path.is_probably_same_path(&path.data.network_path)
                 && !self.abandoned_paths.contains(id)
@@ -558,6 +573,7 @@ impl Connection {
         initial_status: PathStatus,
         now: Instant,
     ) -> Result<PathId, PathError> {
+        let network_path = self.normalize_network_path(network_path)?;
         let Some(max_path_id) = self.max_path_id() else {
             return Err(PathError::MultipathNotNegotiated);
         };
@@ -929,6 +945,22 @@ impl Connection {
         // address validated
         // matheus23: Perhaps looking at !self.abandoned_paths.contains(path_id) is enough, given
         // keep-alives?
+    }
+
+    /// Normalizes caller-provided paths to the socket family established by path zero.
+    ///
+    /// This can change both the destination and source IP later emitted through
+    /// [`Transmit::destination`] and [`Transmit::src_ip`]. That is intentional: additional paths
+    /// must use address representations that match the connection's established socket family.
+    ///
+    /// This is intentionally only used for additional paths opened after connection
+    /// establishment. The initial path is stored exactly as supplied to [`Connection::new`],
+    /// which preserves address-family autodetection by users of `network_path(PathId::ZERO)`.
+    fn normalize_network_path(&self, network_path: FourTuple) -> Result<FourTuple, PathError> {
+        let ipv6 = self.is_ipv6();
+        let remote = normalize_remote_to_socket_family(network_path.remote, ipv6)?;
+        let local_ip = normalize_local_ip_to_socket_family(network_path.local_ip, ipv6);
+        Ok(FourTuple::new(remote, local_ip))
     }
 
     /// Creates the [`PathData`] for a new [`PathId`].
@@ -7066,14 +7098,13 @@ impl Connection {
         }
     }
 
+    fn set_socket_family(&mut self, ipv6: bool) {
+        self.socket_family_ipv6 = ipv6;
+    }
+
     /// Returns whether this connection has a socket that supports IPv6.
-    ///
-    /// TODO(matheus23): This is related to noq endpoint state's `ipv6` bool. We should move that
-    /// info here instead of trying to hack around not knowing it exactly.
-    pub(crate) fn is_ipv6(&self) -> bool {
-        self.paths
-            .values()
-            .any(|p| p.data.network_path.remote.is_ipv6())
+    pub fn is_ipv6(&self) -> bool {
+        self.socket_family_ipv6
     }
 
     /// Add addresses the local endpoint considers are reachable for nat traversal.
@@ -7460,6 +7491,35 @@ impl From<ConnectionError> for io::Error {
         };
         Self::new(kind, x)
     }
+}
+
+fn ensure_ipv6(remote: SocketAddr) -> SocketAddrV6 {
+    match remote {
+        SocketAddr::V6(remote) => remote,
+        SocketAddr::V4(remote) => {
+            SocketAddrV6::new(remote.ip().to_ipv6_mapped(), remote.port(), 0, 0)
+        }
+    }
+}
+
+fn normalize_remote_to_socket_family(
+    remote: SocketAddr,
+    ipv6: bool,
+) -> Result<SocketAddr, PathError> {
+    match (remote, ipv6) {
+        (remote, true) => Ok(SocketAddr::V6(ensure_ipv6(remote))),
+        (SocketAddr::V4(_), false) => Ok(remote),
+        (SocketAddr::V6(remote), false) => remote
+            .ip()
+            .to_ipv4_mapped()
+            .map(|ip| SocketAddr::new(IpAddr::V4(ip), remote.port()))
+            .ok_or(PathError::InvalidRemoteAddress(SocketAddr::V6(remote))),
+    }
+}
+
+fn normalize_local_ip_to_socket_family(local_ip: Option<IpAddr>, ipv6: bool) -> Option<IpAddr> {
+    let local_ip = local_ip?;
+    n0_nat_traversal::map_to_local_socket_family(local_ip, ipv6)
 }
 
 /// Errors that might trigger a path being closed

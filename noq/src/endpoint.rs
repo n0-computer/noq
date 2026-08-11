@@ -4,7 +4,7 @@ use std::{
     future::Future,
     io::{self, IoSliceMut},
     mem,
-    net::{SocketAddr, SocketAddrV6},
+    net::{IpAddr, SocketAddr, SocketAddrV6},
     num::NonZeroUsize,
     pin::Pin,
     str,
@@ -792,6 +792,44 @@ pub(crate) fn ensure_ipv6(x: SocketAddr) -> SocketAddrV6 {
     }
 }
 
+fn normalize_recv_local_ip(remote: SocketAddr, local_ip: Option<IpAddr>) -> Option<IpAddr> {
+    let local_ip = local_ip?;
+    if remote.is_ipv6() {
+        Some(match local_ip {
+            IpAddr::V4(ip) => IpAddr::V6(ip.to_ipv6_mapped()),
+            IpAddr::V6(ip) => IpAddr::V6(ip),
+        })
+    } else {
+        match local_ip {
+            IpAddr::V4(ip) => Some(IpAddr::V4(ip)),
+            IpAddr::V6(ip) => ip.to_ipv4_mapped().map(IpAddr::V4),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recv_local_ip_matches_remote_family() {
+        let v4_remote = "127.0.0.1:4433".parse().unwrap();
+        let v6_remote = "[::ffff:127.0.0.1]:4433".parse().unwrap();
+        let v4_local = "192.0.2.1".parse().unwrap();
+        let v6_local = "::ffff:192.0.2.1".parse().unwrap();
+
+        assert_eq!(
+            normalize_recv_local_ip(v6_remote, Some(v4_local)),
+            Some(v6_local)
+        );
+        assert_eq!(
+            normalize_recv_local_ip(v4_remote, Some(v6_local)),
+            Some(v4_local)
+        );
+        assert_eq!(normalize_recv_local_ip(v6_remote, None), None);
+    }
+}
+
 pin_project! {
     /// Future produced by [`Endpoint::accept`]
     pub struct Accept<'a> {
@@ -962,7 +1000,10 @@ impl RecvState {
                         while !data.is_empty() {
                             let buf = data.split_to(meta.stride.min(data.len()));
                             let mut response_buffer = Vec::new();
-                            let addresses = FourTuple::new(meta.addr, meta.dst_ip);
+                            let addresses = FourTuple::new(
+                                meta.addr,
+                                normalize_recv_local_ip(meta.addr, meta.dst_ip),
+                            );
                             match endpoint.handle(
                                 now,
                                 addresses,

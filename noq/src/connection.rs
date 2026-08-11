@@ -952,35 +952,37 @@ impl Connection {
 
 /// Normalizes a [`FourTuple`] against the connection's address family.
 ///
-/// If the connection already uses IPv6 paths, the remote is canonicalised via
-/// [`ensure_ipv6`]. If it uses IPv4 and the requested remote is IPv6, this returns
-/// [`PathError::InvalidRemoteAddress`].
+/// This can change both the destination and source IP that are handed to the OS through
+/// [`Transmit::destination`] and [`Transmit::src_ip`]. That is intentional: additional paths must
+/// use address representations that match the connection's established socket family.
 fn normalize_network_path(
     network_path: FourTuple,
     conn: &proto::Connection,
 ) -> Result<FourTuple, PathError> {
-    // If endpoint::State::ipv6 is true we want to keep all our IP addresses as IPv6.
-    // If not, we do not support IPv6.  We can not access endpoint::State from here
-    // however, but either all our paths use an IPv6 address, or all our paths use an
-    // IPv4 address.  So we can use that information.
-    let ipv6 = conn
-        .paths()
-        .iter()
-        .filter_map(|id| {
-            conn.network_path(*id)
-                .map(|addrs| addrs.remote().is_ipv6())
-                .ok()
-        })
-        .next()
-        .unwrap_or_default();
+    let ipv6 = conn.is_ipv6();
     let remote = network_path.remote();
-    if remote.is_ipv6() && !ipv6 {
-        Err(PathError::InvalidRemoteAddress(remote))
-    } else if ipv6 {
+    if ipv6 {
         let remote = SocketAddr::V6(ensure_ipv6(remote));
-        Ok(FourTuple::new(remote, network_path.local_ip()))
+        let local_ip = network_path.local_ip().map(|ip| match ip {
+            IpAddr::V4(ip) => IpAddr::V6(ip.to_ipv6_mapped()),
+            IpAddr::V6(ip) => IpAddr::V6(ip),
+        });
+        Ok(FourTuple::new(remote, local_ip))
     } else {
-        Ok(network_path)
+        let remote = match remote {
+            SocketAddr::V4(_) => remote,
+            SocketAddr::V6(remote) => {
+                let Some(ip) = remote.ip().to_ipv4_mapped() else {
+                    return Err(PathError::InvalidRemoteAddress(SocketAddr::V6(remote)));
+                };
+                SocketAddr::new(IpAddr::V4(ip), remote.port())
+            }
+        };
+        let local_ip = network_path.local_ip().and_then(|ip| match ip {
+            IpAddr::V4(ip) => Some(IpAddr::V4(ip)),
+            IpAddr::V6(ip) => ip.to_ipv4_mapped().map(IpAddr::V4),
+        });
+        Ok(FourTuple::new(remote, local_ip))
     }
 }
 
