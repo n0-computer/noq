@@ -1,6 +1,6 @@
 //! Tests for multipath
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Duration;
@@ -381,6 +381,57 @@ fn open_path() -> TestResult {
         pair.poll(Server),
         Some(Event::Path(PathEvent::Established { id  })) if id == path_id
     );
+    Ok(())
+}
+
+#[test]
+fn open_path_normalizes_ipv4_mapped_addrs_to_connection_family() -> TestResult {
+    let _guard = subscribe();
+    let client_ip = Ipv4Addr::new(1, 1, 1, 1);
+    let server_ip = Ipv4Addr::new(2, 2, 2, 1);
+    let extra_client_ip = Ipv4Addr::new(1, 1, 1, 99);
+    let extra_server_ip = Ipv4Addr::new(2, 2, 2, 99);
+    let port = 4433;
+    let mapped_addr = |ip: Ipv4Addr| SocketAddr::new(IpAddr::V6(ip.to_ipv6_mapped()), port);
+
+    let mut pair = ConnPair::builder()
+        .enable_multipath()
+        .with_routes(ManyToManyRouting::simple_symmetric(
+            [mapped_addr(client_ip), mapped_addr(extra_client_ip)],
+            [mapped_addr(server_ip), mapped_addr(extra_server_ip)],
+        ))
+        .connect();
+
+    assert!(pair.network_path(Client, PathId::ZERO)?.remote().is_ipv6());
+
+    let plain = FourTuple::new(
+        SocketAddr::new(IpAddr::V4(extra_server_ip), port),
+        Some(IpAddr::V4(extra_client_ip)),
+    );
+    let mapped = FourTuple::new(
+        mapped_addr(extra_server_ip),
+        Some(IpAddr::V6(extra_client_ip.to_ipv6_mapped())),
+    );
+
+    let path_id = pair.open_path(Client, plain, PathStatus::Available)?;
+    pair.drive();
+
+    assert_matches!(
+        pair.poll(Client),
+        Some(Event::Path(PathEvent::Established { id })) if id == path_id
+    );
+    assert_matches!(
+        pair.poll(Server),
+        Some(Event::Path(PathEvent::Established { id })) if id == path_id
+    );
+    assert_eq!(pair.network_path(Client, path_id)?, mapped);
+
+    let (ensured_path_id, existed) =
+        pair.open_path_ensure(Client, mapped, PathStatus::Available)?;
+    assert!(existed);
+    assert_eq!(ensured_path_id, path_id);
+    assert_eq!(pair.network_path(Client, ensured_path_id)?, mapped);
+
     Ok(())
 }
 
