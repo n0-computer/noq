@@ -1134,7 +1134,7 @@ async fn test_multipath_observed_address() {
     tokio::join!(server_task, client_task);
 }
 
-/// Coverage for `normalize_network_path`'s `local_ip` canonicalization (noq#738).
+/// Coverage for `normalize_network_path`'s `local_ip` canonicalization (#738).
 ///
 /// A client bound to a dual-stack wildcard socket (`[::]:0`) opens an additional
 /// path with an explicit *plain* IPv4 `local_ip` -- standing in for an application

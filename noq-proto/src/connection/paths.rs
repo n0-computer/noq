@@ -1205,7 +1205,7 @@ mod tests {
         assert_eq!(PathId::MAX.saturating_add(1u8), PathId::MAX)
     }
 
-    /// noq#738 regression: `PATH_CHALLENGE`s on mapped-vs-plain-IPv4 FourTuples of
+    /// Regression test (#738): `PATH_CHALLENGE`s on mapped-vs-plain-IPv4 FourTuples of
     /// the same peer must coalesce into one pending response, not two.
     #[test]
     fn push_coalesces_mapped_v4_representation() {

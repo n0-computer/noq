@@ -7101,22 +7101,23 @@ impl Connection {
 
     /// Normalizes caller- or OS-supplied local IPs at `Connection` entry boundaries.
     ///
-    /// noq#738 / PR #784: `PathData.network_path.local_ip` is now normalized before it
-    /// enters connection-owned state, so plain `.local_ip ==` comparisons are safe inside
-    /// `noq-proto`. This normalization is intentionally based on the connection's
-    /// established socket family: on a dual-stack socket, a plain IPv4 `local_ip` is mapped
-    /// to IPv6; on an IPv4-only socket, a mapped-IPv4 `local_ip` is folded to plain IPv4.
+    /// `PathData.network_path.local_ip` is now normalized before it enters
+    /// connection-owned state, so plain `.local_ip ==` comparisons are safe inside
+    /// `noq-proto` (#738, #784). This normalization is intentionally based on the
+    /// connection's established socket family: on a dual-stack socket, a plain IPv4
+    /// `local_ip` is mapped to IPv6; on an IPv4-only socket, a mapped-IPv4 `local_ip` is
+    /// folded to plain IPv4.
     ///
     /// This does change what is handed to the OS. `PathData.network_path.local_ip` becomes
     /// `Transmit::src_ip`, and the UDP backend sends different control messages for
     /// `IpAddr::V4` and `IpAddr::V6` (`IP_PKTINFO` vs `IPV6_PKTINFO` on Unix). That is the
     /// intended behavior for a dual-stack socket: sending IPv4 packet info while the
     /// destination sockaddr is IPv6-family is a plausible reason the OS would ignore or
-    /// mishandle source selection in noq#738, though this root-cause hypothesis has not
+    /// mishandle source selection for #738, though this root-cause hypothesis has not
     /// been verified on real multi-interface hardware. `remote` is deliberately not
     /// normalized here because `PathData.network_path.remote` also drives
-    /// `Transmit::destination`; fixing that needs the follow-up PathData
-    /// network_path/transmit_path split discussed in the issue/PR.
+    /// `Transmit::destination`; see #787 for an alternative that also normalizes `remote`
+    /// at the connection's established socket family.
     fn normalize_network_path_local_ip(&self, network_path: FourTuple) -> FourTuple {
         Self::normalize_network_path_local_ip_for_family(network_path, self.is_ipv6())
     }

@@ -368,14 +368,12 @@ const MAX_STREAM_COUNT: u64 = 1 << 60;
 ///
 /// `FourTuple` implements `From<SocketAddr>`, which expands to [`Self::from_remote`].
 ///
-///
-/// noq#738 / PR #784: `noq-proto::Connection` normalizes `local_ip` at every entry
-/// boundary before storing a `FourTuple` in connection-owned state, so plain
-/// `.local_ip ==` comparisons are safe there. `remote` is not yet normalized at the
-/// `noq-proto` level because `PathData.network_path.remote` also drives
-/// `Transmit::destination` for actual OS sends; see the issue/PR discussion, and
-/// `noq#787` for an alternative that also normalizes `remote` at the connection's
-/// established socket family. Until this PR's scope is extended (or superseded),
+/// `noq-proto::Connection` normalizes `local_ip` at every entry boundary before storing
+/// a `FourTuple` in connection-owned state, so plain `.local_ip ==` comparisons are safe
+/// there (#738 / #784). `remote` is not yet normalized at the `noq-proto` level because
+/// `PathData.network_path.remote` also drives `Transmit::destination` for actual OS
+/// sends; see #787 for an alternative that also normalizes `remote` at the connection's
+/// established socket family. Until this scope is extended (or superseded),
 /// connection-internal remote comparisons that need to ignore mapped-vs-plain IPv4
 /// representation differences use `Self::is_same_remote` (private, not linked here
 /// since it would produce a broken intra-doc link in the published docs).
@@ -434,8 +432,8 @@ impl FourTuple {
         self.local_ip
     }
 
-    /// noq#738: canonicalizes `remote` for comparison/hashing purposes (see the
-    /// type-level docs above). `to_canonical()` folds `::ffff:a.b.c.d` down to plain
+    /// Canonicalizes `remote` for comparison/hashing purposes (see the type-level docs
+    /// above, #738). `to_canonical()` folds `::ffff:a.b.c.d` down to plain
     /// IPv4; the scope_id is kept for addresses that stay IPv6, because [`Self::new`]
     /// deliberately preserves it for link-local and multicast remotes — two different
     /// link-local interfaces must not compare equal just because their canonicalized
@@ -451,14 +449,14 @@ impl FourTuple {
     }
 
     /// Whether `self` and `other` share the same remote peer, ignoring the
-    /// mapped-IPv4-vs-plain-IPv4 representation difference that motivated noq#738.
+    /// mapped-IPv4-vs-plain-IPv4 representation difference that motivated this (#738).
     ///
     /// `local_ip` is now normalized at every `Connection` entry boundary (see
     /// `Connection::normalize_network_path_local_ip`), so plain `.local_ip ==`
     /// comparisons are safe there. `remote` is NOT yet normalized at the `noq-proto`
     /// level because `PathData.network_path.remote` also drives `Transmit::destination`
-    /// for actual OS sends; see issue #738 / PR #784 and the follow-up PR for the
-    /// PathData network_path/transmit_path split.
+    /// for actual OS sends; see #784, and #787 for an alternative that also normalizes
+    /// `remote` at the connection's established socket family.
     pub(crate) fn is_same_remote(&self, other: &Self) -> bool {
         self.canonical_remote() == other.canonical_remote()
     }
@@ -510,9 +508,9 @@ impl From<SocketAddr> for FourTuple {
 mod four_tuple_tests {
     use super::*;
 
-    /// noq#738: mapped vs. plain IPv4 representations of the same peer must compare
-    /// equal via [`FourTuple::is_same_remote`] (structural `PartialEq` stays
-    /// derived and unaware of this -- see the type-level docs above).
+    /// Mapped vs. plain IPv4 representations of the same peer must compare equal via
+    /// [`FourTuple::is_same_remote`] (structural `PartialEq` stays derived and unaware
+    /// of this -- see the type-level docs above) (#738).
     #[test]
     fn is_same_remote_ignores_mapped_v4_representation() {
         let mapped = FourTuple::from_remote("[::ffff:1.2.3.4]:443".parse().unwrap());
@@ -522,7 +520,7 @@ mod four_tuple_tests {
         assert_ne!(mapped, plain, "structural PartialEq must stay derived");
     }
 
-    /// noq#738 regression: link-local `FourTuple`s differing only in `scope_id`
+    /// Regression test (#738): link-local `FourTuple`s differing only in `scope_id`
     /// (different interfaces) must NOT compare same via `is_same_remote` -- an
     /// earlier fix draft dropped `scope_id` entirely, collapsing distinct
     /// interfaces into one path.

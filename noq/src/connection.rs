@@ -956,8 +956,8 @@ impl Connection {
 /// canonicalised via [`ensure_ipv6`]/[`std::net::Ipv4Addr::to_ipv6_mapped`]. If it uses IPv4 and
 /// the requested remote is IPv6, this returns [`PathError::InvalidRemoteAddress`].
 ///
-/// noq#738: `local_ip` used to be passed through unchanged in the IPv6 branch, while
-/// `remote` was canonicalised. This is the one place where addresses supplied by the
+/// `local_ip` used to be passed through unchanged in the IPv6 branch, while `remote`
+/// was canonicalised (#738). This is the one place where addresses supplied by the
 /// caller (as opposed to observed from the OS) enter [`Connection`], so keeping
 /// `local_ip` in the same representation as `remote` here avoids relying on every
 /// downstream comparison to canonicalize it individually. Note: unlike the
