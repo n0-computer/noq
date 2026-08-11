@@ -973,20 +973,7 @@ fn normalize_network_path(
     network_path: FourTuple,
     conn: &proto::Connection,
 ) -> Result<FourTuple, PathError> {
-    // If endpoint::State::ipv6 is true we want to keep all our IP addresses as IPv6.
-    // If not, we do not support IPv6.  We can not access endpoint::State from here
-    // however, but either all our paths use an IPv6 address, or all our paths use an
-    // IPv4 address.  So we can use that information.
-    let ipv6 = conn
-        .paths()
-        .iter()
-        .filter_map(|id| {
-            conn.network_path(*id)
-                .map(|addrs| addrs.remote().is_ipv6())
-                .ok()
-        })
-        .next()
-        .unwrap_or_default();
+    let ipv6 = conn.is_ipv6();
     let remote = network_path.remote();
     if remote.is_ipv6() && !ipv6 {
         Err(PathError::InvalidRemoteAddress(remote))

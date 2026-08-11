@@ -894,10 +894,12 @@ impl PathResponses {
 
     pub(crate) fn pop_off_path(&mut self, network_path: FourTuple) -> Option<(u64, FourTuple)> {
         let response = *self.pending.last()?;
-        // We use an exact comparison here, because once we've received for the first time,
-        // we really should either already have a local_ip, or we will never get one
-        // (because our OS doesn't support it). And even if we get it wrong we are only
-        // slightly less efficient and would not include other on-path data in the packet.
+        // We use an exact comparison here. By the time connection-owned path state and
+        // received PATH_CHALLENGE metadata reach this queue, `Connection` has normalized
+        // `local_ip` to the established socket family. `push` still coalesces
+        // mapped-vs-plain `remote` representations, but exact matching here remains the
+        // right on-path/off-path split because different `local_ip`s can be different
+        // interfaces.
         if response.network_path == network_path {
             // We don't bother searching further because we expect that the on-path response will
             // get drained in the immediate future by a call to `pop_on_path`

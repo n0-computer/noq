@@ -171,6 +171,15 @@ pub struct Connection {
     /// deterministically select the next PathId to send on.
     // TODO(flub): well does it really? But deterministic is nice for now.
     paths: BTreeMap<PathId, PathState>,
+    /// Fixed at connection establishment from the initial path's remote family.
+    ///
+    /// This does NOT adapt if `Endpoint::rebind()` later changes the underlying socket's
+    /// address family mid-connection: `noq-proto::Connection` currently has no signal for
+    /// that. The proto-level [`ConnectionEventInner`] only carries datagrams and issued
+    /// connection identifiers, while the `noq` wrapper's own `ConnectionEvent::Rebind`
+    /// never reaches here. Extending that signal is out of scope for this fix and should be
+    /// flagged for maintainers.
+    established_ipv6: bool,
     /// Counter to uniquely identify every [`PathData`] created in this connection.
     ///
     /// Each [`PathData`] gets a [`PathData::generation`] that is unique among all
@@ -324,10 +333,9 @@ impl Connection {
         side_args: SideArgs,
         qlog: QlogSink,
     ) -> Self {
-        let network_path = Self::normalize_network_path_local_ip_for_family(
-            network_path,
-            network_path.remote.is_ipv6(),
-        );
+        let established_ipv6 = network_path.remote.is_ipv6();
+        let network_path =
+            Self::normalize_network_path_local_ip_for_family(network_path, established_ipv6);
         let pref_addr_cid = side_args.pref_addr_cid();
         let path_validated = side_args.path_validated();
         let connection_side = ConnectionSide::from(side_args);
@@ -370,6 +378,7 @@ impl Connection {
             handshake_cid: local_cid,
             remote_handshake_cid: remote_cid,
             local_cid_state,
+            established_ipv6: false,
             paths: BTreeMap::from_iter([(
                 PathId::ZERO,
                 PathState {
@@ -434,6 +443,7 @@ impl Connection {
             n0_nat_traversal: Default::default(),
             qlog,
         };
+        this.set_socket_family(established_ipv6);
         if path_validated {
             this.on_path_validated(PathId::ZERO);
         }
@@ -7079,24 +7089,36 @@ impl Connection {
         }
     }
 
-    /// Returns whether this connection has a socket that supports IPv6.
+    /// Returns whether this connection was established on an IPv6-family socket.
+    pub fn is_ipv6(&self) -> bool {
+        self.established_ipv6
+    }
+
+    /// Sets the fixed socket family captured when the connection is established.
     ///
-    /// TODO(matheus23): This is related to noq endpoint state's `ipv6` bool. We should move that
-    /// info here instead of trying to hack around not knowing it exactly.
-    pub(crate) fn is_ipv6(&self) -> bool {
-        self.paths
-            .values()
-            .any(|p| p.data.network_path.remote.is_ipv6())
+    /// This has the same rebind limitation documented on [`Self::established_ipv6`].
+    fn set_socket_family(&mut self, ipv6: bool) {
+        self.established_ipv6 = ipv6;
     }
 
     /// Normalizes caller- or OS-supplied local IPs at `Connection` entry boundaries.
     ///
     /// noq#738 / PR #784: `PathData.network_path.local_ip` is now normalized before it
     /// enters connection-owned state, so plain `.local_ip ==` comparisons are safe inside
-    /// `noq-proto`. `remote` is deliberately not normalized here because
-    /// `PathData.network_path.remote` also drives `Transmit::destination` for actual OS sends;
-    /// fixing that needs the follow-up PathData network_path/transmit_path split discussed in
-    /// the issue/PR.
+    /// `noq-proto`. This normalization is intentionally based on the connection's
+    /// established socket family: on a dual-stack socket, a plain IPv4 `local_ip` is mapped
+    /// to IPv6; on an IPv4-only socket, a mapped-IPv4 `local_ip` is folded to plain IPv4.
+    ///
+    /// This does change what is handed to the OS. `PathData.network_path.local_ip` becomes
+    /// `Transmit::src_ip`, and the UDP backend sends different control messages for
+    /// `IpAddr::V4` and `IpAddr::V6` (`IP_PKTINFO` vs `IPV6_PKTINFO` on Unix). That is the
+    /// intended behavior for a dual-stack socket: sending IPv4 packet info while the
+    /// destination sockaddr is IPv6-family is a plausible reason the OS would ignore or
+    /// mishandle source selection in noq#738, though this root-cause hypothesis has not
+    /// been verified on real multi-interface hardware. `remote` is deliberately not
+    /// normalized here because `PathData.network_path.remote` also drives
+    /// `Transmit::destination`; fixing that needs the follow-up PathData
+    /// network_path/transmit_path split discussed in the issue/PR.
     fn normalize_network_path_local_ip(&self, network_path: FourTuple) -> FourTuple {
         Self::normalize_network_path_local_ip_for_family(network_path, self.is_ipv6())
     }

@@ -418,6 +418,67 @@ fn open_path_normalizes_local_ip_for_dual_stack_connection() -> TestResult {
 }
 
 #[test]
+fn connection_socket_family_is_fixed_at_establishment() -> TestResult {
+    let _guard = subscribe();
+    let mut pair = ConnPair::builder().enable_multipath().connect();
+
+    assert!(pair.conn(Client).is_ipv6());
+
+    let server_addr_v4 = "192.0.2.2:4433".parse()?;
+    let client_ip_v4 = Ipv4Addr::new(192, 0, 2, 1);
+    let path_id = pair.open_path(
+        Client,
+        FourTuple::new(server_addr_v4, Some(IpAddr::V4(client_ip_v4))),
+        PathStatus::Available,
+    )?;
+
+    assert!(pair.conn(Client).is_ipv6());
+    assert_eq!(
+        pair.network_path(Client, path_id)?.local_ip(),
+        Some(IpAddr::V6(client_ip_v4.to_ipv6_mapped()))
+    );
+
+    Ok(())
+}
+
+#[test]
+fn open_path_with_plain_local_ip_validates_on_mapped_ipv4_route() -> TestResult {
+    let _guard = subscribe();
+    let client_addr_0 = "[::ffff:1.1.1.0]:44433".parse::<SocketAddr>()?;
+    let server_addr_0 = "[::ffff:2.2.2.0]:4433".parse::<SocketAddr>()?;
+    let client_addr_1 = "[::ffff:1.1.1.1]:44433".parse::<SocketAddr>()?;
+    let server_addr_1 = "[::ffff:2.2.2.1]:4433".parse::<SocketAddr>()?;
+    let mut pair = ConnPair::builder()
+        .enable_multipath()
+        .disable_mtud_discovery()
+        .with_routes(ManyToManyRouting::from_routes(
+            [(client_addr_0, 0), (client_addr_1, 1)],
+            [(server_addr_0, 0), (server_addr_1, 1)],
+        ))
+        .connect();
+
+    let client_ip_plain = client_addr_1.ip().to_canonical();
+    let path_id = pair.open_path(
+        Client,
+        FourTuple::new(server_addr_1, Some(client_ip_plain)),
+        PathStatus::Available,
+    )?;
+
+    pair.drive();
+
+    assert_matches!(
+        pair.poll(Client),
+        Some(Event::Path(PathEvent::Established { id })) if id == path_id
+    );
+    assert_matches!(
+        pair.poll(Server),
+        Some(Event::Path(PathEvent::Established { id })) if id == path_id
+    );
+
+    Ok(())
+}
+
+#[test]
 fn open_path_key_update() -> TestResult {
     let _guard = subscribe();
     let mut pair = ConnPair::builder().enable_multipath().connect();
