@@ -393,27 +393,52 @@ fn open_path_normalizes_ipv4_mapped_addrs_to_connection_family() -> TestResult {
     let extra_server_ip = Ipv4Addr::new(2, 2, 2, 99);
     let port = 4433;
     let mapped_addr = |ip: Ipv4Addr| SocketAddr::new(IpAddr::V6(ip.to_ipv6_mapped()), port);
+    let plain_addr = |ip: Ipv4Addr| SocketAddr::new(IpAddr::V4(ip), port);
+
+    let mapped_client = mapped_addr(client_ip);
+    let mapped_server = mapped_addr(server_ip);
+    let plain_extra_client = plain_addr(extra_client_ip);
+    let plain_extra_server = plain_addr(extra_server_ip);
+    let mapped_extra_client = mapped_addr(extra_client_ip);
+    let mapped_extra_server = mapped_addr(extra_server_ip);
 
     let mut pair = ConnPair::builder()
         .enable_multipath()
-        .with_routes(ManyToManyRouting::simple_symmetric(
-            [mapped_addr(client_ip), mapped_addr(extra_client_ip)],
-            [mapped_addr(server_ip), mapped_addr(extra_server_ip)],
+        .with_routes(ManyToManyRouting::from_routes(
+            [
+                (mapped_client, 0),
+                // The client can send plain IPv4 packets to the plain server interface, but the
+                // server cannot route replies back to this plain client representation.
+                (plain_extra_client, 0),
+                (mapped_extra_client, 2),
+            ],
+            [
+                (mapped_server, 0),
+                (plain_extra_server, 1),
+                (mapped_extra_server, 2),
+            ],
         ))
         .connect();
 
     assert!(pair.network_path(Client, PathId::ZERO)?.remote().is_ipv6());
 
-    let plain = FourTuple::new(
-        SocketAddr::new(IpAddr::V4(extra_server_ip), port),
-        Some(IpAddr::V4(extra_client_ip)),
-    );
+    let plain = FourTuple::new(plain_extra_server, Some(IpAddr::V4(extra_client_ip)));
     let mapped = FourTuple::new(
-        mapped_addr(extra_server_ip),
+        mapped_extra_server,
         Some(IpAddr::V6(extra_client_ip.to_ipv6_mapped())),
     );
 
     let path_id = pair.open_path(Client, plain, PathStatus::Available)?;
+    pair.drive_client();
+    pair.advance_time();
+    pair.drive_server();
+    assert!(
+        pair.client
+            .inbound
+            .iter()
+            .any(|(_, inbound)| inbound.remote == mapped_extra_server),
+        "expected server response to be routable via mapped address"
+    );
     pair.drive();
 
     assert_matches!(
