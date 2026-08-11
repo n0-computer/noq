@@ -960,15 +960,16 @@ impl Connection {
 /// was canonicalised (#738). This is the one place where addresses supplied by the
 /// caller (as opposed to observed from the OS) enter [`Connection`], so keeping
 /// `local_ip` in the same representation as `remote` here avoids relying on every
-/// downstream comparison to canonicalize it individually. Note: unlike the
-/// `noq-proto`-level comparison fixes for #738 (which were verified against the
-/// actual reported failure on real Android hardware with physical Wi-Fi/cellular
-/// interfaces), this specific normalization was not independently verified to fix
-/// #738's reported symptom on its own -- see the doc comment on the `noq` crate's
-/// `open_path_with_explicit_ipv4_local_ip_on_dualstack_socket` test for what was and
-/// wasn't reproducible in a loopback-only environment. It is included because it
-/// closes a real inconsistency with `remote`'s handling in this same function,
-/// independent of whether it's also part of #738's root cause.
+/// downstream comparison to canonicalize it individually. The proto layer now also normalizes
+/// caller-supplied `remote` addresses at `open_path`/`open_path_ensure`, closing the same
+/// representation gap there (#784). Note: unlike the proto-level storage normalization for #738
+/// (which was verified against the actual reported failure on real Android hardware with physical
+/// Wi-Fi/cellular interfaces), this wrapper-level `local_ip` normalization was not independently
+/// verified to fix #738's reported symptom on its own -- see the doc comment on the `noq` crate's
+/// `open_path_with_explicit_ipv4_local_ip_on_dualstack_socket` test for what was and wasn't
+/// reproducible in a loopback-only environment. It is included because it closes a real
+/// inconsistency with `remote`'s handling in this same function, independent of whether it's also
+/// part of #738's root cause.
 fn normalize_network_path(
     network_path: FourTuple,
     conn: &proto::Connection,
