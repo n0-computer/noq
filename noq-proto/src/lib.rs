@@ -373,10 +373,12 @@ const MAX_STREAM_COUNT: u64 = 1 << 60;
 /// boundary before storing a `FourTuple` in connection-owned state, so plain
 /// `.local_ip ==` comparisons are safe there. `remote` is not yet normalized at the
 /// `noq-proto` level because `PathData.network_path.remote` also drives
-/// `Transmit::destination` for actual OS sends; see the issue/PR discussion and the
-/// follow-up PathData network_path/transmit_path split for the full fix. Until then,
+/// `Transmit::destination` for actual OS sends; see the issue/PR discussion, and
+/// `noq#787` for an alternative that also normalizes `remote` at the connection's
+/// established socket family. Until this PR's scope is extended (or superseded),
 /// connection-internal remote comparisons that need to ignore mapped-vs-plain IPv4
-/// representation differences use [`Self::is_same_remote`].
+/// representation differences use `Self::is_same_remote` (private, not linked here
+/// since it would produce a broken intra-doc link in the published docs).
 #[derive(Hash, Eq, PartialEq, Copy, Clone)]
 pub struct FourTuple {
     /// The remote side of this tuple.

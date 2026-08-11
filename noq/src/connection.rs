@@ -953,7 +953,7 @@ impl Connection {
 /// Normalizes a [`FourTuple`] against the connection's address family.
 ///
 /// If the connection already uses IPv6 paths, both `remote` and `local_ip` are
-/// canonicalised via [`ensure_ipv6`]/[`IpAddr::to_ipv6_mapped`]. If it uses IPv4 and
+/// canonicalised via [`ensure_ipv6`]/[`std::net::Ipv4Addr::to_ipv6_mapped`]. If it uses IPv4 and
 /// the requested remote is IPv6, this returns [`PathError::InvalidRemoteAddress`].
 ///
 /// noq#738: `local_ip` used to be passed through unchanged in the IPv6 branch, while

@@ -2239,7 +2239,8 @@ impl Connection {
                 // `network_path` comes from the endpoint's UDP receive metadata (`RecvMeta` in the
                 // `noq` crate), so this is a `Connection` entry boundary for OS-observed local
                 // addresses. Normalize `local_ip` before it can update `PathData.network_path`;
-                // `remote` is intentionally preserved because it also drives `Transmit::destination`.
+                // `remote` is intentionally preserved because it also drives
+                // `Transmit::destination`.
                 let network_path = self.normalize_network_path_local_ip(network_path);
                 let span = trace_span!("pkt", %path_id);
                 let _guard = span.enter();
