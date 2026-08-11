@@ -181,7 +181,8 @@ pub struct Connection {
     /// can replace the underlying OS socket with one that has a different address family, but that
     /// signal currently exists only in `noq`'s wrapper-level connection event enum and does not
     /// cross this crate boundary. If socket-family-changing rebinds need to update this value,
-    /// that requires explicit cross-crate plumbing rather than another live-derived predicate here.
+    /// that requires explicit cross-crate plumbing rather than another live-derived predicate
+    /// here.
     socket_family_ipv6: bool,
     /// Counter to uniquely identify every [`PathData`] created in this connection.
     ///

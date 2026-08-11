@@ -953,8 +953,9 @@ impl Connection {
 /// Normalizes a [`FourTuple`] against the connection's address family.
 ///
 /// This can change both the destination and source IP that are handed to the OS through
-/// [`Transmit::destination`] and [`Transmit::src_ip`]. That is intentional: additional paths must
-/// use address representations that match the connection's established socket family.
+/// [`proto::Transmit::destination`] and [`proto::Transmit::src_ip`]. That is intentional:
+/// additional paths must use address representations that match the connection's established socket
+/// family.
 fn normalize_network_path(
     network_path: FourTuple,
     conn: &proto::Connection,
