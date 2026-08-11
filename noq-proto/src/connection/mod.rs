@@ -3,7 +3,7 @@ use std::{
     collections::{BTreeMap, VecDeque, btree_map},
     convert::TryFrom,
     fmt, io, mem,
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     num::{NonZeroU32, NonZeroUsize},
     sync::Arc,
 };
@@ -324,6 +324,10 @@ impl Connection {
         side_args: SideArgs,
         qlog: QlogSink,
     ) -> Self {
+        let network_path = Self::normalize_network_path_local_ip_for_family(
+            network_path,
+            network_path.remote.is_ipv6(),
+        );
         let pref_addr_cid = side_args.pref_addr_cid();
         let path_validated = side_args.path_validated();
         let connection_side = ConnectionSide::from(side_args);
@@ -537,6 +541,7 @@ impl Connection {
         initial_status: PathStatus,
         now: Instant,
     ) -> Result<(PathId, bool), PathError> {
+        let network_path = self.normalize_network_path_local_ip(network_path);
         let existing_open_path = self.paths.iter().find(|(id, path)| {
             network_path.is_probably_same_path(&path.data.network_path)
                 && !self.abandoned_paths.contains(id)
@@ -558,6 +563,7 @@ impl Connection {
         initial_status: PathStatus,
         now: Instant,
     ) -> Result<PathId, PathError> {
+        let network_path = self.normalize_network_path_local_ip(network_path);
         let Some(max_path_id) = self.max_path_id() else {
             return Err(PathError::MultipathNotNegotiated);
         };
@@ -2220,6 +2226,11 @@ impl Connection {
                 first_decode,
                 remaining,
             }) => {
+                // `network_path` comes from the endpoint's UDP receive metadata (`RecvMeta` in the
+                // `noq` crate), so this is a `Connection` entry boundary for OS-observed local
+                // addresses. Normalize `local_ip` before it can update `PathData.network_path`;
+                // `remote` is intentionally preserved because it also drives `Transmit::destination`.
+                let network_path = self.normalize_network_path_local_ip(network_path);
                 let span = trace_span!("pkt", %path_id);
                 let _guard = span.enter();
 
@@ -2339,7 +2350,7 @@ impl Connection {
 
             if known_path.network_path.local_ip.is_some()
                 && network_path.local_ip.is_some()
-                && !network_path.is_same_local_ip(&known_path.network_path)
+                && network_path.local_ip != known_path.network_path.local_ip
                 && !local_ip_may_migrate
             {
                 trace!(
@@ -3912,6 +3923,7 @@ impl Connection {
         packet: InitialPacket,
         remaining: Option<BytesMut>,
     ) -> Result<(), ConnectionError> {
+        let network_path = self.normalize_network_path_local_ip(network_path);
         let span = trace_span!("first recv");
         let _guard = span.enter();
         debug_assert!(self.side.is_server());
@@ -5567,7 +5579,7 @@ impl Connection {
             // above, so comparing against `network_path` itself covers the
             // `new_local_ip` side.
             if path_data.network_path.local_ip.is_some()
-                && !path_data.network_path.is_same_local_ip(&network_path)
+                && path_data.network_path.local_ip != network_path.local_ip
             {
                 debug!(
                     %path_id,
@@ -7075,6 +7087,39 @@ impl Connection {
         self.paths
             .values()
             .any(|p| p.data.network_path.remote.is_ipv6())
+    }
+
+    /// Normalizes caller- or OS-supplied local IPs at `Connection` entry boundaries.
+    ///
+    /// noq#738 / PR #784: `PathData.network_path.local_ip` is now normalized before it
+    /// enters connection-owned state, so plain `.local_ip ==` comparisons are safe inside
+    /// `noq-proto`. `remote` is deliberately not normalized here because
+    /// `PathData.network_path.remote` also drives `Transmit::destination` for actual OS sends;
+    /// fixing that needs the follow-up PathData network_path/transmit_path split discussed in
+    /// the issue/PR.
+    fn normalize_network_path_local_ip(&self, network_path: FourTuple) -> FourTuple {
+        Self::normalize_network_path_local_ip_for_family(network_path, self.is_ipv6())
+    }
+
+    fn normalize_network_path_local_ip_for_family(
+        network_path: FourTuple,
+        ipv6: bool,
+    ) -> FourTuple {
+        let local_ip = network_path
+            .local_ip
+            .map(|ip| Self::normalize_local_ip(ip, ipv6));
+        FourTuple::new(network_path.remote, local_ip)
+    }
+
+    fn normalize_local_ip(ip: IpAddr, ipv6: bool) -> IpAddr {
+        if ipv6 {
+            match ip {
+                IpAddr::V4(v4) => IpAddr::V6(v4.to_ipv6_mapped()),
+                IpAddr::V6(_) => ip,
+            }
+        } else {
+            ip.to_canonical()
+        }
     }
 
     /// Add addresses the local endpoint considers are reachable for nat traversal.

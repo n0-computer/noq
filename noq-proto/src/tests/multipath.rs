@@ -1,6 +1,6 @@
 //! Tests for multipath
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Duration;
@@ -381,6 +381,39 @@ fn open_path() -> TestResult {
         pair.poll(Server),
         Some(Event::Path(PathEvent::Established { id  })) if id == path_id
     );
+    Ok(())
+}
+
+/// Confirms the proto-level `Connection::open_path` and `open_path_ensure` APIs
+/// normalize `local_ip` before matching or storing paths, even when callers bypass
+/// the `noq` wrapper crate.
+#[test]
+fn open_path_normalizes_local_ip_for_dual_stack_connection() -> TestResult {
+    let _guard = subscribe();
+    let mut pair = ConnPair::builder().enable_multipath().connect();
+
+    let server_addr = pair.routes.public_server_addr();
+    let plain_local_ip = Ipv4Addr::new(192, 0, 2, 1);
+    let mapped_local_ip = IpAddr::V6(plain_local_ip.to_ipv6_mapped());
+
+    let opened_with_mapped = FourTuple::new(server_addr, Some(mapped_local_ip));
+    let path_id = pair.open_path(Client, opened_with_mapped, PathStatus::Available)?;
+    assert_eq!(
+        pair.network_path(Client, path_id)?.local_ip(),
+        Some(mapped_local_ip)
+    );
+
+    let requested_with_plain = FourTuple::new(server_addr, Some(IpAddr::V4(plain_local_ip)));
+    let (same_path_id, existed) =
+        pair.open_path_ensure(Client, requested_with_plain, PathStatus::Available)?;
+
+    assert!(existed);
+    assert_eq!(same_path_id, path_id);
+    assert_eq!(
+        pair.network_path(Client, same_path_id)?.local_ip(),
+        Some(mapped_local_ip)
+    );
+
     Ok(())
 }
 

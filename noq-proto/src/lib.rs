@@ -368,20 +368,15 @@ const MAX_STREAM_COUNT: u64 = 1 << 60;
 ///
 /// `FourTuple` implements `From<SocketAddr>`, which expands to [`Self::from_remote`].
 ///
-/// noq#738: [`Self::is_same_remote`]/[`Self::is_same_local_ip`] canonicalize
-/// IPv4-mapped-IPv6 addresses (`::ffff:a.b.c.d`) down to plain IPv4 *only for the
-/// comparison itself* — the `remote`/`local_ip` fields themselves are left exactly
-/// as constructed, and `PartialEq`/`Eq`/`Hash` stay derived (plain structural
-/// equality). Two things were deliberately avoided:
-/// - Canonicalizing the stored value instead (i.e. in `new()`): changes the address
-///   family of what gets handed to the OS for sending (`Transmit::destination`),
-///   which is unverified on non-Linux platforms (this crate's CI is Linux-only) and
-///   broke IPv6-vs-IPv4 autodetection in the `noq` crate's `normalize_network_path`.
-/// - Overriding `PartialEq`/`Eq`/`Hash` on the type itself: `FourTuple` is public
-///   API, used directly as a `HashMap`/`HashSet` key in a few other places (e.g. the
-///   `noq` crate's `Endpoint` routing table); changing what "equal" means there is a
-///   much bigger, less obviously safe change than fixing the handful of call sites
-///   that actually need to ignore the mapped-vs-plain distinction.
+///
+/// noq#738 / PR #784: `noq-proto::Connection` normalizes `local_ip` at every entry
+/// boundary before storing a `FourTuple` in connection-owned state, so plain
+/// `.local_ip ==` comparisons are safe there. `remote` is not yet normalized at the
+/// `noq-proto` level because `PathData.network_path.remote` also drives
+/// `Transmit::destination` for actual OS sends; see the issue/PR discussion and the
+/// follow-up PathData network_path/transmit_path split for the full fix. Until then,
+/// connection-internal remote comparisons that need to ignore mapped-vs-plain IPv4
+/// representation differences use [`Self::is_same_remote`].
 #[derive(Hash, Eq, PartialEq, Copy, Clone)]
 pub struct FourTuple {
     /// The remote side of this tuple.
@@ -453,22 +448,17 @@ impl FourTuple {
         (ip, self.remote.port(), scope)
     }
 
-    /// noq#738: same rationale as [`Self::canonical_remote`], for `local_ip`.
-    fn canonical_local_ip(&self) -> Option<IpAddr> {
-        self.local_ip.map(|ip| ip.to_canonical())
-    }
-
-    /// noq#738: whether `self` and `other` share the same remote peer, ignoring the
-    /// mapped-IPv4-vs-plain-IPv4 representation difference that motivated this fix.
-    /// Used everywhere a raw `remote == remote` comparison would otherwise bypass
-    /// this canonicalization (see the type-level docs above).
+    /// Whether `self` and `other` share the same remote peer, ignoring the
+    /// mapped-IPv4-vs-plain-IPv4 representation difference that motivated noq#738.
+    ///
+    /// `local_ip` is now normalized at every `Connection` entry boundary (see
+    /// `Connection::normalize_network_path_local_ip`), so plain `.local_ip ==`
+    /// comparisons are safe there. `remote` is NOT yet normalized at the `noq-proto`
+    /// level because `PathData.network_path.remote` also drives `Transmit::destination`
+    /// for actual OS sends; see issue #738 / PR #784 and the follow-up PR for the
+    /// PathData network_path/transmit_path split.
     pub(crate) fn is_same_remote(&self, other: &Self) -> bool {
         self.canonical_remote() == other.canonical_remote()
-    }
-
-    /// noq#738: same rationale as [`Self::is_same_remote`], for `local_ip`.
-    pub(crate) fn is_same_local_ip(&self, other: &Self) -> bool {
-        self.canonical_local_ip() == other.canonical_local_ip()
     }
 
     /// Returns whether we think the other address probably represents the same path
@@ -482,7 +472,7 @@ impl FourTuple {
     /// - `a.is_probably_same_path(b)`
     /// - `b.is_probably_same_path(a)`
     pub(crate) fn is_probably_same_path(&self, other: &Self) -> bool {
-        self.is_same_remote(other) && (self.local_ip.is_none() || self.is_same_local_ip(other))
+        self.is_same_remote(other) && (self.local_ip.is_none() || self.local_ip == other.local_ip)
     }
 }
 
@@ -527,20 +517,6 @@ mod four_tuple_tests {
         let plain = FourTuple::from_remote("1.2.3.4:443".parse().unwrap());
         assert!(mapped.is_same_remote(&plain));
         assert!(plain.is_same_remote(&mapped));
-        assert_ne!(mapped, plain, "structural PartialEq must stay derived");
-    }
-
-    /// Same as [`is_same_remote_ignores_mapped_v4_representation`] for
-    /// [`FourTuple::is_same_local_ip`] -- the half `open_path()`'s bug report
-    /// actually depends on, and never exercised by `FourTuple::from_remote`
-    /// (`local_ip: None`).
-    #[test]
-    fn is_same_local_ip_ignores_mapped_v4_representation() {
-        let remote = "9.9.9.9:443".parse().unwrap();
-        let mapped = FourTuple::new(remote, Some("::ffff:1.2.3.4".parse().unwrap()));
-        let plain = FourTuple::new(remote, Some("1.2.3.4".parse().unwrap()));
-        assert!(mapped.is_same_local_ip(&plain));
-        assert!(plain.is_same_local_ip(&mapped));
         assert_ne!(mapped, plain, "structural PartialEq must stay derived");
     }
 
@@ -593,16 +569,16 @@ mod four_tuple_tests {
     }
 
     /// The `local_ip: Some(..)` counterpart of
-    /// [`is_probably_same_path_ignores_mapped_v4_representation`]: a
-    /// representation-only difference in `local_ip` must not break the
-    /// full-equality branch.
+    /// [`is_probably_same_path_ignores_mapped_v4_representation`]: representation
+    /// differences in `local_ip` are deliberately not hidden here. `Connection`
+    /// normalizes local IPs at its entry boundaries before storing them.
     #[test]
-    fn is_probably_same_path_ignores_mapped_v4_representation_for_local_ip() {
+    fn is_probably_same_path_uses_structural_local_ip_equality() {
         let remote = "9.9.9.9:443".parse().unwrap();
         let mapped = FourTuple::new(remote, Some("::ffff:1.2.3.4".parse().unwrap()));
         let plain = FourTuple::new(remote, Some("1.2.3.4".parse().unwrap()));
-        assert!(mapped.is_probably_same_path(&plain));
-        assert!(plain.is_probably_same_path(&mapped));
+        assert!(!mapped.is_probably_same_path(&plain));
+        assert!(!plain.is_probably_same_path(&mapped));
     }
 
     /// Same as above for `scope_id`. Only `remote` can vary here -- `local_ip:
