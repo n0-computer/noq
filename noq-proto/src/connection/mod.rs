@@ -5586,9 +5586,6 @@ impl Connection {
             && let Some(new_local_ip) = network_path.local_ip
         {
             let path_data = self.path_data_mut(path_id);
-            // `network_path.local_ip` is `Some(new_local_ip)` per the `let Some` guard
-            // above, so comparing against `network_path` itself covers the
-            // `new_local_ip` side.
             if path_data.network_path.local_ip.is_some()
                 && path_data.network_path.local_ip != network_path.local_ip
             {
