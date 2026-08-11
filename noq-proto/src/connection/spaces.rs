@@ -283,7 +283,6 @@ pub(super) struct PacketNumberSpace {
 
     //
     // Loss Detection
-    //
     /// The time the most recently sent retransmittable packet was sent.
     pub(super) time_of_last_ack_eliciting_packet: Option<Instant>,
     /// Earliest time when we might declare a packet lost.
@@ -496,12 +495,9 @@ impl PacketNumberSpace {
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(super) enum OpenStatus {
-    /// A first packet has not been sent using this [`PathId`].
+    /// The application has not yet been informed of this path.
     #[default]
     Pending,
-    /// The first packet has been sent using this [`PathId`]. However, it is not yet deemed good
-    /// enough to be reported to the application.
-    Sent,
     /// The application has been informed of this path.
     Informed,
 }
@@ -509,13 +505,14 @@ pub(super) enum OpenStatus {
 /// Represents one or more packets subject to retransmission
 #[derive(Debug, Clone)]
 pub(super) struct SentPacket {
-    /// [`PathData::generation`](super::PathData::generation) of the path on which this packet was sent
+    /// [`PathData::generation`](super::PathData::generation) of the path on which this packet was
+    /// sent
     pub(super) path_generation: u64,
     /// The time the packet was sent.
     pub(super) time_sent: Instant,
-    /// The number of bytes sent in the packet, not including UDP or IP overhead, but including QUIC
-    /// framing overhead. Zero if this packet is not counted towards congestion control, i.e. not an
-    /// "in flight" packet.
+    /// The number of bytes sent in the packet, not including UDP or IP overhead, but including
+    /// QUIC framing overhead. Zero if this packet is not counted towards congestion control,
+    /// i.e. not an "in flight" packet.
     pub(super) size: u16,
     /// Whether an acknowledgement is expected directly in response to this packet.
     pub(super) ack_eliciting: bool,
@@ -564,8 +561,8 @@ pub struct Retransmits {
     ///
     /// Stores the remote_max_path_id at the time this was generated.
     /// This frame is entirely informational, so when it's retransmitted, the remote_max_path_id is
-    /// intentionally not updated to preserve the fact that this was the state of the client at some
-    /// point.
+    /// intentionally not updated to preserve the fact that this was the state of the client at
+    /// some point.
     pub(super) paths_blocked: Option<PathId>,
     /// For each enqueued NEW_TOKEN frame, a copy of the path's remote address
     ///
@@ -586,12 +583,13 @@ pub struct Retransmits {
     pub(super) new_tokens: Vec<FourTuple>,
     /// Paths which need to be abandoned
     pub(super) path_abandon: BTreeMap<PathId, TransportErrorCode>,
-    /// If a [`frame::PathStatusAvailable`] and [`frame::PathStatusBackup`] need to be sent for a path
+    /// If a [`frame::PathStatusAvailable`] and [`frame::PathStatusBackup`] need to be sent for a
+    /// path
     pub(super) path_status: BTreeSet<PathId>,
     /// Whether a PATH_CIDS_BLOCKED frame needs to be sent for a path.
     ///
-    /// Stores the next_seq number for the blocked path. This number can be "outdated" at the time of
-    /// sending when this is a retransmission. This is intentional, as this frame is purely
+    /// Stores the next_seq number for the blocked path. This number can be "outdated" at the time
+    /// of sending when this is a retransmission. This is intentional, as this frame is purely
     /// informational, and this would preserve this information.
     pub(super) path_cids_blocked: BTreeMap<PathId, VarInt>,
 
@@ -752,7 +750,7 @@ impl PendingNewCids {
 
     /// Pops the next issued CID to transmit from the queue.
     pub(super) fn pop(&mut self) -> Option<IssuedCid> {
-        if !std::mem::replace(&mut self.sorted, true) {
+        if !mem::replace(&mut self.sorted, true) {
             self.cids
                 .sort_by_key(|cid| cmp::Reverse((cid.path_id, cid.sequence)));
         }
@@ -897,15 +895,6 @@ pub(super) struct Dedup {
     next: u64,
 }
 
-/// Inner bitfield type.
-///
-/// Because QUIC never reuses packet numbers, this only needs to be large enough to deal with
-/// packets that are reordered but still delivered in a timely manner.
-type Window = u128;
-
-/// Number of packets tracked by `Dedup`.
-const WINDOW_SIZE: u64 = 1 + mem::size_of::<Window>() as u64 * 8;
-
 impl Dedup {
     /// Construct an empty window positioned at the start.
     #[cfg(test)]
@@ -953,7 +942,7 @@ impl Dedup {
     fn smallest_missing_in_interval(&self, lower_bound: u64, upper_bound: u64) -> Option<u64> {
         debug_assert!(lower_bound <= upper_bound);
         debug_assert!(upper_bound <= self.highest());
-        const BITFIELD_SIZE: u64 = (mem::size_of::<Window>() * 8) as u64;
+        const BITFIELD_SIZE: u64 = Window::BITS as u64;
 
         // Since we already know the packets at the boundaries have been received, we only need to
         // check those in between them (this removes the necessity of extra logic to deal with the
@@ -1009,7 +998,15 @@ impl Dedup {
     }
 }
 
-/// Indicates which data is available for sending.
+/// Inner bitfield type.
+///
+/// Because QUIC never reuses packet numbers, this only needs to be large enough to deal with
+/// packets that are reordered but still delivered in a timely manner.
+type Window = u128;
+
+/// Number of packets tracked by `Dedup`.
+const WINDOW_SIZE: u64 = 1 + size_of::<Window>() as u64 * 8;
+/// Indicates which data is available for sending
 ///
 /// This applies to a particular space ID that was queried and all refers to on-path data.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -1103,7 +1100,8 @@ pub(super) struct PendingAcks {
     ///
     /// * `0`: no special action is taken
     /// * `1`: an ACK is immediately sent if it is out-of-order according to RFC 9000
-    /// * `>1`: an ACK is immediately sent if it is out-of-order according to the ACK frequency draft
+    /// * `>1`: an ACK is immediately sent if it is out-of-order according to the ACK frequency
+    ///   draft
     reordering_threshold: u64,
     /// The earliest ack-eliciting packet since the last ACK was sent, used to calculate the moment
     /// upon which `max_ack_delay` elapses
@@ -1578,7 +1576,7 @@ mod test {
     fn sent_packet_size() {
         // The tracking state of sent packets should be minimal, and not grow
         // over time.
-        assert!(std::mem::size_of::<SentPacket>() <= 128);
+        assert!(size_of::<SentPacket>() <= 128);
     }
 
     #[test]

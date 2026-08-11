@@ -355,9 +355,10 @@ impl Connection {
 
     /// Accept the next incoming bidirectional stream
     ///
-    /// **Important Note**: The `Connection` that calls [`open_bi()`] must write to its [`SendStream`]
-    /// before the other `Connection` is able to `accept_bi()`. Calling [`open_bi()`] then
-    /// waiting on the [`RecvStream`] without writing anything to [`SendStream`] will never succeed.
+    /// **Important Note**: The `Connection` that calls [`open_bi()`] must write to its
+    /// [`SendStream`] before the other `Connection` is able to `accept_bi()`. Calling
+    /// [`open_bi()`] then waiting on the [`RecvStream`] without writing anything to
+    /// [`SendStream`] will never succeed.
     ///
     /// [`accept_bi()`]: crate::Connection::accept_bi
     /// [`open_bi()`]: crate::Connection::open_bi
@@ -498,11 +499,13 @@ impl Connection {
 
     /// A stream of [`PathEvent`]s for all paths in this connection.
     ///
-    /// The stream will yield a [`PathEvent`] whenever there is a change in the state of any path in this connection.
-    /// The events need to be processed immediately, since there isn't an unbounded buffer for them.
+    /// The stream will yield a [`PathEvent`] whenever there is a change in the state of any path in
+    /// this connection. The events need to be processed immediately, since there isn't an
+    /// unbounded buffer for them.
     ///
-    /// If processing of events lags behind too much, you will get an error of type [`crate::Lagged`] indicating
-    /// how many events were lost. The stream continues after a lag, delivering the oldest retained message next.
+    /// If processing of events lags behind too much, you will get an error of type
+    /// [`crate::Lagged`] indicating how many events were lost. The stream continues after a
+    /// lag, delivering the oldest retained message next.
     pub fn path_events(&self) -> crate::PathEvents {
         crate::PathEvents::new(
             self.0
@@ -516,8 +519,9 @@ impl Connection {
     ///
     /// The events need to be processed immediately, since there isn't an unbounded buffer for them.
     ///
-    /// If processing of events lags behind too much, you will get an error of type [`crate::Lagged`] indicating
-    /// how many events were lost. The stream continues after a lag, delivering the oldest retained message next.
+    /// If processing of events lags behind too much, you will get an error of type
+    /// [`crate::Lagged`] indicating how many events were lost. The stream continues after a
+    /// lag, delivering the oldest retained message next.
     pub fn nat_traversal_updates(&self) -> crate::NatTraversalUpdates {
         crate::NatTraversalUpdates::new(
             self.0
@@ -557,10 +561,11 @@ impl Connection {
     /// Returns a future that resolves, once the connection is closed, to a [`Closed`] struct
     /// describing the close reason and final connection and per-path statistics.
     ///
-    /// Calling [`Self::closed`] keeps the connection alive until it is either closed locally via [`Connection::close`]
-    /// or closed by the remote peer. This function instead does not keep the connection itself alive,
-    /// so if all *other* clones of the connection are dropped, the connection will be closed implicitly even
-    /// if there are futures returned from this function still being awaited.
+    /// Calling [`Self::closed`] keeps the connection alive until it is either closed locally via
+    /// [`Connection::close`] or closed by the remote peer. This function instead does not keep
+    /// the connection itself alive, so if all *other* clones of the connection are dropped, the
+    /// connection will be closed implicitly even if there are futures returned from this
+    /// function still being awaited.
     pub fn on_closed(&self) -> OnClosed {
         let (tx, rx) = oneshot::channel();
         let mut state = self.0.lock_without_waking("on_closed");
@@ -584,7 +589,8 @@ impl Connection {
     /// an internal error (such as an idle timeout or the peer closing the
     /// connection).
     ///
-    /// Note: when the connection is closed, `connection.close_reason().is_some()` will always be true.
+    /// Note: when the connection is closed, `connection.close_reason().is_some()` will always be
+    /// true.
     pub fn close_reason(&self) -> Option<ConnectionError> {
         self.0.lock_without_waking("close_reason").error.clone()
     }
@@ -791,6 +797,33 @@ impl Connection {
             .inner
             .congestion_state(path_id)
             .map(|c| c.clone_box())
+    }
+
+    /// Succeeds when an incoming connection is proven not to be a replay attack.
+    ///
+    /// Only interesting for `Connection`s obtained from [`Connecting::into_0rtt`]. On 1-RTT
+    /// connections, always completes immediately. Contrast
+    /// [`handshake_confirmed`](Self::handshake_confirmed), which waits longer on clients e.g. to
+    /// confirm client authentication.
+    ///
+    /// For incoming connections, reads from [`RecvStream`]s are guaranteed not to arise from replay
+    /// attacks after this succeeds, even for streams accepted or read during 0-RTT. For outgoing
+    /// connections, streams opened after this succeeds will never be discarded by the server due to
+    /// 0-RTT rejection.
+    pub async fn authenticated(&self) -> Result<(), ConnectionError> {
+        let notified = {
+            let conn = self.0.state.lock("connected");
+            if let Some(e) = &conn.error {
+                return Err(e.clone());
+            }
+            if conn.connected {
+                return Ok(());
+            }
+            self.0.shared.connected.notified()
+        };
+        notified.await;
+        let conn = self.0.state.lock("connected");
+        conn.error.clone().map_or(Ok(()), Err)
     }
 
     /// Parameters negotiated during the handshake
@@ -1407,8 +1440,8 @@ pub(crate) struct ConnectionInner {
 impl ConnectionInner {
     /// Lock the state and return a guard that wakes the connection driver on drop.
     ///
-    /// Use this for operations that may queue frames. The wake ensures the driver sends queued frames.
-    /// If that's not needed, use [`Self::lock_without_waking`].
+    /// Use this for operations that may queue frames. The wake ensures the driver sends queued
+    /// frames. If that's not needed, use [`Self::lock_without_waking`].
     pub(crate) fn lock_and_wake(&self, purpose: &'static str) -> WakeGuard<'_> {
         WakeGuard {
             guard: self.state.lock(purpose),
@@ -1490,6 +1523,7 @@ pub(crate) struct Shared {
     datagram_received: Notify,
     datagrams_unblocked: Notify,
     closed: Notify,
+    connected: Notify,
     /// Number of live handles that can be used to initiate or handle I/O; excludes the driver
     ref_count: AtomicUsize,
 }
@@ -1524,8 +1558,9 @@ pub(crate) struct State {
     pub(crate) path_refs: FxHashMap<PathId, PathRefOwner>,
     /// Final path stats for discarded paths.
     ///
-    /// We only insert entries if the discarded path has a non-zero reference count in [`Self::path_refs`].
-    /// When the last reference to a path is dropped its entry is removed from both maps.
+    /// We only insert entries if the discarded path has a non-zero reference count in
+    /// [`Self::path_refs`]. When the last reference to a path is dropped its entry is removed
+    /// from both maps.
     pub(crate) final_path_stats: FxHashMap<PathId, PathStats>,
     pub(crate) path_events: tokio::sync::broadcast::Sender<PathEvent>,
     sender: Pin<Box<dyn UdpSender>>,
@@ -1692,6 +1727,7 @@ impl State {
                 }
                 Connected => {
                     self.connected = true;
+                    shared.connected.notify_waiters();
                     if let Some(x) = self.on_connected.take() {
                         // We don't care if the on-connected future was dropped
                         let _ = x.send(self.inner.accepted_0rtt());
@@ -1759,13 +1795,16 @@ impl State {
                 }
                 Path(ref evt @ PathEvent::Abandoned { id, .. }) => {
                     if let Some(sender) = self.open_path.remove(&id) {
-                        // We don't care for the reason why this path was closed here, because semantically
-                        // all close reasons for a path that has not yet been opened equals to `ValidationFailed`.
-                        // With the noq API, there is no way to application-close a not-yet-opened path, so
-                        // `ApplicationClosed` cannot occur. And all other variants will only occur for paths
-                        // that have already been opened.
-                        // The previous iteration of this code had another event `PathEvent::LocallyClosed` which
-                        // contained a `PathError`, but that was only ever set to `ValidationFailed`.
+                        // We don't care for the reason why this path was closed here, because
+                        // semantically all close reasons for a path that
+                        // has not yet been opened equals to `ValidationFailed`.
+                        // With the noq API, there is no way to application-close a not-yet-opened
+                        // path, so `ApplicationClosed` cannot occur. And
+                        // all other variants will only occur for paths that
+                        // have already been opened. The previous iteration
+                        // of this code had another event `PathEvent::LocallyClosed` which
+                        // contained a `PathError`, but that was only ever set to
+                        // `ValidationFailed`.
                         let error = PathError::ValidationFailed;
                         sender.send_modify(|value| *value = Err(error));
                     }
@@ -1792,36 +1831,32 @@ impl State {
     }
 
     fn drive_timer(&mut self, cx: &mut Context<'_>) -> bool {
-        // Check whether we need to (re)set the timer. If so, we must poll again to ensure the
-        // timer is registered with the runtime (and check whether it's already
-        // expired).
-        match self.inner.poll_timeout() {
-            Some(deadline) => {
-                if let Some(delay) = &mut self.timer {
-                    // There is no need to reset the tokio timer if the deadline
-                    // did not change
-                    if self
-                        .timer_deadline
-                        .map(|current_deadline| current_deadline != deadline)
-                        .unwrap_or(true)
-                    {
-                        delay.as_mut().reset(deadline);
-                    }
-                } else {
-                    self.timer = Some(self.runtime.new_timer(deadline));
-                }
-                // Store the actual expiration time of the timer
-                self.timer_deadline = Some(deadline);
-            }
-            None => {
-                self.timer_deadline = None;
-                return false;
-            }
+        let Some(deadline) = self.inner.poll_timeout() else {
+            self.timer_deadline = None;
+            return false;
+        };
+
+        // Use the clock rather than the async timer to detect expiry: Sleep::poll
+        // respects Tokio's cooperative budget and can return Pending for elapsed
+        // deadlines.
+        let now = self.runtime.now();
+        if now >= deadline {
+            self.inner.handle_timeout(now);
+            self.timer_deadline = None;
+            return true;
         }
 
-        if self.timer_deadline.is_none() {
-            return false;
+        match &mut self.timer {
+            // Avoid resetting the timer when the deadline is unchanged.
+            Some(delay) if self.timer_deadline != Some(deadline) => {
+                delay.as_mut().reset(deadline);
+            }
+            None => {
+                self.timer = Some(self.runtime.new_timer(deadline));
+            }
+            _ => {}
         }
+        self.timer_deadline = Some(deadline);
 
         let delay = self
             .timer
@@ -1829,13 +1864,10 @@ impl State {
             .expect("timer must exist in this state")
             .as_mut();
         if delay.poll(cx).is_pending() {
-            // Since there wasn't a timeout event, there is nothing new
-            // for the connection to do
             return false;
         }
 
-        // A timer expired, so the caller needs to check for
-        // new transmits, which might cause new timers to be set.
+        // The deadline elapsed in the window between the clock check and poll.
         self.inner.handle_timeout(self.runtime.now());
         self.timer_deadline = None;
         true
@@ -1868,7 +1900,6 @@ impl State {
         shared.handshake_confirmed.notify_waiters();
         wake_all_notify(&mut self.stopped);
         shared.closed.notify_waiters();
-
         // Send to the registered on_closed futures.
         if !self.on_closed.is_empty() {
             let closed = Closed::new(self, reason);
@@ -1876,6 +1907,7 @@ impl State {
                 tx.send(closed.clone()).ok();
             }
         }
+        shared.connected.notify_waiters();
     }
 
     fn close(&mut self, error_code: VarInt, reason: Bytes, shared: &Shared) {
@@ -1928,7 +1960,7 @@ impl Drop for State {
             // Ensure the endpoint can tidy up
             let _ = self
                 .endpoint_events
-                .send((self.handle, proto::EndpointEvent::drained()));
+                .send((self.handle, EndpointEvent::drained()));
         }
 
         if !self.on_closed.is_empty()

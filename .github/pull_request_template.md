@@ -17,8 +17,9 @@
 - [ ] Documentation updates following the [style guide](https://rust-lang.github.io/rfcs/1574-more-api-documentation-conventions.html#appendix-a-full-conventions-text), if relevant.
 - [ ] Tests if relevant.
 - [ ] All breaking changes documented.
-
-<!--
-tip:
-   Run `cargo make` in the workspace root to check many light-weight CI steps locally.
--->
+- [ ] This PR was created by a human that thought critically about the
+      proposed change and wrote an as clear and concise description as
+      they could.
+- [ ] This PR isn't slop, and is carefully crafted to do have the
+      intented effect.
+- [ ] `cargo make` passes locally.

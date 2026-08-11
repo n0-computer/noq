@@ -222,7 +222,7 @@ const RETRY_INTEGRITY_NONCE_V1: [u8; 12] = [
     0x46, 0x15, 0x99, 0xd3, 0x5d, 0x63, 0x2b, 0xf2, 0x23, 0x98, 0x25, 0xbb,
 ];
 
-impl crypto::HeaderKey for Box<dyn HeaderProtectionKey> {
+impl HeaderKey for Box<dyn HeaderProtectionKey> {
     fn decrypt(&self, pn_offset: usize, packet: &mut [u8]) {
         let (header, sample) = packet.split_at_mut(pn_offset + 4);
         let (first, rest) = header.split_at_mut(1);
@@ -272,9 +272,10 @@ pub struct HandshakeData {
 /// A QUIC-compatible TLS client configuration
 ///
 /// noq implicitly constructs a `QuicClientConfig` with reasonable defaults within
-/// [`ClientConfig::with_root_certificates()`][root_certs] and [`ClientConfig::try_with_platform_verifier()`][platform].
-/// Alternatively, `QuicClientConfig`'s [`TryFrom`] implementation can be used to wrap around a
-/// custom [`rustls::ClientConfig`], in which case care should be taken around certain points:
+/// [`ClientConfig::with_root_certificates()`][root_certs] and
+/// [`ClientConfig::try_with_platform_verifier()`][platform]. Alternatively, `QuicClientConfig`'s
+/// [`TryFrom`] implementation can be used to wrap around a custom [`rustls::ClientConfig`], in
+/// which case care should be taken around certain points:
 ///
 /// - If `enable_early_data` is not set to true, then sending 0-RTT data will not be possible on
 ///   outgoing connections.
@@ -319,8 +320,8 @@ impl QuicClientConfig {
 
     /// Initialize a sane QUIC-compatible TLS client configuration
     ///
-    /// QUIC requires that TLS 1.3 be enabled. Advanced users can use any [`rustls::ClientConfig`] that
-    /// satisfies this requirement.
+    /// QUIC requires that TLS 1.3 be enabled. Advanced users can use any [`rustls::ClientConfig`]
+    /// that satisfies this requirement.
     #[cfg(any(feature = "aws-lc-rs", feature = "ring"))]
     pub(crate) fn new(verifier: Arc<dyn ServerCertVerifier>) -> Self {
         let inner = Self::inner(verifier);
@@ -378,7 +379,7 @@ impl crypto::ClientConfig for QuicClientConfig {
             version,
             got_handshake_data: false,
             next_secrets: None,
-            inner: rustls::quic::Connection::Client(
+            inner: Connection::Client(
                 rustls::quic::ClientConnection::new(
                     self.inner.clone(),
                     version,
@@ -461,7 +462,7 @@ impl QuicServerConfig {
     pub(crate) fn new(
         cert_chain: Vec<CertificateDer<'static>>,
         key: PrivateKeyDer<'static>,
-    ) -> Result<Self, rustls::Error> {
+    ) -> Result<Self, Error> {
         let inner = Self::inner(cert_chain, key)?;
         Ok(Self {
             // We're confident that the *ring* default provider contains TLS13_AES_128_GCM_SHA256
@@ -499,7 +500,7 @@ impl QuicServerConfig {
     pub(crate) fn inner(
         cert_chain: Vec<CertificateDer<'static>>,
         key: PrivateKeyDer<'static>,
-    ) -> Result<rustls::ServerConfig, rustls::Error> {
+    ) -> Result<rustls::ServerConfig, Error> {
         let mut inner = rustls::ServerConfig::builder_with_provider(configured_provider())
             .with_protocol_versions(&[&rustls::version::TLS13])
             .unwrap() // The *ring* default provider supports TLS 1.3
@@ -543,7 +544,7 @@ impl crypto::ServerConfig for QuicServerConfig {
             version,
             got_handshake_data: false,
             next_secrets: None,
-            inner: rustls::quic::Connection::Server(
+            inner: Connection::Server(
                 rustls::quic::ServerConnection::new(self.inner.clone(), version, to_vec(params))
                     .unwrap(),
             ),
@@ -590,9 +591,7 @@ pub(crate) fn initial_suite_from_provider(
         .cipher_suites
         .iter()
         .find_map(|cs| match (cs.suite(), cs.tls13()) {
-            (rustls::CipherSuite::TLS13_AES_128_GCM_SHA256, Some(suite)) => {
-                Some(suite.quic_suite())
-            }
+            (CipherSuite::TLS13_AES_128_GCM_SHA256, Some(suite)) => Some(suite.quic_suite()),
             _ => None,
         })
         .flatten()

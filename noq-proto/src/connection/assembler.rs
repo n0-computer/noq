@@ -17,9 +17,9 @@ pub(super) struct Assembler {
     buffered: usize,
     /// Estimated number of allocated bytes, will never be less than `buffered`.
     allocated: usize,
-    /// Number of bytes read by the application. When only ordered reads have been used, this is the
-    /// length of the contiguous prefix of the stream which has been consumed by the application,
-    /// aka the stream offset.
+    /// Number of bytes read by the application. When only ordered reads have been used, this is
+    /// the length of the contiguous prefix of the stream which has been consumed by the
+    /// application, aka the stream offset.
     bytes_read: u64,
     end: u64,
 }
@@ -652,7 +652,8 @@ mod test {
 
     #[test]
     fn no_duplicate_after_mode_switch() {
-        // Regression test: bytes read in ordered mode should not be returned again in unordered mode
+        // Regression test: bytes read in ordered mode should not be returned again in unordered
+        // mode
         let mut x = Assembler::new();
         x.insert(0, Bytes::from_static(b"a"), 1);
         x.insert(0, Bytes::from_static(b"a"), 1); // duplicate

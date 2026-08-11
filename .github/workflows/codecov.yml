@@ -33,7 +33,7 @@ jobs:
             --features="arbitrary,aws-lc-rs,bloom,fast-apple-datapath,futures-io,json-output,lock_tracking,log,platform-verifier,qlog,ring,runtime-smol,runtime-tokio,rustls,rustls-log,rustls,ring,serde,serde_json,tracing,tracing-log" \
             --workspace --lcov --output-path lcov.info
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: lcov.info

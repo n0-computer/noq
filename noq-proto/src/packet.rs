@@ -31,7 +31,9 @@ pub struct PartialDecode {
 
 #[allow(clippy::len_without_is_empty)]
 impl PartialDecode {
-    /// Begin decoding a QUIC packet from `bytes`, returning any trailing data not part of that packet
+    /// Begins decoding a QUIC packet from `bytes`.
+    ///
+    /// Returns any trailing data not part of that packet.
     pub fn new(
         bytes: BytesMut,
         cid_parser: &(impl ConnectionIdParser + ?Sized),
@@ -632,7 +634,7 @@ impl ProtectedHeader {
 
     /// Decode a plain header from given buffer, with given [`ConnectionIdParser`].
     pub fn decode(
-        buf: &mut io::Cursor<BytesMut>,
+        buf: &mut io::Cursor<impl AsRef<[u8]>>,
         cid_parser: &(impl ConnectionIdParser + ?Sized),
         supported_versions: &[u32],
         grease_quic_bit: bool,

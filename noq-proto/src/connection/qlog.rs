@@ -298,8 +298,8 @@ impl QlogSink {
 
     /// Emits a timer event.
     ///
-    /// This function is not public: Instead, create a [`QlogSinkWithTime`] via [`Self::with_time`] and use
-    /// its `emit_timer_` methods.
+    /// This function is not public: Instead, create a [`QlogSinkWithTime`] via [`Self::with_time`]
+    /// and use its `emit_timer_` methods.
     #[cfg(feature = "qlog")]
     fn emit_timer(&self, timer: Timer, op: TimerOp, now: Instant) {
         let Some(stream) = self.stream.as_ref() else {
@@ -323,9 +323,6 @@ impl QlogSink {
                 PathTimer::PathIdle => Some(TimerType::custom("path_idle")),
                 PathTimer::PathValidationFailed => Some(QlogTimerType::PathValidation.into()),
                 PathTimer::PathChallengeLost => Some(TimerType::custom("path_challenge_lost")),
-                PathTimer::AbandonFromValidation => {
-                    Some(TimerType::custom("abandon_from_validation"))
-                }
                 PathTimer::PathKeepAlive => Some(TimerType::custom("path_keep_alive")),
                 PathTimer::Pacing => Some(TimerType::custom("pacing")),
                 PathTimer::MaxAckDelay => Some(QlogTimerType::Ack.into()),
@@ -459,8 +456,9 @@ impl QlogSentPacket {
 
     /// Adds a frame by pushing a [`QuicFrame`].
     ///
-    /// This function is only available if the `qlog` feature is enabled, because constructing a [`QuicFrame`] may involve
-    /// calculations which shouldn't be performed if the `qlog` feature is disabled.
+    /// This function is only available if the `qlog` feature is enabled, because constructing a
+    /// [`QuicFrame`] may involve calculations which shouldn't be performed if the `qlog`
+    /// feature is disabled.
     #[cfg(feature = "qlog")]
     fn frame_raw(&mut self, frame: QuicFrame) {
         self.inner.frames.get_or_insert_default().push(frame);
@@ -526,7 +524,7 @@ impl QlogRecvPacket {
     pub(crate) fn frame(&mut self, frame: &Frame) {
         #[cfg(feature = "qlog")]
         {
-            if matches!(frame, crate::Frame::Padding) {
+            if matches!(frame, Frame::Padding) {
                 self.padding += 1;
             } else {
                 self.emit_padding();
@@ -731,7 +729,7 @@ impl ToQlog for frame::MaxStreams {
 }
 
 #[cfg(feature = "qlog")]
-impl ToQlog for frame::StreamsBlocked {
+impl ToQlog for StreamsBlocked {
     fn to_qlog(&self) -> QuicFrame {
         QuicFrame::StreamsBlocked {
             stream_type: self.dir.into(),

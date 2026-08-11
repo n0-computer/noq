@@ -49,7 +49,7 @@ impl BenchOpt for Opt {
 
 /// Creates a server endpoint which runs on the given runtime
 pub fn server_endpoint<O: BenchOpt>(
-    rt: &tokio::runtime::Runtime,
+    rt: &Runtime,
     cert: CertificateDer<'static>,
     key: PrivateKeyDer<'static>,
     opt: &O,

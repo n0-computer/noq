@@ -140,13 +140,13 @@ pub(super) struct SentChallengeInfo {
 /// to a different 4-tuple, in a similar manner as an RFC9000 connection can use "path
 /// migration" to move to a different 4-tuple. There are thus two states we keep for paths:
 ///
-/// - [`PacketNumberSpace`]: The state for a single packet number space, i.e. [`PathId`],
-///   which remains in place across path migrations to different 4-tuples.
+/// - [`PacketNumberSpace`]: The state for a single packet number space, i.e. [`PathId`], which
+///   remains in place across path migrations to different 4-tuples.
 ///
 ///   This is stored in [`PacketSpace::number_spaces`] indexed on [`PathId`].
 ///
-/// - [`PathData`]: The state we keep for each unique 4-tuple within a space. Of note is
-///   that a single [`PathData`] can never belong to a different [`PacketNumberSpace`].
+/// - [`PathData`]: The state we keep for each unique 4-tuple within a space. Of note is that a
+///   single [`PathData`] can never belong to a different [`PacketNumberSpace`].
 ///
 ///   This is stored in [`Connection::paths`] indexed by the current [`PathId`] for which
 ///   space it exists. Either as the primary 4-tuple or as the previous 4-tuple just after a
@@ -172,14 +172,15 @@ pub(super) struct PathData {
     /// no outgoing application data.
     ///
     /// The RFC writes:
-    /// > When bytes in flight is smaller than the congestion window and sending is not pacing limited,
-    /// > the congestion window is underutilized. This can happen due to insufficient application data
-    /// > or flow control limits. When this occurs, the congestion window SHOULD NOT be increased in
-    /// > either slow start or congestion avoidance.
+    /// > When bytes in flight is smaller than the congestion window and sending is not pacing
+    /// > limited, the congestion window is underutilized. This can happen due to insufficient
+    /// > application data or flow control limits. When this occurs, the congestion window SHOULD
+    /// > NOT be increased in either slow start or congestion avoidance.
     ///
     /// (RFC9002, section 7.8)
     ///
-    /// I.e. when app_limited is true, the congestion controller doesn't increase the congestion window.
+    /// I.e. when app_limited is true, the congestion controller doesn't increase the congestion
+    /// window.
     pub(super) app_limited: bool,
 
     /// Whether to trigger sending another PATH_CHALLENGE in the next poll_transmit.
@@ -220,7 +221,8 @@ pub(super) struct PathData {
     pub(super) in_flight: InFlight,
     /// Queue of data that must be sent over this specific [`PathData::generation`] path.
     pub(super) pending: PathRetransmits,
-    /// Observed address frame with the largest sequence number received from the peer on this path.
+    /// Observed address frame with the largest sequence number received from the peer on this
+    /// path.
     pub(super) last_observed_addr_report: Option<ObservedAddr>,
     /// The QUIC-MULTIPATH path status
     pub(super) status: PathStatusState,
@@ -242,7 +244,6 @@ pub(super) struct PathData {
 
     //
     // Per-path idle & keep alive
-    //
     /// Idle timeout for the path
     ///
     /// If expired, the path will be abandoned.  This is different from the connection-wide
@@ -477,14 +478,22 @@ impl PathData {
         if self.unconfirmed_challenges.is_empty() {
             return None;
         }
-        let duration = self.on_path_challenge_expiry();
+        let duration = self.on_path_challenge_pto();
         self.unconfirmed_challenges
             .values()
             .map(|info| info.sent_instant + duration)
             .min()
     }
 
-    pub(super) fn on_path_challenge_expiry(&self) -> Duration {
+    /// The duration after which a PTO expires for an on-path challenge, if sent now.
+    ///
+    /// Since challenges need an on-path response rather than just an ACK that can be sent
+    /// on any path they need a different timer from the
+    /// [`PathTimer::LossDetection`]. Functionally this behaves as the probe timeout
+    /// however.
+    ///
+    /// [`PathTimer::LossDetection`]: super::timer::PathTimer::LossDetection
+    pub(super) fn on_path_challenge_pto(&self) -> Duration {
         let backoff = 2u32.pow(self.lost_challenge_count.min(MAX_BACKOFF_EXPONENT));
         let duration = self.rtt.pto_base() * backoff;
         duration.min(MAX_PTO_INTERVAL)
@@ -761,7 +770,7 @@ pub struct RttEstimator {
 }
 
 impl RttEstimator {
-    pub(super) fn new(initial_rtt: Duration) -> Self {
+    pub(crate) fn new(initial_rtt: Duration) -> Self {
         Self {
             latest: initial_rtt,
             smoothed: None,
@@ -944,8 +953,8 @@ pub(super) struct InFlight {
     /// Number of packets in flight containing frames other than ACK and PADDING
     ///
     /// This can be 0 even when bytes is not 0 because PADDING frames cause a packet to be
-    /// considered "in flight" by congestion control. However, if this is nonzero, bytes will always
-    /// also be nonzero.
+    /// considered "in flight" by congestion control. However, if this is nonzero, bytes will
+    /// always also be nonzero.
     pub(super) ack_eliciting: u64,
 }
 
@@ -1099,6 +1108,13 @@ pub enum PathAbandonReason {
         error_code: VarInt,
     },
     /// We didn't receive a path response in time after opening this path.
+    ///
+    /// This event is no longer emitted, when validation fails a path is only abandoned once
+    /// there's a path timeout and the [`Self::TimedOut`] event will be emitted instead.
+    #[deprecated(
+        since = "1.1.0",
+        note = "This event is no longer emitted, TimedOut will be emitted instead"
+    )]
     ValidationFailed,
     /// We didn't receive any data from the remote within the path's idle timeout.
     TimedOut,
@@ -1121,6 +1137,7 @@ impl PathAbandonReason {
     pub(crate) fn error_code(&self) -> TransportErrorCode {
         match self {
             Self::ApplicationClosed { error_code } => (*error_code).into(),
+            #[allow(deprecated)]
             Self::ValidationFailed | Self::TimedOut | Self::UnusableAfterNetworkChange => {
                 TransportErrorCode::PATH_UNSTABLE_OR_POOR
             }
@@ -1135,7 +1152,8 @@ pub enum SetPathStatusError {
     /// Error indicating that a path has not been opened or has already been abandoned
     #[error("closed path")]
     ClosedPath,
-    /// Error indicating that this operation requires multipath to be negotiated whereas it hasn't been
+    /// Error indicating that this operation requires multipath to be negotiated whereas it hasn't
+    /// been
     #[error("multipath not negotiated")]
     MultipathNotNegotiated,
 }

@@ -30,7 +30,7 @@ fn main() {
         apple_fast: { all(apple, feature = "fast-apple-datapath") },
         apple_slow: { all(apple, not(feature = "fast-apple-datapath")) },
         wasm_browser: { all(target_family = "wasm", target_os = "unknown") },
-        // Unix-family platforms that lack advanced socket APIs (cmsg, recvmmsg, etc.)
-        posix_minimal: { target_os = "espidf" },
+        // Platforms that lack advanced socket APIs (cmsg, recvmmsg, etc.)
+        posix_minimal: { any(target_os = "espidf", target_os = "wasi") },
     }
 }

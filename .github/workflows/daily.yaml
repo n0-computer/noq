@@ -5,8 +5,8 @@ name: Daily CI
 
 on:
   schedule:
-    # 06:00 UTC every day
-    - cron: "0 6 * * *"
+    # 02:00 UTC every day
+    - cron: "0 2 * * *"
   workflow_dispatch:
 
 concurrency:

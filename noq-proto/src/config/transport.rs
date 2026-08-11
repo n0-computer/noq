@@ -266,7 +266,8 @@ impl TransportConfig {
         self
     }
 
-    /// Number of consecutive PTOs after which network is considered to be experiencing persistent congestion.
+    /// Number of consecutive PTOs after which network is considered to be experiencing persistent
+    /// congestion.
     pub fn persistent_congestion_threshold(&mut self, value: u32) -> &mut Self {
         self.persistent_congestion_threshold = value;
         self
@@ -276,9 +277,9 @@ impl TransportConfig {
     ///
     /// Keep-alive packets prevent an inactive but otherwise healthy connection from timing out.
     ///
-    /// `None` to disable, which is the default. Only one side of any given connection needs keep-alive
-    /// enabled for the connection to be preserved. Must be set lower than the idle_timeout of both
-    /// peers to be effective.
+    /// `None` to disable, which is the default. Only one side of any given connection needs
+    /// keep-alive enabled for the connection to be preserved. Must be set lower than the
+    /// idle_timeout of both peers to be effective.
     pub fn keep_alive_interval(&mut self, value: Option<Duration>) -> &mut Self {
         self.keep_alive_interval = value;
         self
@@ -398,7 +399,7 @@ impl TransportConfig {
         self
     }
 
-    /// Sets a default per-path maximum idle timeout
+    /// Sets a default per-path maximum idle timeout.
     ///
     /// If the path is idle for this long the path will be abandoned. Bear in mind this will
     /// interact with the [`TransportConfig::max_idle_timeout`], if the last path is
@@ -406,6 +407,9 @@ impl TransportConfig {
     ///
     /// You can also change this using [`Connection::set_path_max_idle_timeout`] for
     /// existing paths.
+    ///
+    /// The idle timeout will only apply to paths of a multipath-negotiated connection. Before
+    /// multipath is negotiated, only the connection-wide max idle timeout is in effect.   
     ///
     /// [`Connection::set_path_max_idle_timeout`]: crate::Connection::set_path_max_idle_timeout
     pub fn default_path_max_idle_timeout(&mut self, timeout: Option<Duration>) -> &mut Self {
@@ -561,7 +565,8 @@ impl Default for TransportConfig {
 
             packet_threshold: 3,
             time_threshold: 9.0 / 8.0,
-            initial_rtt: Duration::from_millis(333), // per spec, intentionally distinct from EXPECTED_RTT
+            initial_rtt: Duration::from_millis(333), /* per spec, intentionally distinct from
+                                                      * EXPECTED_RTT */
             initial_mtu: INITIAL_MTU,
             min_mtu: INITIAL_MTU,
             mtu_discovery_config: Some(MtuDiscoveryConfig::default()),
@@ -914,7 +919,7 @@ impl From<VarInt> for IdleTimeout {
     }
 }
 
-impl std::convert::TryFrom<Duration> for IdleTimeout {
+impl TryFrom<Duration> for IdleTimeout {
     type Error = VarIntBoundsExceeded;
 
     fn try_from(timeout: Duration) -> Result<Self, Self::Error> {

@@ -454,6 +454,16 @@ impl Endpoint {
             return None;
         }
 
+        // Saturation only happens under heavy load, where deriving initial keys per Initial just to
+        // reply with CONNECTION_REFUSED would starve packet processing for existing connections.
+        if self.cids_exhausted() || self.incoming_buffers.len() >= server_config.max_incoming {
+            debug!(
+                "ignoring initial for connection {} due to saturation",
+                dst_cid
+            );
+            return None;
+        }
+
         let crypto = match server_config.crypto.initial_keys(header.version, dst_cid) {
             Ok(keys) => keys,
             Err(UnsupportedVersion) => {
@@ -700,11 +710,6 @@ impl Endpoint {
         &mut self,
         header: &ProtectedInitialHeader,
     ) -> Result<(), TransportError> {
-        let config = &self.server_config.as_ref().unwrap();
-        if self.cids_exhausted() || self.incoming_buffers.len() >= config.max_incoming {
-            return Err(TransportError::CONNECTION_REFUSED(""));
-        }
-
         // RFC9000 §7.2 dictates that initial (client-chosen) destination CIDs must be at least 8
         // bytes. If this is a Retry packet, then the length must instead match our usual CID
         // length. If we ever issue non-Retry address validation tokens via `NEW_TOKEN`, then we'll
@@ -730,6 +735,8 @@ impl Endpoint {
         self.clean_up_incoming(&incoming);
         incoming.improper_drop_warner.dismiss();
 
+        trace!(?incoming.network_path, "refusing incoming");
+
         self.initial_close(
             incoming.packet.header.version,
             incoming.network_path,
@@ -745,8 +752,14 @@ impl Endpoint {
     /// Errors if `incoming.may_retry()` is false.
     pub fn retry(&mut self, incoming: Incoming, buf: &mut Vec<u8>) -> Result<Transmit, RetryError> {
         if !incoming.may_retry() {
+            trace!(
+                ?incoming.network_path,
+                "not responding retry on incoming due to missing src CID"
+            );
             return Err(RetryError(Box::new(incoming)));
         }
+
+        trace!(?incoming.network_path, "responding retry on incoming");
 
         self.clean_up_incoming(&incoming);
         incoming.improper_drop_warner.dismiss();
@@ -799,6 +812,8 @@ impl Endpoint {
     pub fn ignore(&mut self, incoming: Incoming) {
         self.clean_up_incoming(&incoming);
         incoming.improper_drop_warner.dismiss();
+
+        trace!(?incoming.network_path, "ignoring incoming");
     }
 
     /// Clean up endpoint data structures associated with an `Incoming`.
@@ -1032,7 +1047,8 @@ struct ConnectionIndex {
     /// necessarily know what address we're sending from, and hence receiving at.
     ///
     /// Uses a standard `HashMap` to protect against hash collision attacks.
-    // TODO(matheus23): It's possible this could be changed now that we track the full 4-tuple on the client side, too.
+    // TODO(matheus23): It's possible this could be changed now that we track the full 4-tuple on
+    // the client side, too.
     outgoing_connection_remotes: HashMap<SocketAddr, ConnectionHandle>,
     /// Reset tokens provided by the peer for the CID each connection is currently sending to
     ///
@@ -1178,7 +1194,8 @@ pub(crate) struct ConnectionMeta {
     ///
     /// Each path has its own active CID. We use the [`PathId`] as a unique index, allowing
     /// us to retire the reset token when a path is abandoned.
-    // TODO(matheus23): Should be migrated to make reset tokens per 4-tuple instead of per remote addr
+    // TODO(matheus23): Should be migrated to make reset tokens per 4-tuple instead of per remote
+    // addr
     reset_token: FxHashMap<PathId, (SocketAddr, ResetToken)>,
 }
 
@@ -1283,7 +1300,8 @@ impl Incoming {
     /// Decrypt the Initial packet payload
     ///
     /// This clones and decrypts the packet payload (~1200 bytes).
-    /// Can be used to extract information from the TLS ClientHello without completing the handshake.
+    /// Can be used to extract information from the TLS ClientHello without completing the
+    /// handshake.
     pub fn decrypt(&self) -> Option<DecryptedInitial> {
         let packet_number = self.packet.header.number.expand(0);
         let mut payload = self.packet.payload.clone();

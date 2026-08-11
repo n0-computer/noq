@@ -163,7 +163,8 @@ impl RecvStream {
     /// [`RecvStream::read_chunk`]; use [`bytes_read()`](Self::bytes_read) to query that offset
     /// explicitly.
     ///
-    /// For unordered reads, convert the stream into an unordered stream using [`Self::into_unordered`].
+    /// For unordered reads, convert the stream into an unordered stream using
+    /// [`Self::into_unordered`].
     ///
     /// Slightly more efficient than [`RecvStream::read`] due to not copying. Chunk boundaries do
     /// not correspond to peer writes, and hence cannot be used as framing.
@@ -286,10 +287,16 @@ impl RecvStream {
         Ok(())
     }
 
-    /// Check if this stream has been opened during 0-RTT.
+    /// Check if this stream predates completion of the handshake on an incoming connection.
     ///
-    /// In which case any non-idempotent request should be considered dangerous at the application
-    /// level. Because read data is subject to replay attacks.
+    /// True only if the stream was accepted before the handshake completed, which is only possible
+    /// if you successfully called [`Connecting::into_0rtt`](crate::Connecting::into_0rtt) and the
+    /// client chose to send 0-RTT data.
+    ///
+    /// Under those conditions, depending on cryptographic layer configuration, 0-RTT application
+    /// data may be a replay attack. To guard against this, applications should not execute
+    /// non-idempotent operations until
+    /// [`Connection::authenticated`](crate::Connection::authenticated) succeeds.
     pub fn is_0rtt(&self) -> bool {
         self.is_0rtt
     }
@@ -606,7 +613,7 @@ impl Drop for RecvStream {
                     .blocked_readers
                     .contains_key(&self.stream),
                 "Stream {} should not have a blocked reader when all data read is true",
-                &self.stream
+                self.stream
             );
             return;
         }
