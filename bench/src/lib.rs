@@ -315,15 +315,13 @@ impl FromStr for CipherSuite {
 
 /// Direction of the datagram flood.
 #[derive(Debug, derive_more::Display, Clone, Copy, PartialEq, Eq)]
+#[display(rename_all = "lowercase")]
 pub enum Direction {
     /// Client sends, server receives.
-    #[display("send")]
     Send,
     /// Server sends, client receives.
-    #[display("recv")]
     Recv,
     /// Both sides send and receive concurrently (full-duplex).
-    #[display("both")]
     Both,
 }
 
