@@ -339,12 +339,11 @@ impl FromStr for Direction {
 
 /// How the sender should issue datagrams.
 #[derive(Debug, derive_more::Display, Clone, Copy, PartialEq, Eq)]
+#[display(rename_all = "lowercase")]
 pub enum SendMode {
     /// `Connection::send_datagram`: drops the oldest queued datagram on backpressure.
-    #[display("drop")]
     Drop,
     /// `Connection::send_datagram_wait`: backpressures (waits for buffer space).
-    #[display("wait")]
     Wait,
 }
 
@@ -361,12 +360,10 @@ impl FromStr for SendMode {
 
 /// Congestion controller to use.
 #[derive(Debug, derive_more::Display, Clone, Copy, PartialEq, Eq)]
+#[display(rename_all = "lowercase")]
 pub enum Congestion {
-    #[display("cubic")]
     Cubic,
-    #[display("newreno")]
     NewReno,
-    #[display("bbr3")]
     Bbr3,
 }
 
