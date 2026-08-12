@@ -25,7 +25,7 @@ use bench::{
 };
 use bytes::Bytes;
 use clap::Parser;
-use noq::{Connection, ConnectionError, Endpoint, VarInt};
+use noq::{Connection, ConnectionError, Endpoint, SendDatagramError, VarInt};
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 
 /// Application close code used to signal a clean end of the benchmark.
@@ -245,48 +245,53 @@ async fn run_both(conn: Connection, opt: DatagramOpt, role: Role) -> Result<Data
 /// Flood `total_bytes` worth of datagrams. Does NOT close the connection or signal
 /// completion; the caller coordinates shutdown.
 async fn send_loop(conn: &Connection, opt: DatagramOpt) -> Result<DatagramCounters> {
-    let max_size = conn
-        .max_datagram_size()
-        .context("datagrams unsupported or disabled")?;
-    let pkt_size = opt.packet_size.min(max_size);
-    if pkt_size == 0 {
-        anyhow::bail!("packet_size resolves to 0");
-    }
     let batch_size = opt.batch_size.max(1);
     if batch_size > 1 && opt.send_mode == SendMode::Wait {
         anyhow::bail!("--batch-size > 1 requires --send-mode drop");
     }
-    let payload = Bytes::from(vec![0xABu8; pkt_size]);
+    let mut pkt_size = clamped_packet_size(conn, opt)?;
+    let mut payload = Bytes::from(vec![0xABu8; pkt_size]);
 
     let start = Instant::now();
     let mut sent_bytes = 0u64;
     let mut sent_packets = 0u64;
     if batch_size > 1 {
-        let batch = vec![payload; batch_size];
+        let mut batch = vec![payload; batch_size];
         while sent_bytes < opt.total_bytes {
             wait_for_send_space(conn, batch_size * pkt_size).await;
-            let queued = conn
-                .send_many_datagrams(&batch)
-                .map_err(|e| anyhow::anyhow!("send_many_datagrams failed: {e}"))?;
-            sent_bytes += (queued * pkt_size) as u64;
-            sent_packets += queued as u64;
+            match conn.send_many_datagrams(&batch) {
+                Ok(queued) => {
+                    sent_bytes += (queued * pkt_size) as u64;
+                    sent_packets += queued as u64;
+                }
+                Err(SendDatagramError::TooLarge) => {
+                    pkt_size = shrink_packet_size(conn, opt, pkt_size)?;
+                    batch = vec![Bytes::from(vec![0xABu8; pkt_size]); batch_size];
+                }
+                Err(e) => anyhow::bail!("send_many_datagrams failed: {e}"),
+            }
         }
     } else {
         while sent_bytes < opt.total_bytes {
             let pkt = payload.clone();
-            match opt.send_mode {
+            let sent = match opt.send_mode {
                 SendMode::Drop => {
                     wait_for_send_space(conn, pkt_size).await;
                     conn.send_datagram(pkt)
-                        .map_err(|e| anyhow::anyhow!("send_datagram failed: {e}"))?
                 }
-                SendMode::Wait => conn
-                    .send_datagram_wait(pkt)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("send_datagram_wait failed: {e}"))?,
+                SendMode::Wait => conn.send_datagram_wait(pkt).await,
+            };
+            match sent {
+                Ok(()) => {
+                    sent_bytes += pkt_size as u64;
+                    sent_packets += 1;
+                }
+                Err(SendDatagramError::TooLarge) => {
+                    pkt_size = shrink_packet_size(conn, opt, pkt_size)?;
+                    payload = Bytes::from(vec![0xABu8; pkt_size]);
+                }
+                Err(e) => anyhow::bail!("send_datagram failed: {e}"),
             }
-            sent_bytes += pkt_size as u64;
-            sent_packets += 1;
         }
     }
     let send_elapsed = start.elapsed();
@@ -297,6 +302,34 @@ async fn send_loop(conn: &Connection, opt: DatagramOpt) -> Result<DatagramCounte
         send_elapsed,
         ..Default::default()
     })
+}
+
+/// The requested payload size, clamped to what the connection can carry now.
+fn clamped_packet_size(conn: &Connection, opt: DatagramOpt) -> Result<usize> {
+    let max_size = conn
+        .max_datagram_size()
+        .context("datagrams unsupported or disabled")?;
+    let pkt_size = opt.packet_size.min(max_size);
+    if pkt_size == 0 {
+        anyhow::bail!("packet_size resolves to 0");
+    }
+    Ok(pkt_size)
+}
+
+/// Re-clamp the payload after the connection rejected `current` as too large.
+///
+/// The maximum datagram size is not fixed for the life of a connection: MTU
+/// discovery raises it, and black hole detection drops it back to the minimum
+/// MTU. A flood that started while the estimate was high keeps running at the
+/// lower size instead of failing.
+fn shrink_packet_size(conn: &Connection, opt: DatagramOpt, current: usize) -> Result<usize> {
+    let pkt_size = clamped_packet_size(conn, opt)?;
+    if pkt_size >= current {
+        anyhow::bail!(
+            "datagram of {current} bytes rejected as too large, but the limit is {pkt_size}"
+        );
+    }
+    Ok(pkt_size)
 }
 
 /// Wait until the outgoing datagram buffer has room for `bytes`.
