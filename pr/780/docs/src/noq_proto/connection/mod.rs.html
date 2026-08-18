@@ -5879,64 +5879,64 @@
 <a href=#5879 id=5879 data-nosnippet>5879</a>        <span class="kw">let </span>is_client = <span class="self">self</span>.side().is_client();
 <a href=#5880 id=5880 data-nosnippet>5880</a>        <span class="kw">let </span>immediate_ack_allowed = <span class="self">self</span>.peer_supports_ack_frequency();
 <a href=#5881 id=5881 data-nosnippet>5881</a>
-<a href=#5882 id=5882 data-nosnippet>5882</a>        <span class="kw">for </span>(path_id, path) <span class="kw">in </span><span class="self">self</span>.paths.iter_mut() {
+<a href=#5882 id=5882 data-nosnippet>5882</a>        <span class="kw">for </span>path_id <span class="kw">in </span><span class="self">self</span>.spaces[SpaceKind::Data].number_spaces.keys() {
 <a href=#5883 id=5883 data-nosnippet>5883</a>            <span class="kw">if </span><span class="self">self</span>.abandoned_paths.contains(path_id) {
 <a href=#5884 id=5884 data-nosnippet>5884</a>                <span class="kw">continue</span>;
 <a href=#5885 id=5885 data-nosnippet>5885</a>            }
 <a href=#5886 id=5886 data-nosnippet>5886</a>            open_paths += <span class="number">1</span>;
 <a href=#5887 id=5887 data-nosnippet>5887</a>
-<a href=#5888 id=5888 data-nosnippet>5888</a>            <span class="comment">// Read the network path BEFORE clearing local_ip, so the hint can
-<a href=#5889 id=5889 data-nosnippet>5889</a>            // check which interface the path was using.
-<a href=#5890 id=5890 data-nosnippet>5890</a>            </span><span class="kw">let </span>network_path = path.data.network_path;
-<a href=#5891 id=5891 data-nosnippet>5891</a>
-<a href=#5892 id=5892 data-nosnippet>5892</a>            <span class="comment">// Clear the local address for it to be obtained from the socket again. This applies to
-<a href=#5893 id=5893 data-nosnippet>5893</a>            // all paths, regardless of being considered recoverable or not
-<a href=#5894 id=5894 data-nosnippet>5894</a>            </span>path.data.network_path.local_ip = <span class="prelude-val">None</span>;
-<a href=#5895 id=5895 data-nosnippet>5895</a>            <span class="kw">let </span>remote = network_path.remote;
-<a href=#5896 id=5896 data-nosnippet>5896</a>
-<a href=#5897 id=5897 data-nosnippet>5897</a>            <span class="comment">// Without multipath, the connection tries to recover the single path, whereas with
-<a href=#5898 id=5898 data-nosnippet>5898</a>            // multipath, even in a single-path scenario, we attempt to migrate the path to a new
-<a href=#5899 id=5899 data-nosnippet>5899</a>            // PathId.
-<a href=#5900 id=5900 data-nosnippet>5900</a>            </span><span class="kw">let </span>attempt_to_recover = <span class="kw">if </span>is_multipath_negotiated {
-<a href=#5901 id=5901 data-nosnippet>5901</a>                <span class="comment">// Use the hint to determine if the path can recover. When no hint is
-<a href=#5902 id=5902 data-nosnippet>5902</a>                // provided, clients default to non-recoverable (abandon and re-open)
-<a href=#5903 id=5903 data-nosnippet>5903</a>                // while servers default to recoverable (attempt in-place recovery).
-<a href=#5904 id=5904 data-nosnippet>5904</a>                </span>hint.map(|h| h.is_path_recoverable(<span class="kw-2">*</span>path_id, network_path))
-<a href=#5905 id=5905 data-nosnippet>5905</a>                    .unwrap_or(!is_client)
-<a href=#5906 id=5906 data-nosnippet>5906</a>            } <span class="kw">else </span>{
-<a href=#5907 id=5907 data-nosnippet>5907</a>                <span class="comment">// In the non multipath case, we try to recover the single active path
-<a href=#5908 id=5908 data-nosnippet>5908</a>                </span><span class="bool-val">true
-<a href=#5909 id=5909 data-nosnippet>5909</a>            </span>};
-<a href=#5910 id=5910 data-nosnippet>5910</a>
-<a href=#5911 id=5911 data-nosnippet>5911</a>            <span class="kw">if </span>attempt_to_recover {
-<a href=#5912 id=5912 data-nosnippet>5912</a>                recoverable_paths.push((<span class="kw-2">*</span>path_id, remote));
-<a href=#5913 id=5913 data-nosnippet>5913</a>            } <span class="kw">else </span>{
-<a href=#5914 id=5914 data-nosnippet>5914</a>                <span class="comment">// pns can never be None, that would be a logical error.
-<a href=#5915 id=5915 data-nosnippet>5915</a>                </span><span class="kw">let </span>path_status = <span class="self">self</span>.spaces[SpaceKind::Data]
-<a href=#5916 id=5916 data-nosnippet>5916</a>                    .number_spaces
-<a href=#5917 id=5917 data-nosnippet>5917</a>                    .get(path_id)
-<a href=#5918 id=5918 data-nosnippet>5918</a>                    .map(|pns| pns.local_status())
-<a href=#5919 id=5919 data-nosnippet>5919</a>                    .unwrap_or_default();
-<a href=#5920 id=5920 data-nosnippet>5920</a>                non_recoverable_paths.push((<span class="kw-2">*</span>path_id, remote, path_status));
-<a href=#5921 id=5921 data-nosnippet>5921</a>            }
-<a href=#5922 id=5922 data-nosnippet>5922</a>        }
+<a href=#5888 id=5888 data-nosnippet>5888</a>            <span class="kw">let </span>path = <span class="self">self</span>.paths.get_mut(path_id).expect(<span class="string">"PathData missing"</span>);
+<a href=#5889 id=5889 data-nosnippet>5889</a>
+<a href=#5890 id=5890 data-nosnippet>5890</a>            <span class="comment">// Read the network path BEFORE clearing local_ip, so the hint can
+<a href=#5891 id=5891 data-nosnippet>5891</a>            // check which interface the path was using.
+<a href=#5892 id=5892 data-nosnippet>5892</a>            </span><span class="kw">let </span>network_path = path.data.network_path;
+<a href=#5893 id=5893 data-nosnippet>5893</a>
+<a href=#5894 id=5894 data-nosnippet>5894</a>            <span class="comment">// Clear the local address for it to be obtained from the socket again. This applies to
+<a href=#5895 id=5895 data-nosnippet>5895</a>            // all paths, regardless of being considered recoverable or not
+<a href=#5896 id=5896 data-nosnippet>5896</a>            </span>path.data.network_path.local_ip = <span class="prelude-val">None</span>;
+<a href=#5897 id=5897 data-nosnippet>5897</a>            <span class="kw">let </span>remote = network_path.remote;
+<a href=#5898 id=5898 data-nosnippet>5898</a>
+<a href=#5899 id=5899 data-nosnippet>5899</a>            <span class="comment">// Without multipath, the connection tries to recover the single path, whereas with
+<a href=#5900 id=5900 data-nosnippet>5900</a>            // multipath, even in a single-path scenario, we attempt to migrate the path to a new
+<a href=#5901 id=5901 data-nosnippet>5901</a>            // PathId.
+<a href=#5902 id=5902 data-nosnippet>5902</a>            </span><span class="kw">let </span>attempt_to_recover = <span class="kw">if </span>is_multipath_negotiated {
+<a href=#5903 id=5903 data-nosnippet>5903</a>                <span class="comment">// Use the hint to determine if the path can recover. When no hint is
+<a href=#5904 id=5904 data-nosnippet>5904</a>                // provided, clients default to non-recoverable (abandon and re-open)
+<a href=#5905 id=5905 data-nosnippet>5905</a>                // while servers default to recoverable (attempt in-place recovery).
+<a href=#5906 id=5906 data-nosnippet>5906</a>                </span>hint.map(|h| h.is_path_recoverable(<span class="kw-2">*</span>path_id, network_path))
+<a href=#5907 id=5907 data-nosnippet>5907</a>                    .unwrap_or(!is_client)
+<a href=#5908 id=5908 data-nosnippet>5908</a>            } <span class="kw">else </span>{
+<a href=#5909 id=5909 data-nosnippet>5909</a>                <span class="comment">// In the non multipath case, we try to recover the single active path
+<a href=#5910 id=5910 data-nosnippet>5910</a>                </span><span class="bool-val">true
+<a href=#5911 id=5911 data-nosnippet>5911</a>            </span>};
+<a href=#5912 id=5912 data-nosnippet>5912</a>
+<a href=#5913 id=5913 data-nosnippet>5913</a>            <span class="kw">if </span>attempt_to_recover {
+<a href=#5914 id=5914 data-nosnippet>5914</a>                recoverable_paths.push((<span class="kw-2">*</span>path_id, remote));
+<a href=#5915 id=5915 data-nosnippet>5915</a>            } <span class="kw">else </span>{
+<a href=#5916 id=5916 data-nosnippet>5916</a>                non_recoverable_paths.push((<span class="kw-2">*</span>path_id, remote));
+<a href=#5917 id=5917 data-nosnippet>5917</a>            }
+<a href=#5918 id=5918 data-nosnippet>5918</a>        }
+<a href=#5919 id=5919 data-nosnippet>5919</a>
+<a href=#5920 id=5920 data-nosnippet>5920</a>        <span class="comment">/* NON RECOVERABLE PATHS */
+<a href=#5921 id=5921 data-nosnippet>5921</a>        // This are handled first, so that in case the treatment intended for these fails, we can
+<a href=#5922 id=5922 data-nosnippet>5922</a>        // go the recoverable route instead.
 <a href=#5923 id=5923 data-nosnippet>5923</a>
-<a href=#5924 id=5924 data-nosnippet>5924</a>        <span class="comment">/* NON RECOVERABLE PATHS */
-<a href=#5925 id=5925 data-nosnippet>5925</a>        // This are handled first, so that in case the treatment intended for these fails, we can
-<a href=#5926 id=5926 data-nosnippet>5926</a>        // go the recoverable route instead.
-<a href=#5927 id=5927 data-nosnippet>5927</a>
-<a href=#5928 id=5928 data-nosnippet>5928</a>        // Decide if we need to close first or open first in the multipath case.
-<a href=#5929 id=5929 data-nosnippet>5929</a>        // - Opening first has a higher risk of getting limited by the negotiated MAX_PATH_ID.
-<a href=#5930 id=5930 data-nosnippet>5930</a>        // - Closing first risks this being the only open path.
-<a href=#5931 id=5931 data-nosnippet>5931</a>        // We prefer closing paths first unless we identify this is the last open path.
-<a href=#5932 id=5932 data-nosnippet>5932</a>        </span><span class="kw">let </span>open_first = open_paths == non_recoverable_paths.len();
-<a href=#5933 id=5933 data-nosnippet>5933</a>
-<a href=#5934 id=5934 data-nosnippet>5934</a>        <span class="kw">for </span>(path_id, remote, status) <span class="kw">in </span>non_recoverable_paths.into_iter() {
-<a href=#5935 id=5935 data-nosnippet>5935</a>            <span class="kw">let </span>network_path = FourTuple {
-<a href=#5936 id=5936 data-nosnippet>5936</a>                remote,
-<a href=#5937 id=5937 data-nosnippet>5937</a>                local_ip: <span class="prelude-val">None</span>, <span class="comment">/* allow the local ip to be discovered */
-<a href=#5938 id=5938 data-nosnippet>5938</a>            </span>};
-<a href=#5939 id=5939 data-nosnippet>5939</a>
+<a href=#5924 id=5924 data-nosnippet>5924</a>        // Decide if we need to close first or open first in the multipath case.
+<a href=#5925 id=5925 data-nosnippet>5925</a>        // - Opening first has a higher risk of getting limited by the negotiated MAX_PATH_ID.
+<a href=#5926 id=5926 data-nosnippet>5926</a>        // - Closing first risks this being the only open path.
+<a href=#5927 id=5927 data-nosnippet>5927</a>        // We prefer closing paths first unless we identify this is the last open path.
+<a href=#5928 id=5928 data-nosnippet>5928</a>        </span><span class="kw">let </span>open_first = open_paths == non_recoverable_paths.len();
+<a href=#5929 id=5929 data-nosnippet>5929</a>
+<a href=#5930 id=5930 data-nosnippet>5930</a>        <span class="kw">for </span>(path_id, remote) <span class="kw">in </span>non_recoverable_paths.into_iter() {
+<a href=#5931 id=5931 data-nosnippet>5931</a>            <span class="kw">let </span>network_path = FourTuple {
+<a href=#5932 id=5932 data-nosnippet>5932</a>                remote,
+<a href=#5933 id=5933 data-nosnippet>5933</a>                local_ip: <span class="prelude-val">None</span>, <span class="comment">/* allow the local ip to be discovered */
+<a href=#5934 id=5934 data-nosnippet>5934</a>            </span>};
+<a href=#5935 id=5935 data-nosnippet>5935</a>            <span class="kw">let </span>status = <span class="self">self</span>.spaces[SpaceKind::Data]
+<a href=#5936 id=5936 data-nosnippet>5936</a>                .number_spaces
+<a href=#5937 id=5937 data-nosnippet>5937</a>                .get(<span class="kw-2">&amp;</span>path_id)
+<a href=#5938 id=5938 data-nosnippet>5938</a>                .map(|pns| pns.local_status())
+<a href=#5939 id=5939 data-nosnippet>5939</a>                .expect(<span class="string">"spaces iterated above"</span>);
 <a href=#5940 id=5940 data-nosnippet>5940</a>            <span class="kw">if </span>open_first &amp;&amp; <span class="kw">let </span><span class="prelude-val">Err</span>(e) = <span class="self">self</span>.open_path(network_path, status, now) {
 <a href=#5941 id=5941 data-nosnippet>5941</a>                <span class="kw">if </span><span class="self">self</span>.side().is_client() {
 <a href=#5942 id=5942 data-nosnippet>5942</a>                    <span class="macro">debug!</span>(%e, <span class="string">"Failed to open new path for network change"</span>);
