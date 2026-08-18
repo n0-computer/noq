@@ -238,7 +238,10 @@ pub(super) struct PacketNumberSpace {
     /// reported. This is not required by the spec, and in the future might be changed for
     /// simply requiring a first ack'd packet.
     pub(super) open_status: OpenStatus,
-    /// The QUIC-MULTIPATH path status
+    /// The QUIC-MULTIPATH path status.
+    ///
+    /// This field is unused for the Initial and Handshake spaces, and when multipath is not
+    /// negotiated.
     pub(super) status: PathStatusState,
 
     /// Highest received packet number, if any
