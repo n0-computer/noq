@@ -5851,11 +5851,13 @@ impl Connection {
         let is_client = self.side().is_client();
         let immediate_ack_allowed = self.peer_supports_ack_frequency();
 
-        for (path_id, path) in self.paths.iter_mut() {
+        for path_id in self.spaces[SpaceKind::Data].number_spaces.keys() {
             if self.abandoned_paths.contains(path_id) {
                 continue;
             }
             open_paths += 1;
+
+            let path = self.paths.get_mut(path_id).expect("PathData missing");
 
             // Read the network path BEFORE clearing local_ip, so the hint can
             // check which interface the path was using.
@@ -5883,13 +5885,7 @@ impl Connection {
             if attempt_to_recover {
                 recoverable_paths.push((*path_id, remote));
             } else {
-                // pns can never be None, that would be a logical error.
-                let path_status = self.spaces[SpaceKind::Data]
-                    .number_spaces
-                    .get(path_id)
-                    .map(|pns| pns.local_status())
-                    .unwrap_or_default();
-                non_recoverable_paths.push((*path_id, remote, path_status));
+                non_recoverable_paths.push((*path_id, remote));
             }
         }
 
@@ -5903,12 +5899,16 @@ impl Connection {
         // We prefer closing paths first unless we identify this is the last open path.
         let open_first = open_paths == non_recoverable_paths.len();
 
-        for (path_id, remote, status) in non_recoverable_paths.into_iter() {
+        for (path_id, remote) in non_recoverable_paths.into_iter() {
             let network_path = FourTuple {
                 remote,
                 local_ip: None, /* allow the local ip to be discovered */
             };
-
+            let status = self.spaces[SpaceKind::Data]
+                .number_spaces
+                .get(&path_id)
+                .map(|pns| pns.local_status())
+                .expect("spaces iterated above");
             if open_first && let Err(e) = self.open_path(network_path, status, now) {
                 if self.side().is_client() {
                     debug!(%e, "Failed to open new path for network change");
