@@ -133,10 +133,8 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           persist-credentials: false
-      # Pinned: nightly-2026-07-30 and later fail to build std for espidf --
-      # rust-lang/rust#158168 landed set_permissions_nofollow, which references
-      # libc::AT_FDCWD, and libc does not define it for that target.
-      # Unpin once libc catches up. Same fix as n0-computer/net-tools#202.
+      # Pinned: nightly-2026-07-30+ fails to build std for espidf, libc has no
+      # AT_FDCWD there. Unpin once libc catches up (n0-computer/net-tools#202).
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
           toolchain: nightly-2026-07-29
@@ -336,9 +334,8 @@ jobs:
           toolchain: nightly
       - name: Install cargo-fuzz
         run: cargo install --locked cargo-fuzz
-      # `cargo fuzz build` has no --locked/--offline/--frozen flag of its own,
-      # so pin the dependency set the only way it allows: fetch exactly what
-      # Cargo.lock names, then deny the build any network access at all.
+      # `cargo fuzz build` takes no --locked: fetch what Cargo.lock names,
+      # then build offline.
       - name: Fetch locked dependencies
         run: cargo fetch --locked
       - name: Build fuzz targets
@@ -452,11 +449,9 @@ jobs:
     env:
       RUSTC_WRAPPER: "sccache"
       SCCACHE_GHA_ENABLED: "on"
-      # Temporarily built from our fork, which adds --locked passthrough
-      # (awslabs/cargo-check-external-types#251). Revert to `cargo binstall
-      # cargo-check-external-types@<version>` once that is merged and released.
-      # The toolchain is the one the fork's rust-toolchain.toml pins; update
-      # both together.
+      # Fork adds --locked passthrough (awslabs/cargo-check-external-types#251);
+      # back to binstall once released. TOOLCHAIN mirrors the fork's
+      # rust-toolchain.toml -- bump both together.
       CARGO_CHECK_EXTERNAL_TYPES_REV: "ebc3670edce4f62ad1be7622a5654172ce0c6ffd"
       TOOLCHAIN: "nightly-2026-03-20"
     steps:

@@ -4,24 +4,23 @@ version: 3
 min_age:
   value: 7 # days, matches the dependabot cooldown
 
-# These three have no semver tag upstream to pin against, so the comment cannot
-# be verified against a release. Each is a fork or a tool-named tag; revisit
-# rather than leave indefinitely.
+# No semver tag upstream to verify the version comment against. Forks and
+# tool-named tags; revisit rather than leave indefinitely.
 rules:
   - ignore: true
     conditions:
-      # fork of nttld/setup-ndk, 1 commit ahead since 2024-07 ("allow other
-      # hosts"). Upstream has v1.6.0 -- upstream the patch and switch.
+      # fork of nttld/setup-ndk, 1 commit ahead ("allow other hosts").
+      # Upstream the patch and switch to v1.6.0.
       - expr: |
           ActionName == "arqu/setup-ndk"
   - ignore: true
     conditions:
-      # every tag in dtolnay/install is a tool name, none semver.
+      # dtolnay/install tags are tool names, not semver.
       - expr: |
           ActionName == "dtolnay/install"
   - ignore: true
     conditions:
-      # fork of obi1kenobi/cargo-semver-checks-action, which is now at v2.9.
-      # Check whether the baseline feature landed upstream.
+      # fork of obi1kenobi/cargo-semver-checks-action (now v2.9); check if the
+      # baseline feature landed upstream.
       - expr: |
           ActionName == "n0-computer/cargo-semver-checks-action"

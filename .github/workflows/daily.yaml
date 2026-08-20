@@ -162,11 +162,8 @@ jobs:
         with:
           go-version: 'stable'
 
-      # --no-dev-deps rewrites Cargo.toml while cargo-hack runs, which makes
-      # cargo want to regenerate Cargo.lock -- so --locked is rejected here
-      # ("cannot update the lock file ... because --locked was passed").
-      # Fetch the locked dependency set first and then run offline: same
-      # guarantee in practice, since nothing new can be pulled mid-run.
+      # --no-dev-deps rewrites Cargo.toml mid-run, so cargo rejects --locked.
+      # Fetch locked first, then run offline -- same guarantee.
       - run: cargo fetch --locked
       - run: cargo hack check --offline --feature-powerset --depth 3 --optional-deps --no-dev-deps --ignore-private --skip "$SKIP_FEATURES"
 

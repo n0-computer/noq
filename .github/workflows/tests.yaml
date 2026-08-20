@@ -386,11 +386,9 @@ jobs:
           go-version: "stable"
           cache: false
       - name: cargo check
-        # No --locked: re-resolving is the point, which makes this the one job
-        # that can pick a version the lockfile has never seen. -Z min-publish-age
-        # covers that, refusing versions younger than the window. Inline flag
-        # only -- the config.toml form is silently ignored on stable.
-        # (A Dependabot cooldown gates PRs, not CI resolution.)
+        # No --locked: re-resolving is the point, so -Z min-publish-age guards
+        # the versions the lockfile has never seen. Inline flag only, the
+        # config.toml form is ignored on stable.
         run: |
           rm -f Cargo.lock
           cargo +nightly check -Z minimal-versions -Z min-publish-age \
@@ -497,11 +495,9 @@ jobs:
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
 
       - name: cargo check
-        # No --locked: re-resolving is the point, which makes this the one job
-        # that can pick a version the lockfile has never seen. -Z min-publish-age
-        # covers that, refusing versions younger than the window. Inline flag
-        # only -- the config.toml form is silently ignored on stable.
-        # (A Dependabot cooldown gates PRs, not CI resolution.)
+        # No --locked: re-resolving is the point, so -Z min-publish-age guards
+        # the versions the lockfile has never seen. Inline flag only, the
+        # config.toml form is ignored on stable.
         run: |
           rm -Force Cargo.lock
           cargo +nightly check -Z minimal-versions -Z min-publish-age `

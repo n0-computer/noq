@@ -9,18 +9,8 @@ updates:
       github-actions:
         patterns:
           - "*"  # Group all Actions updates into a single larger pull request
-    # Supply-chain hardening: never propose a release until it has been public
-    # long enough for a compromised publish to be noticed and pulled. A typical
-    # registry compromise is live for well under a day before it is yanked.
-    #
-    # 3 days currently matches Dependabot's own default, but we set it
-    # explicitly so the value is ours and does not move if that default does.
-    #
-    # `default-days` is the only cooldown key supported for github-actions;
-    # the semver-* keys are not.
-    #
-    # Cooldown applies to *version* updates only -- Dependabot *security*
-    # updates ignore it, so real advisories are never delayed by this.
+    # Let a compromised publish be noticed before we propose it. Applies to
+    # version updates only -- security updates ignore the cooldown.
     cooldown:
       default-days: 7
     schedule:
@@ -30,10 +20,6 @@ updates:
       timezone: "America/New_York"
   - package-ecosystem: cargo
     directory: /
-    # See the note above: 3 days of public exposure on crates.io before a
-    # version is eligible for a PR.
-    # `semver-{major,minor,patch}-days` are also supported here if we ever want
-    # to hold major bumps back longer than patches.
     cooldown:
       default-days: 7
     schedule:

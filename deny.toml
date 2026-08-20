@@ -1,7 +1,6 @@
 [advisories]
-# A yanked dependency is how the 2026-08-20 arrayref attack was staged: yank
-# the versions satisfying a range so the malicious upload is the only one left.
-# Fail on it rather than warn.
+# Yanking is how the 2026-08-20 arrayref attack was staged: yank every version
+# satisfying a range so the malicious upload is the only one left.
 yanked = "deny"
 ignore = [
     # gcc is only included as a minimal-versions workaround, not actually used

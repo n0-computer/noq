@@ -95,10 +95,8 @@ jobs:
           sed -i -E "/^noq = \"[0-9.]+\"/s/\"[0-9.]+\"/$NOQ_VERSION/" iroh/bench/Cargo.toml
 
 
-      # No --locked in this job by design: it rewrites iroh's Cargo.toml to
-      # point [patch.crates-io] at this checkout, which necessarily
-      # regenerates iroh's lockfile. Dependency pinning here belongs to
-      # the iroh repo, not to us.
+      # No --locked: patching iroh to this checkout regenerates iroh's
+      # lockfile. Pinning there is the iroh repo's job.
       - name: Build patchbay tests
         working-directory: iroh
         run: cargo make patchbay --no-run
