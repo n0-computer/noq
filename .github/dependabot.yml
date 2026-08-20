@@ -22,7 +22,7 @@ updates:
     # Cooldown applies to *version* updates only -- Dependabot *security*
     # updates ignore it, so real advisories are never delayed by this.
     cooldown:
-      default-days: 3
+      default-days: 7
     schedule:
       interval: weekly
       day: "thursday"
@@ -35,7 +35,7 @@ updates:
     # `semver-{major,minor,patch}-days` are also supported here if we ever want
     # to hold major bumps back longer than patches.
     cooldown:
-      default-days: 3
+      default-days: 7
     schedule:
       interval: weekly
       day: "thursday"
