@@ -69,7 +69,7 @@ jobs:
           toolchain: ${{ matrix.rust }}
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@a2a5f6e99e1a31540baa0468acfa302cff0f359f # v2.86.4
+        uses: taiki-e/install-action@b20dedce73af6905cdc30d6611090c9b67557c8d # v2.85.12
         with:
           tool: nextest@${{ env.NEXTEST_VERSION }}
 
@@ -159,7 +159,7 @@ jobs:
             cargo test --locked -p $i --doc $FEATURES
           done
 
-      - uses: taiki-e/install-action@a2a5f6e99e1a31540baa0468acfa302cff0f359f # v2
+      - uses: taiki-e/install-action@b20dedce73af6905cdc30d6611090c9b67557c8d # v2.85.12
         with:
           tool: cargo-make
 

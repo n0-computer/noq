@@ -1,6 +1,6 @@
 # Static analysis of our own workflows. The tree is clean, so this gates on
 # every finding, not just High.
-name: zizmor
+name: workflow lint
 
 on:
   pull_request:
@@ -21,8 +21,35 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           persist-credentials: false
-      - uses: taiki-e/install-action@a2a5f6e99e1a31540baa0468acfa302cff0f359f # v2.86.4
+      - uses: taiki-e/install-action@b20dedce73af6905cdc30d6611090c9b67557c8d # v2.85.12
         with:
           tool: zizmor
       # whole repo, not just workflows/ -- dependabot.yml is audited too
       - run: zizmor --offline .
+
+  pinact:
+    # Fails if a pinned SHA no longer matches its version comment, or if a pin
+    # is younger than the cooldown in .pinact.yaml.
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      # Installed from the release tarball with a checksum check rather than
+      # via pinact-action, which is built to push commits and wants
+      # contents:write. This job only reads.
+      - name: Install pinact
+        env:
+          PINACT_VERSION: "4.1.1"
+        run: |
+          set -euo pipefail
+          base="https://github.com/suzuki-shunsuke/pinact/releases/download/v${PINACT_VERSION}"
+          curl -fsSL -O "$base/pinact_linux_amd64.tar.gz"
+          curl -fsSL -O "$base/pinact_${PINACT_VERSION}_checksums.txt"
+          grep ' pinact_linux_amd64.tar.gz$' "pinact_${PINACT_VERSION}_checksums.txt" | sha256sum -c -
+          tar xzf pinact_linux_amd64.tar.gz pinact
+          install -m755 pinact /usr/local/bin/pinact
+      - run: pinact run --check --verify-comment --verify-min-age
+        env:
+          GITHUB_TOKEN: ${{ github.token }}

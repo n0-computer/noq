@@ -112,7 +112,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y musl-tools
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@a2a5f6e99e1a31540baa0468acfa302cff0f359f # v2.86.4
+        uses: taiki-e/install-action@b20dedce73af6905cdc30d6611090c9b67557c8d # v2.85.12
         with:
           tool: nextest@0.9.80
       - name: Run tests
@@ -362,7 +362,7 @@ jobs:
           toolchain: stable
           components: rustfmt
       - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
-      - uses: taiki-e/install-action@a2a5f6e99e1a31540baa0468acfa302cff0f359f # v2
+      - uses: taiki-e/install-action@b20dedce73af6905cdc30d6611090c9b67557c8d # v2.85.12
         with:
           tool: cargo-make
       - run: cargo make format-check
@@ -468,7 +468,7 @@ jobs:
           toolchain: ${{ env.TOOLCHAIN }}
       - name: Install sccache
         uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
-      - uses: taiki-e/install-action@a2a5f6e99e1a31540baa0468acfa302cff0f359f # v2
+      - uses: taiki-e/install-action@b20dedce73af6905cdc30d6611090c9b67557c8d # v2.85.12
         with:
           tool: cargo-make
       - name: Install cargo-check-external-types
