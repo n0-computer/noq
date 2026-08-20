@@ -12,6 +12,10 @@ concurrency:
   group: cleanup-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Default to read-only; jobs that need more grant it explicitly.
+permissions:
+  contents: read
+
 jobs:
   clean_docs_branch:
     timeout-minutes: 45

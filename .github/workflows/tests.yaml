@@ -26,6 +26,10 @@ env:
   CRATES_LIST: "noq,noq-proto,noq-udp"
   NEXTEST_VERSION: "0.9.80"
 
+# Default to read-only; jobs that need more grant it explicitly.
+permissions:
+  contents: read
+
 jobs:
   build_and_test_nix:
     timeout-minutes: 30
@@ -331,7 +335,8 @@ jobs:
     timeout-minutes: 45
     # Ephemeral only: this job runs build scripts from unvetted versions.
     runs-on: ${{ matrix.runner }}
-    permissions: {}
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -376,7 +381,8 @@ jobs:
     # Still self-hosted; moving to windows-latest needs sccache switched to
     # SCCACHE_GHA_ENABLED. Follow-up.
     runs-on: ${{ matrix.runner }}
-    permissions: {}
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:

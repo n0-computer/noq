@@ -12,6 +12,10 @@ concurrency:
   group: beta-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Default to read-only; jobs that need more grant it explicitly.
+permissions:
+  contents: read
+
 jobs:
   tests:
     uses: './.github/workflows/tests.yaml'

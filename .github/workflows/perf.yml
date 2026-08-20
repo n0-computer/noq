@@ -26,6 +26,10 @@ env:
   SCCACHE_GHA_ENABLED: "true"
   RUSTC_WRAPPER: "sccache"
 
+# Default to read-only; jobs that need more grant it explicitly.
+permissions:
+  contents: read
+
 jobs:
   build:
     name: Build ${{ matrix.impl }} perf
@@ -187,6 +191,9 @@ jobs:
           ./cleanup.sh || true
 
   compare:
+    permissions:
+      contents: read
+      pull-requests: write   # posts the comparison comment
     name: Compare results
     needs: [raw-perf, netsim-perf]
     if: always()

@@ -12,6 +12,10 @@ on:
 concurrency:
   group: ci-docs-preview
 
+# Default to read-only; jobs that need more grant it explicitly.
+permissions:
+  contents: read
+
 jobs:
   preview_docs:
     permissions:

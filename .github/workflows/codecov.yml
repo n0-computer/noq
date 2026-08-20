@@ -5,6 +5,10 @@ on:
   push:
     branches: ['main']
 
+# Default to read-only; jobs that need more grant it explicitly.
+permissions:
+  contents: read
+
 jobs:
   coverage:
     timeout-minutes: 5

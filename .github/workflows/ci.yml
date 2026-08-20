@@ -19,6 +19,10 @@ env:
   MSRV: "1.88"
   SCCACHE_CACHE_SIZE: "10G"
 
+# Default to read-only; jobs that need more grant it explicitly.
+permissions:
+  contents: read
+
 jobs:
   tests:
     name: CI Test Suite
