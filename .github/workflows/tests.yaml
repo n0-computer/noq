@@ -327,7 +327,9 @@ jobs:
 
   minimal-crates:
     timeout-minutes: 45
+    # Ephemeral only: this job runs build scripts from unvetted versions.
     runs-on: ${{ matrix.runner }}
+    permissions: {}
     strategy:
       fail-fast: false
       matrix:
@@ -337,14 +339,17 @@ jobs:
             os: ubuntu-latest
             release-os: linux
             release-arch: amd64
-            runner: [self-hosted, linux, X64]
+            runner: ubuntu-latest
           - name: macOS-arm-latest
             os: macOS-latest
             release-os: darwin
             release-arch: aarch64
-            runner: [self-hosted, macOS, ARM64]
+            runner: macos-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          # Keep the token out of .git/config, readable by any build script.
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@nightly
       - name: Install Go (required for aws-lc-rs FIPS)
         uses: actions/setup-go@v5
@@ -352,23 +357,24 @@ jobs:
           go-version: "stable"
           cache: false
       - name: cargo check
-        # Deliberately NOT --locked: this job deletes Cargo.lock so that
-        # -Z minimal-versions can re-resolve every dependency down to its
-        # lowest semver-compatible version. That full re-resolution is the
-        # whole point of the job -- and it is also why this is the one job in
-        # the repo that can select a crates.io version the committed lockfile
-        # has never seen. A yank-storm that removes every version satisfying a
-        # range leaves the attacker's release as the only selectable one, so
-        # "minimal" does not imply "old". Rely on the Dependabot cooldown and
-        # on cargo-deny for this job, not on the lockfile.
+        # No --locked: re-resolving is the point, which makes this the one job
+        # that can pick a version the lockfile has never seen. -Z min-publish-age
+        # covers that, refusing versions younger than the window. Inline flag
+        # only -- the config.toml form is silently ignored on stable.
+        # (A Dependabot cooldown gates PRs, not CI resolution.)
         run: |
           rm -f Cargo.lock
-          cargo +nightly check -Z minimal-versions --workspace --exclude fuzz --all-features --lib --bins
+          cargo +nightly check -Z minimal-versions -Z min-publish-age \
+            --config 'registry.global-min-publish-age="3 days"' \
+            --workspace --exclude fuzz --all-features --lib --bins
 
   minimal-crates-windows:
     timeout-minutes: 30
     name: "Minimal Crates (Windows)"
+    # Still self-hosted; moving to windows-latest needs sccache switched to
+    # SCCACHE_GHA_ENABLED. Follow-up.
     runs-on: ${{ matrix.runner }}
+    permissions: {}
     strategy:
       fail-fast: false
       matrix:
@@ -460,15 +466,13 @@ jobs:
         uses: ilammy/msvc-dev-cmd@v1
 
       - name: cargo check
-        # Deliberately NOT --locked: this job deletes Cargo.lock so that
-        # -Z minimal-versions can re-resolve every dependency down to its
-        # lowest semver-compatible version. That full re-resolution is the
-        # whole point of the job -- and it is also why this is the one job in
-        # the repo that can select a crates.io version the committed lockfile
-        # has never seen. A yank-storm that removes every version satisfying a
-        # range leaves the attacker's release as the only selectable one, so
-        # "minimal" does not imply "old". Rely on the Dependabot cooldown and
-        # on cargo-deny for this job, not on the lockfile.
+        # No --locked: re-resolving is the point, which makes this the one job
+        # that can pick a version the lockfile has never seen. -Z min-publish-age
+        # covers that, refusing versions younger than the window. Inline flag
+        # only -- the config.toml form is silently ignored on stable.
+        # (A Dependabot cooldown gates PRs, not CI resolution.)
         run: |
           rm -Force Cargo.lock
-          cargo +nightly check -Z minimal-versions --workspace --exclude fuzz --all-features --lib --bins
+          cargo +nightly check -Z minimal-versions -Z min-publish-age `
+            --config 'registry.global-min-publish-age="3 days"' `
+            --workspace --exclude fuzz --all-features --lib --bins

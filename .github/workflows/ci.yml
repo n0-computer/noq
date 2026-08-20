@@ -325,6 +325,9 @@ jobs:
       - uses: mozilla-actions/sccache-action@v0.0.9
       - uses: taiki-e/install-action@cargo-make
       - run: cargo make format-check
+      - name: Lockfile must not have moved
+        # cargo make takes no --locked; assert the lockfile instead.
+        run: git diff --exit-code Cargo.lock
 
   check_docs:
     timeout-minutes: 30
@@ -415,12 +418,14 @@ jobs:
       - uses: taiki-e/install-action@cargo-make
       - name: Install cargo-check-external-types
         run: cargo binstall cargo-check-external-types@${{ env.CARGO_CHECK_EXTERNAL_TYPES_VERSION }} --locked --no-confirm
-      # Known gap: cargo-check-external-types exposes no --locked,
-      # --offline or --frozen flag, so this step can still re-resolve.
-      # It runs a pinned tool version against a pinned nightly, and the
-      # Dependabot cooldown covers the dependency side.
+      # cargo-check-external-types takes no --locked and shells out as
+      # `cargo rustdoc` passing none through, so it can re-resolve on drift.
+      # A Dependabot cooldown gates PRs, not CI. Guarded below instead.
       - name: Check external types
         run: cargo make check-external-types
+      - name: Lockfile must not have moved
+        # cargo make takes no --locked; assert the lockfile instead.
+        run: git diff --exit-code Cargo.lock
 
   cargo_deny:
     timeout-minutes: 30
