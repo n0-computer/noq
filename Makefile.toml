@@ -113,6 +113,6 @@ args = ["nextest", "run", "--package=noq-proto", "-P", "proptests", "--no-fail-f
 [tasks.check-external-types]
 description = "Run cargo check-external-types on workspace crates"
 workspace = true
-toolchain = "${TOOLCHAIN:nightly-2025-10-18}"
+toolchain = "${TOOLCHAIN:nightly-2026-03-20}"
 command = "cargo"
-args = ["check-external-types", "--features", "__all_without_fips"]
+args = ["check-external-types", "--locked", "--features", "__all_without_fips"]
