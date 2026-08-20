@@ -1536,6 +1536,23 @@ impl Connection {
                 };
             }
 
+            // An earlier packet space hands us its datagram to coalesce into, but what is
+            // left of it may be too small for a whole packet: a CONNECTION_CLOSE packet
+            // padded to MIN_INITIAL_SIZE inside a larger datagram leaves such a tail.
+            // Finish the datagram off, so a new one is started below rather than a packet
+            // being written past the end of this one.
+            let datagram_remaining = transmit.datagram_remaining_mut();
+            if transmit.datagram_start_offset() < transmit.len()
+                && datagram_remaining > 0
+                && datagram_remaining < MIN_PACKET_SPACE
+            {
+                trace!(
+                    datagram_remaining,
+                    "datagram too small for another packet, finishing it"
+                );
+                transmit.finish_datagram();
+            }
+
             // We want to send on this space, check congestion control if we can. But only
             // if we will need to start a new datagram. If we are coalescing into an already
             // started datagram we do not need to check congestion control again.

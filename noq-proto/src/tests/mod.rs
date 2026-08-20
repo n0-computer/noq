@@ -4937,3 +4937,77 @@ fn regression_initial_coalescing_large_cid() {
     pair.time += Duration::from_secs(5);
     pair.drive_client(); // this used to try to build a packet without enough datagram space
 }
+
+/// A CONNECTION_CLOSE written while more than one packet number space still has keys hands
+/// its datagram to the next space to coalesce into, without checking that what is left of
+/// the datagram can hold another packet.
+///
+/// A client pads its Initial CONNECTION_CLOSE packet to `MIN_INITIAL_SIZE`. With an
+/// `initial_mtu` above `MIN_INITIAL_SIZE` that leaves a tail smaller than a packet, and the
+/// Handshake space used to write into that tail: a failed `MIN_PACKET_SPACE` debug assertion
+/// in the debug profile, a packet written past the end of the datagram in the release
+/// profile.
+#[test]
+fn close_during_handshake_does_not_coalesce_into_a_too_small_datagram_tail() {
+    let _guard = subscribe();
+
+    const MTU: u16 = 1250;
+
+    let mut transport = TransportConfig::default();
+    transport.min_mtu(MTU);
+    transport.initial_mtu(MTU);
+    transport.mtu_discovery_config(None);
+    let transport = Arc::new(transport);
+
+    let mut server_cfg = server_config();
+    server_cfg.transport = transport.clone();
+    let mut pair = Pair::new(Default::default(), server_cfg);
+
+    let mut client_cfg = client_config();
+    client_cfg.transport = transport;
+
+    // The client's Initial goes out and the server's flight comes back, but the client only
+    // *receives* it: it now has Handshake keys while still holding its Initial keys, because
+    // a client discards those when it sends its first Handshake packet, which it has not
+    // done yet.
+    let client_ch = pair.begin_connect(client_cfg);
+    pair.drive_client();
+    pair.drive_server();
+
+    let now = pair.time;
+    pair.client.drive_incoming(now);
+    let events: Vec<_> = pair
+        .client
+        .conn_events
+        .remove(&client_ch)
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+    let conn = pair.client.connections.get_mut(&client_ch).unwrap();
+    for event in events {
+        conn.handle_event(event);
+    }
+    conn.close(now, VarInt::from_u32(42), Bytes::from_static(b"bye"));
+
+    let mut buf = Vec::new();
+    let transmit = conn
+        .poll_transmit(now, NonZeroUsize::new(10).expect("known"), &mut buf)
+        .expect("a CONNECTION_CLOSE is sent");
+
+    // The Initial CONNECTION_CLOSE packet fills its datagram to MIN_INITIAL_SIZE, and the
+    // 50 byte tail that leaves in a MTU sized datagram is not handed on: the Handshake and
+    // Data CONNECTION_CLOSE packets go into a datagram of their own.
+    let segment_size = transmit
+        .segment_size
+        .expect("more than one datagram was written");
+    assert_eq!(
+        segment_size,
+        usize::from(MIN_INITIAL_SIZE),
+        "the datagram carrying the Initial CONNECTION_CLOSE ends at MIN_INITIAL_SIZE"
+    );
+    assert!(
+        transmit.size > segment_size,
+        "expected a CONNECTION_CLOSE in a further space, got {} bytes",
+        transmit.size
+    );
+}
