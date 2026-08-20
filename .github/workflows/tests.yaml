@@ -195,6 +195,7 @@ jobs:
           persist-credentials: false
 
       - name: Install ${{ matrix.rust }}
+        shell: bash
         env:
           RUST_TOOLCHAIN: ${{ matrix.rust }}
           RUST_TARGET: ${{ matrix.target }}
@@ -299,14 +300,17 @@ jobs:
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
 
       - name: build tests
+        shell: bash
         run: |
           cargo nextest run --locked --workspace --exclude fuzz $FEATURES --lib --bins --tests --target ${{ matrix.target }} --no-run
 
       - name: list ignored tests
+        shell: bash
         run: |
           cargo nextest list --locked --workspace --exclude fuzz $FEATURES --lib --bins --tests --target ${{ matrix.target }} --run-ignored ignored-only
 
       - name: tests
+        shell: bash
         run: |
           mkdir -p output
           cargo nextest run --locked --workspace --exclude fuzz $FEATURES --lib --bins --tests --profile ci --target "$RUST_TARGET" --run-ignored "$RUN_IGNORED" --no-fail-fast --message-format "$MSG_FORMAT" > "output/${OUT_NAME}.json"
