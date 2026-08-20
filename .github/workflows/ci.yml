@@ -128,8 +128,13 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@7c8d7d138f5c09cef361f8214cf96882cd029cdb # nightly
+      # Pinned: nightly-2026-07-30 and later fail to build std for espidf --
+      # rust-lang/rust#158168 landed set_permissions_nofollow, which references
+      # libc::AT_FDCWD, and libc does not define it for that target.
+      # Unpin once libc catches up. Same fix as n0-computer/net-tools#202.
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
+          toolchain: nightly-2026-07-29
           components: rust-src
       - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
       - name: Check noq for ESP32-C3
