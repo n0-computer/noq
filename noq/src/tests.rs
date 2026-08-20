@@ -336,6 +336,25 @@ impl EndpointFactory {
 
         endpoint
     }
+
+    /// Like [`Self::endpoint_with_config`], but for a client-only endpoint bound to
+    /// `addr` instead of the default IPv4 loopback address. Used by tests that need
+    /// a specific bind address (e.g. a dual-stack wildcard `[::]:0`) rather than
+    /// self-connecting IPv4 loopback endpoints.
+    fn client_endpoint_with_config(
+        &self,
+        addr: SocketAddr,
+        transport_config: TransportConfig,
+    ) -> Endpoint {
+        let transport_config = Arc::new(transport_config);
+        let mut roots = RootCertStore::empty();
+        roots.add(self.cert.cert.der().clone()).unwrap();
+        let endpoint = Endpoint::client(addr).unwrap();
+        let mut client_config = ClientConfig::with_root_certificates(Arc::new(roots)).unwrap();
+        client_config.transport_config(transport_config);
+        endpoint.set_default_client_config(client_config);
+        endpoint
+    }
 }
 
 #[tokio::test]
@@ -1113,6 +1132,106 @@ async fn test_multipath_observed_address() {
     .instrument(info_span!("client"));
 
     tokio::join!(server_task, client_task);
+}
+
+/// Coverage for `normalize_network_path`'s `local_ip` canonicalization (#738).
+///
+/// A client bound to a dual-stack wildcard socket (`[::]:0`) opens an additional
+/// path with an explicit *plain* IPv4 `local_ip` -- standing in for an application
+/// that enumerated its own network interfaces and passed one of their addresses
+/// straight through, the way `open_path`'s docs describe. The path must validate,
+/// and the established `Path::local_ip()` must reflect the address that was
+/// actually requested (not silently fall back to a different one).
+///
+/// Note this is *not* a regression test that fails on unpatched `main`: on this
+/// loopback setup the mismatch this fix targets (an application-supplied plain
+/// IPv4 `local_ip` vs. the representation [`noq_udp::RecvMeta::dst_ip`] reports for
+/// datagrams received on a dual-stack socket, see
+/// [`noq_proto::FourTuple`](proto::FourTuple)'s docs) does not by itself block path
+/// validation here, for reasons not fully tracked down -- most likely because
+/// `early_discard_packet`'s defending comparison only gates already-established
+/// paths, not the initial `PATH_CHALLENGE`/`PATH_RESPONSE` handshake. The #738
+/// report's real symptom was only reproduced on real Android hardware with
+/// physical Wi-Fi/cellular interfaces; this environment has no equivalent, so
+/// this test only guards against future regressions in the normalization itself,
+/// not against #738 recurring.
+#[tokio::test]
+async fn open_path_with_explicit_ipv4_local_ip_on_dualstack_socket() -> TestResult {
+    let _logging = subscribe();
+    let factory = EndpointFactory::new();
+
+    let mut transport_config = TransportConfig::default();
+    transport_config.max_concurrent_multipath_paths(2);
+    let server = factory.endpoint_with_config("server", transport_config.clone());
+    let server_addr = server.local_addr()?;
+    assert_eq!(
+        server_addr.ip(),
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        "test assumes the server is plain IPv4 loopback"
+    );
+
+    let server_task = async move {
+        let conn = server.accept().await.ok_or("closed conn?")?.await?;
+        conn.closed().await;
+        TestResult::Ok(())
+    }
+    .instrument(info_span!("server"));
+
+    let client = factory.client_endpoint_with_config(
+        SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0),
+        transport_config,
+    );
+
+    let client_task = async move {
+        let conn = client.connect(server_addr, "localhost")?.await?;
+        assert!(conn.is_multipath_enabled());
+        // small synchronization step necessary to allow the server to set remote CIDs,
+        // see the same comment in `test_multipath_observed_address` above.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        // A second, distinct loopback address standing in for a real second network
+        // interface's address. Deliberately plain IPv4, not pre-mapped -- the same
+        // representation an app would get from enumerating its own interfaces.
+        let second_local_ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2));
+        let open = async {
+            loop {
+                match conn
+                    .open_path(
+                        FourTuple::new(server_addr, Some(second_local_ip)),
+                        PathStatus::Available,
+                    )
+                    .await
+                {
+                    Ok(path) => break Ok(path),
+                    Err(proto::PathError::RemoteCidsExhausted) => {
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                    Err(err) => break Err(err),
+                }
+            }
+        };
+        let path = tokio::time::timeout(Duration::from_secs(10), open)
+            .await
+            .map_err(|_| "path with explicit local_ip timed out instead of establishing")??;
+        // The client is dual-stack, so the established path's remote is normalized
+        // to IPv4-mapped-IPv6 (see `normalize_network_path`); compare canonically.
+        let remote = path.remote_address()?;
+        assert_eq!(remote.ip().to_canonical(), server_addr.ip());
+        assert_eq!(remote.port(), server_addr.port());
+        assert_eq!(
+            path.local_ip()?.map(|ip| ip.to_canonical()),
+            Some(second_local_ip),
+            "path claims to use a different local_ip than requested -- \
+             the source address selection silently fell back instead of erroring"
+        );
+        TestResult::Ok(())
+    }
+    .instrument(info_span!("client"));
+
+    let (server_res, client_res) = tokio::join!(server_task, client_task);
+    server_res?;
+    client_res?;
+    Ok(())
 }
 
 #[tokio::test]
