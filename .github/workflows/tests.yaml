@@ -64,7 +64,7 @@ jobs:
           persist-credentials: false
 
       - name: Install ${{ matrix.rust }} rust
-        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
           toolchain: ${{ matrix.rust }}
 
@@ -159,7 +159,9 @@ jobs:
             cargo test --locked -p $i --doc $FEATURES
           done
 
-      - uses: taiki-e/install-action@2a72e4e2525bb14865046ba7e5f28dc56d27e349 # cargo-make
+      - uses: taiki-e/install-action@a2a5f6e99e1a31540baa0468acfa302cff0f359f # v2
+        with:
+          tool: cargo-make
 
       - name: run proptests (1 minute minimum)
         if: ${{ ! inputs.flaky }}
@@ -375,7 +377,9 @@ jobs:
         with:
           # Keep the token out of .git/config, readable by any build script.
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@7c8d7d138f5c09cef361f8214cf96882cd029cdb # nightly
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: nightly
       - name: Install Go (required for aws-lc-rs FIPS)
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
