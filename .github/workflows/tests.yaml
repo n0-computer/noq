@@ -113,19 +113,23 @@ jobs:
 
       - name: build tests
         run: |
-          cargo nextest run --locked --workspace --exclude fuzz ${{ env.FEATURES }} --lib --bins --tests --no-run
+          cargo nextest run --locked --workspace --exclude fuzz $FEATURES --lib --bins --tests --no-run
 
       - name: list ignored tests
         run: |
-          cargo nextest list --locked --workspace --exclude fuzz ${{ env.FEATURES }} --lib --bins --tests --run-ignored ignored-only
+          cargo nextest list --locked --workspace --exclude fuzz $FEATURES --lib --bins --tests --run-ignored ignored-only
 
       - name: run tests
         run: |
           mkdir -p output
-          cargo nextest run --locked --workspace --exclude fuzz ${{ env.FEATURES }} --lib --bins --tests --profile ci --run-ignored ${{ inputs.flaky && 'all' || 'default' }} ${{ inputs.flaky && '--verbose' || '' }} --no-fail-fast --message-format ${{ inputs.flaky && 'libtest-json' || 'human' }} > output/${{ matrix.name }}_${{ matrix.features }}_${{ matrix.rust }}.json
+          cargo nextest run --locked --workspace --exclude fuzz $FEATURES --lib --bins --tests --profile ci --run-ignored "$RUN_IGNORED" $VERBOSE --no-fail-fast --message-format "$MSG_FORMAT" > "output/${OUT_NAME}.json"
         env:
           RUST_LOG: ${{ runner.debug && 'TRACE' || 'DEBUG'}}
           NEXTEST_EXPERIMENTAL_LIBTEST_JSON: 1
+          RUN_IGNORED: ${{ inputs.flaky && 'all' || 'default' }}
+          VERBOSE: ${{ inputs.flaky && '--verbose' || '' }}
+          MSG_FORMAT: ${{ inputs.flaky && 'libtest-json' || 'human' }}
+          OUT_NAME: ${{ matrix.name }}_${{ matrix.features }}_${{ matrix.rust }}
 
       - name: upload results
         if: ${{ failure() && inputs.flaky }}
@@ -191,11 +195,14 @@ jobs:
           persist-credentials: false
 
       - name: Install ${{ matrix.rust }}
+        env:
+          RUST_TOOLCHAIN: ${{ matrix.rust }}
+          RUST_TARGET: ${{ matrix.target }}
         run: |
-          rustup toolchain install ${{ matrix.rust }}
-          rustup toolchain default ${{ matrix.rust }}
-          rustup target add ${{ matrix.target }}
-          rustup set default-host ${{ matrix.target }}
+          rustup toolchain install "$RUST_TOOLCHAIN"
+          rustup toolchain default "$RUST_TOOLCHAIN"
+          rustup target add "$RUST_TARGET"
+          rustup set default-host "$RUST_TARGET"
 
       - name: Cache cargo-nextest
         id: cache-nextest
@@ -293,19 +300,23 @@ jobs:
 
       - name: build tests
         run: |
-          cargo nextest run --locked --workspace --exclude fuzz ${{ env.FEATURES }} --lib --bins --tests --target ${{ matrix.target }} --no-run
+          cargo nextest run --locked --workspace --exclude fuzz $FEATURES --lib --bins --tests --target ${{ matrix.target }} --no-run
 
       - name: list ignored tests
         run: |
-          cargo nextest list --locked --workspace --exclude fuzz ${{ env.FEATURES }} --lib --bins --tests --target ${{ matrix.target }} --run-ignored ignored-only
+          cargo nextest list --locked --workspace --exclude fuzz $FEATURES --lib --bins --tests --target ${{ matrix.target }} --run-ignored ignored-only
 
       - name: tests
         run: |
           mkdir -p output
-          cargo nextest run --locked --workspace --exclude fuzz ${{ env.FEATURES }} --lib --bins --tests --profile ci --target ${{ matrix.target }} --run-ignored ${{ inputs.flaky && 'all' || 'default' }} --no-fail-fast --message-format ${{ inputs.flaky && 'libtest-json' || 'human' }} > output/${{ matrix.name }}_${{ matrix.features }}_${{ matrix.rust }}.json
+          cargo nextest run --locked --workspace --exclude fuzz $FEATURES --lib --bins --tests --profile ci --target "$RUST_TARGET" --run-ignored "$RUN_IGNORED" --no-fail-fast --message-format "$MSG_FORMAT" > "output/${OUT_NAME}.json"
         env:
           RUST_LOG: ${{ runner.debug && 'TRACE' || 'DEBUG'}}
           NEXTEST_EXPERIMENTAL_LIBTEST_JSON: 1
+          RUST_TARGET: ${{ matrix.target }}
+          RUN_IGNORED: ${{ inputs.flaky && 'all' || 'default' }}
+          MSG_FORMAT: ${{ inputs.flaky && 'libtest-json' || 'human' }}
+          OUT_NAME: ${{ matrix.name }}_${{ matrix.features }}_${{ matrix.rust }}
 
       - name: upload results
         if: ${{ failure() && inputs.flaky }}

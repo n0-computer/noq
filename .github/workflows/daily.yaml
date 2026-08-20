@@ -160,7 +160,7 @@ jobs:
       # Fetch the locked dependency set first and then run offline: same
       # guarantee in practice, since nothing new can be pulled mid-run.
       - run: cargo fetch --locked
-      - run: cargo hack check --offline --feature-powerset --depth 3 --optional-deps --no-dev-deps --ignore-private --skip "${{env.SKIP_FEATURES}}"
+      - run: cargo hack check --offline --feature-powerset --depth 3 --optional-deps --no-dev-deps --ignore-private --skip "$SKIP_FEATURES"
 
   notify:
     timeout-minutes: 45
@@ -169,14 +169,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Extract test results
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
         run: |
-          printf '${{ toJSON(needs) }}\n'
+          printf '%s\n' "$NEEDS_JSON"
 
-          proptests_result=$(echo '${{ toJSON(needs) }}' | jq -r '.proptests.result')
-          freebsd_result=$(echo '${{ toJSON(needs) }}' | jq -r '.["test-freebsd"].result')
-          solaris_result=$(echo '${{ toJSON(needs) }}' | jq -r '.["build-solaris"].result')
-          illumos_result=$(echo '${{ toJSON(needs) }}' | jq -r '.["test-illumos"].result')
-          features_result=$(echo '${{ toJSON(needs) }}' | jq -r '.features.result')
+          proptests_result=$(echo "$NEEDS_JSON" | jq -r '.proptests.result')
+          freebsd_result=$(echo "$NEEDS_JSON" | jq -r '.["test-freebsd"].result')
+          solaris_result=$(echo "$NEEDS_JSON" | jq -r '.["build-solaris"].result')
+          illumos_result=$(echo "$NEEDS_JSON" | jq -r '.["test-illumos"].result')
+          features_result=$(echo "$NEEDS_JSON" | jq -r '.features.result')
 
           # Check if any failed
           if [ "$proptests_result" = "failure" ] || [ "$freebsd_result" = "failure" ] || [ "$solaris_result" = "failure" ] || [ "$illumos_result" = "failure" ] || [ "$features_result" = "failure" ]; then
