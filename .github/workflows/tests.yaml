@@ -57,6 +57,7 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           ref: ${{ inputs.git-ref }}
+          persist-credentials: false
 
       - name: Install ${{ matrix.rust }} rust
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
@@ -183,6 +184,7 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           ref: ${{ inputs.git-ref }}
+          persist-credentials: false
 
       - name: Install ${{ matrix.rust }}
         run: |
@@ -397,6 +399,7 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           ref: ${{ inputs.git-ref }}
+          persist-credentials: false
 
       - name: Install Rust nightly
         run: |
