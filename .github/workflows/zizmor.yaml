@@ -1,0 +1,26 @@
+# Static analysis of our own workflows.
+# Gated at High: the remaining Medium/Low findings are tracked separately.
+name: zizmor
+
+on:
+  pull_request:
+    paths: ['.github/workflows/**']
+  push:
+    branches: [main]
+    paths: ['.github/workflows/**']
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  zizmor:
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@a2a5f6e99e1a31540baa0468acfa302cff0f359f # v2.86.4
+        with:
+          tool: zizmor
+      - run: zizmor --offline --min-severity high .github/workflows/
