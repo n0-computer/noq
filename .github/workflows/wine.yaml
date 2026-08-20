@@ -44,7 +44,7 @@ jobs:
 
       - name: Build tests
         # Release mode required - debug builds exceed mingw's export ordinal limit (~65k symbols)
-        run: cargo build --target x86_64-pc-windows-gnu --tests --release
+        run: cargo build --locked --target x86_64-pc-windows-gnu --tests --release
 
       - name: List available tests
         run: |

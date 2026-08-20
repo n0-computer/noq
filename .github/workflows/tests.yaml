@@ -100,24 +100,24 @@ jobs:
           do
             echo "Checking $i $FEATURES"
             targets="--lib --bins"
-            echo cargo check -p $i $FEATURES $targets
-            cargo check -p $i $FEATURES $targets
+            echo cargo check --locked -p $i $FEATURES $targets
+            cargo check --locked -p $i $FEATURES $targets
           done
         env:
           RUST_LOG: ${{ runner.debug && 'TRACE' || 'DEBUG'}}
 
       - name: build tests
         run: |
-          cargo nextest run --workspace --exclude fuzz ${{ env.FEATURES }} --lib --bins --tests --no-run
+          cargo nextest run --locked --workspace --exclude fuzz ${{ env.FEATURES }} --lib --bins --tests --no-run
 
       - name: list ignored tests
         run: |
-          cargo nextest list --workspace --exclude fuzz ${{ env.FEATURES }} --lib --bins --tests --run-ignored ignored-only
+          cargo nextest list --locked --workspace --exclude fuzz ${{ env.FEATURES }} --lib --bins --tests --run-ignored ignored-only
 
       - name: run tests
         run: |
           mkdir -p output
-          cargo nextest run --workspace --exclude fuzz ${{ env.FEATURES }} --lib --bins --tests --profile ci --run-ignored ${{ inputs.flaky && 'all' || 'default' }} ${{ inputs.flaky && '--verbose' || '' }} --no-fail-fast --message-format ${{ inputs.flaky && 'libtest-json' || 'human' }} > output/${{ matrix.name }}_${{ matrix.features }}_${{ matrix.rust }}.json
+          cargo nextest run --locked --workspace --exclude fuzz ${{ env.FEATURES }} --lib --bins --tests --profile ci --run-ignored ${{ inputs.flaky && 'all' || 'default' }} ${{ inputs.flaky && '--verbose' || '' }} --no-fail-fast --message-format ${{ inputs.flaky && 'libtest-json' || 'human' }} > output/${{ matrix.name }}_${{ matrix.features }}_${{ matrix.rust }}.json
         env:
           RUST_LOG: ${{ runner.debug && 'TRACE' || 'DEBUG'}}
           NEXTEST_EXPERIMENTAL_LIBTEST_JSON: 1
@@ -136,7 +136,7 @@ jobs:
         env:
           RUST_LOG: ${{ runner.debug && 'TRACE' || 'DEBUG'}}
         run: |
-          cargo test --workspace --all-features --doc
+          cargo test --locked --workspace --all-features --doc
 
       - name: Check doctest features
         if: ${{ ! inputs.flaky }}
@@ -146,8 +146,8 @@ jobs:
           for i in ${CRATES_LIST//,/ }
           do
             echo "Checking $i doctest $FEATURES"
-            echo cargo test -p $i --doc $FEATURES
-            cargo test -p $i --doc $FEATURES
+            echo cargo test --locked -p $i --doc $FEATURES
+            cargo test --locked -p $i --doc $FEATURES
           done
 
       - uses: taiki-e/install-action@cargo-make
@@ -287,16 +287,16 @@ jobs:
 
       - name: build tests
         run: |
-          cargo nextest run --workspace --exclude fuzz ${{ env.FEATURES }} --lib --bins --tests --target ${{ matrix.target }} --no-run
+          cargo nextest run --locked --workspace --exclude fuzz ${{ env.FEATURES }} --lib --bins --tests --target ${{ matrix.target }} --no-run
 
       - name: list ignored tests
         run: |
-          cargo nextest list --workspace --exclude fuzz ${{ env.FEATURES }} --lib --bins --tests --target ${{ matrix.target }} --run-ignored ignored-only
+          cargo nextest list --locked --workspace --exclude fuzz ${{ env.FEATURES }} --lib --bins --tests --target ${{ matrix.target }} --run-ignored ignored-only
 
       - name: tests
         run: |
           mkdir -p output
-          cargo nextest run --workspace --exclude fuzz ${{ env.FEATURES }} --lib --bins --tests --profile ci --target ${{ matrix.target }} --run-ignored ${{ inputs.flaky && 'all' || 'default' }} --no-fail-fast --message-format ${{ inputs.flaky && 'libtest-json' || 'human' }} > output/${{ matrix.name }}_${{ matrix.features }}_${{ matrix.rust }}.json
+          cargo nextest run --locked --workspace --exclude fuzz ${{ env.FEATURES }} --lib --bins --tests --profile ci --target ${{ matrix.target }} --run-ignored ${{ inputs.flaky && 'all' || 'default' }} --no-fail-fast --message-format ${{ inputs.flaky && 'libtest-json' || 'human' }} > output/${{ matrix.name }}_${{ matrix.features }}_${{ matrix.rust }}.json
         env:
           RUST_LOG: ${{ runner.debug && 'TRACE' || 'DEBUG'}}
           NEXTEST_EXPERIMENTAL_LIBTEST_JSON: 1
@@ -352,6 +352,15 @@ jobs:
           go-version: "stable"
           cache: false
       - name: cargo check
+        # Deliberately NOT --locked: this job deletes Cargo.lock so that
+        # -Z minimal-versions can re-resolve every dependency down to its
+        # lowest semver-compatible version. That full re-resolution is the
+        # whole point of the job -- and it is also why this is the one job in
+        # the repo that can select a crates.io version the committed lockfile
+        # has never seen. A yank-storm that removes every version satisfying a
+        # range leaves the attacker's release as the only selectable one, so
+        # "minimal" does not imply "old". Rely on the Dependabot cooldown and
+        # on cargo-deny for this job, not on the lockfile.
         run: |
           rm -f Cargo.lock
           cargo +nightly check -Z minimal-versions --workspace --exclude fuzz --all-features --lib --bins
@@ -451,6 +460,15 @@ jobs:
         uses: ilammy/msvc-dev-cmd@v1
 
       - name: cargo check
+        # Deliberately NOT --locked: this job deletes Cargo.lock so that
+        # -Z minimal-versions can re-resolve every dependency down to its
+        # lowest semver-compatible version. That full re-resolution is the
+        # whole point of the job -- and it is also why this is the one job in
+        # the repo that can select a crates.io version the committed lockfile
+        # has never seen. A yank-storm that removes every version satisfying a
+        # range leaves the attacker's release as the only selectable one, so
+        # "minimal" does not imply "old". Rely on the Dependabot cooldown and
+        # on cargo-deny for this job, not on the lockfile.
         run: |
           rm -Force Cargo.lock
           cargo +nightly check -Z minimal-versions --workspace --exclude fuzz --all-features --lib --bins

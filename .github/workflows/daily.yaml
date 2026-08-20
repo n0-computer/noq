@@ -140,7 +140,13 @@ jobs:
         with:
           go-version: 'stable'
 
-      - run: cargo hack check --feature-powerset --depth 3 --optional-deps --no-dev-deps --ignore-private --skip "${{env.SKIP_FEATURES}}"
+      # --no-dev-deps rewrites Cargo.toml while cargo-hack runs, which makes
+      # cargo want to regenerate Cargo.lock -- so --locked is rejected here
+      # ("cannot update the lock file ... because --locked was passed").
+      # Fetch the locked dependency set first and then run offline: same
+      # guarantee in practice, since nothing new can be pulled mid-run.
+      - run: cargo fetch --locked
+      - run: cargo hack check --offline --feature-powerset --depth 3 --optional-deps --no-dev-deps --ignore-private --skip "${{env.SKIP_FEATURES}}"
 
   notify:
     timeout-minutes: 45

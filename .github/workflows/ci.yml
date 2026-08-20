@@ -121,7 +121,7 @@ jobs:
           components: rust-src
       - uses: mozilla-actions/sccache-action@v0.0.9
       - name: Check noq for ESP32-C3
-        run: cargo check -Z build-std=std,panic_abort --target riscv32imc-esp-espidf -p noq -p noq-proto -p noq-udp --no-default-features
+        run: cargo check --locked -Z build-std=std,panic_abort --target riscv32imc-esp-espidf -p noq -p noq-proto -p noq-udp --no-default-features
 
   wasm_test:
     name: Build & test wasm32
@@ -213,13 +213,13 @@ jobs:
       - name: Install cargo-ndk
         run: |
           if ! cargo ndk --version 2>/dev/null | grep -q "3.5.4"; then
-            cargo install --version 3.5.4 cargo-ndk
+            cargo install --locked --version 3.5.4 cargo-ndk
           fi
 
       - name: Build
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
-        run: cargo ndk --target ${{ matrix.target }} build
+        run: cargo ndk --target ${{ matrix.target }} build --locked
 
   android_emulator_test:
     name: Android Emulator Tests
@@ -265,14 +265,14 @@ jobs:
       - name: Install cargo-ndk
         run: |
           if ! cargo ndk --version 2>/dev/null | grep -q "3.5.4"; then
-            cargo install --version 3.5.4 cargo-ndk
+            cargo install --locked --version 3.5.4 cargo-ndk
           fi
 
       - name: Build unit tests for Android
         env:
           RUSTC_WRAPPER: "sccache"
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
-        run: cargo ndk -t ${{ matrix.target }} test --no-run
+        run: cargo ndk -t ${{ matrix.target }} test --locked --no-run
 
       - name: Enable KVM group perms
         run: |
@@ -299,9 +299,16 @@ jobs:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@nightly
       - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz
+        run: cargo install --locked cargo-fuzz
+      # `cargo fuzz build` has no --locked/--offline/--frozen flag of its own,
+      # so pin the dependency set the only way it allows: fetch exactly what
+      # Cargo.lock names, then deny the build any network access at all.
+      - name: Fetch locked dependencies
+        run: cargo fetch --locked
       - name: Build fuzz targets
         run: cargo +nightly fuzz build
+        env:
+          CARGO_NET_OFFLINE: "true"
 
   check_fmt:
     timeout-minutes: 30
@@ -335,13 +342,13 @@ jobs:
         uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: noq docs-rs
-        run: cargo docs-rs -p noq
+        run: cargo docs-rs --locked -p noq
       - name: noq-proto docs-rs
-        run: cargo docs-rs -p noq-proto
+        run: cargo docs-rs --locked -p noq-proto
       - name: noq-udp docs-rs
-        run: cargo docs-rs -p noq-udp
+        run: cargo docs-rs --locked -p noq-udp
       - name: noq internal docs
-        run: cargo doc --workspace --no-deps --document-private-items
+        run: cargo doc --locked --workspace --no-deps --document-private-items
 
   clippy_check:
     timeout-minutes: 30
@@ -359,13 +366,13 @@ jobs:
         uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: clippy check (all features)
-        run: cargo clippy --workspace --exclude fuzz --all-features --all-targets --lib --bins --tests --benches --examples -- -D warnings
+        run: cargo clippy --locked --workspace --exclude fuzz --all-features --all-targets --lib --bins --tests --benches --examples -- -D warnings
 
       - name: clippy check (no features)
-        run: cargo clippy --workspace --exclude fuzz --no-default-features --all-targets --lib --bins --tests --benches --examples -- -D warnings
+        run: cargo clippy --locked --workspace --exclude fuzz --no-default-features --all-targets --lib --bins --tests --benches --examples -- -D warnings
 
       - name: clippy check (default features)
-        run: cargo clippy --workspace --exclude fuzz --all-targets --lib --bins --tests --benches --examples -- -D warnings
+        run: cargo clippy --locked --workspace --exclude fuzz --all-targets --lib --bins --tests --benches --examples -- -D warnings
 
   msrv:
     if: "github.event_name != 'pull_request' || ! contains(github.event.pull_request.labels.*.name, 'flaky-test')"
@@ -385,7 +392,7 @@ jobs:
 
       - name: Check MSRV all features
         run: |
-          cargo +$MSRV check --workspace --exclude fuzz --all-targets
+          cargo +$MSRV check --locked --workspace --exclude fuzz --all-targets
 
   external_types:
     runs-on: ubuntu-latest
@@ -408,6 +415,10 @@ jobs:
       - uses: taiki-e/install-action@cargo-make
       - name: Install cargo-check-external-types
         run: cargo binstall cargo-check-external-types@${{ env.CARGO_CHECK_EXTERNAL_TYPES_VERSION }} --locked --no-confirm
+      # Known gap: cargo-check-external-types exposes no --locked,
+      # --offline or --frozen flag, so this step can still re-resolve.
+      # It runs a pinned tool version against a pinned nightly, and the
+      # Dependabot cooldown covers the dependency side.
       - name: Check external types
         run: cargo make check-external-types
 

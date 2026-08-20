@@ -29,7 +29,7 @@ jobs:
         #       | grep -vFx -e 'default' -e 'aws-lc-rs-fips' \
         #       | paste -sd ',' -
         run: |
-          cargo llvm-cov \
+          cargo llvm-cov --locked \
             --features="arbitrary,aws-lc-rs,bloom,fast-apple-datapath,futures-io,json-output,lock_tracking,log,platform-verifier,qlog,ring,runtime-smol,runtime-tokio,rustls,rustls-log,rustls,ring,serde,serde_json,tracing,tracing-log" \
             --workspace --lcov --output-path lcov.info
       - name: Upload coverage to Codecov

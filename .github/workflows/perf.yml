@@ -63,7 +63,7 @@ jobs:
             https://github.com/quinn-rs/quinn.git /tmp/upstream-quinn
 
       - name: Build perf binary
-        run: cargo build --release -p perf --features json-output
+        run: cargo build --locked --release -p perf --features json-output
         working-directory: ${{ matrix.impl == 'upstream-quinn' && '/tmp/upstream-quinn' || '.' }}
 
       - name: Upload binary
