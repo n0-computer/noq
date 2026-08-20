@@ -195,15 +195,14 @@ jobs:
           persist-credentials: false
 
       - name: Install ${{ matrix.rust }}
-        shell: bash
         env:
           RUST_TOOLCHAIN: ${{ matrix.rust }}
           RUST_TARGET: ${{ matrix.target }}
         run: |
-          rustup toolchain install "$RUST_TOOLCHAIN"
-          rustup toolchain default "$RUST_TOOLCHAIN"
-          rustup target add "$RUST_TARGET"
-          rustup set default-host "$RUST_TARGET"
+          rustup toolchain install $env:RUST_TOOLCHAIN
+          rustup toolchain default $env:RUST_TOOLCHAIN
+          rustup target add $env:RUST_TARGET
+          rustup set default-host $env:RUST_TARGET
 
       - name: Cache cargo-nextest
         id: cache-nextest
@@ -300,20 +299,24 @@ jobs:
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
 
       - name: build tests
-        shell: bash
+        env:
+          RUST_TARGET: ${{ matrix.target }}
         run: |
-          cargo nextest run --locked --workspace --exclude fuzz $FEATURES --lib --bins --tests --target ${{ matrix.target }} --no-run
+          $feat = if ($env:FEATURES) { $env:FEATURES -split '\s+' } else { @() }
+          cargo nextest run --locked --workspace --exclude fuzz @feat --lib --bins --tests --target $env:RUST_TARGET --no-run
 
       - name: list ignored tests
-        shell: bash
+        env:
+          RUST_TARGET: ${{ matrix.target }}
         run: |
-          cargo nextest list --locked --workspace --exclude fuzz $FEATURES --lib --bins --tests --target ${{ matrix.target }} --run-ignored ignored-only
+          $feat = if ($env:FEATURES) { $env:FEATURES -split '\s+' } else { @() }
+          cargo nextest list --locked --workspace --exclude fuzz @feat --lib --bins --tests --target $env:RUST_TARGET --run-ignored ignored-only
 
       - name: tests
-        shell: bash
         run: |
           mkdir -p output
-          cargo nextest run --locked --workspace --exclude fuzz $FEATURES --lib --bins --tests --profile ci --target "$RUST_TARGET" --run-ignored "$RUN_IGNORED" --no-fail-fast --message-format "$MSG_FORMAT" > "output/${OUT_NAME}.json"
+          $feat = if ($env:FEATURES) { $env:FEATURES -split '\s+' } else { @() }
+          cargo nextest run --locked --workspace --exclude fuzz @feat --lib --bins --tests --profile ci --target $env:RUST_TARGET --run-ignored $env:RUN_IGNORED --no-fail-fast --message-format $env:MSG_FORMAT > "output/$($env:OUT_NAME).json"
         env:
           RUST_LOG: ${{ runner.debug && 'TRACE' || 'DEBUG'}}
           NEXTEST_EXPERIMENTAL_LIBTEST_JSON: 1
