@@ -1,5 +1,5 @@
 [workspace]
-members = ["noq", "noq-proto", "noq-udp", "bench", "perf", "fuzz", "docs/book"]
+members = ["noq", "noq-proto", "noq-udp", "bench", "perf", "fuzz"]
 default-members = ["noq", "noq-proto", "noq-udp", "bench", "perf"]
 resolver = "2"
 
