@@ -175,6 +175,77 @@ fn lifecycle() {
 }
 
 #[test]
+fn stats_include_congestion_controller_bandwidth_estimate() {
+    const WINDOW: u64 = 12_000;
+    const BANDWIDTH_ESTIMATE: u64 = 4_000_000;
+
+    #[derive(Debug, Clone)]
+    struct TestController;
+
+    impl Controller for TestController {
+        fn on_congestion_event(
+            &mut self,
+            _now: Instant,
+            _sent: Instant,
+            _is_persistent_congestion: bool,
+            _is_ecn: bool,
+            _lost_bytes: u64,
+            _largest_lost_pn: u64,
+        ) {
+        }
+
+        fn on_mtu_update(&mut self, _new_mtu: u16) {}
+
+        fn window(&self) -> u64 {
+            WINDOW
+        }
+
+        fn metrics(&self) -> ControllerMetrics {
+            ControllerMetrics {
+                congestion_window: WINDOW,
+                bandwidth_estimate: Some(BANDWIDTH_ESTIMATE),
+                ..Default::default()
+            }
+        }
+
+        fn clone_box(&self) -> Box<dyn Controller> {
+            Box::new(self.clone())
+        }
+
+        fn initial_window(&self) -> u64 {
+            WINDOW
+        }
+
+        fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
+            self
+        }
+    }
+
+    struct TestControllerFactory;
+
+    impl ControllerFactory for TestControllerFactory {
+        fn build(self: Arc<Self>, _now: Instant, _current_mtu: u16) -> Box<dyn Controller> {
+            Box::new(TestController)
+        }
+    }
+
+    let mut transport = TransportConfig::default();
+    transport.congestion_controller_factory(Arc::new(TestControllerFactory));
+    let mut config = client_config();
+    config.transport_config(Arc::new(transport));
+
+    let mut pair = Pair::default();
+    let (client_ch, _) = pair.connect_with(config);
+    let stats = pair
+        .client_conn_mut(client_ch)
+        .path_stats(PathId::ZERO)
+        .unwrap();
+
+    assert_eq!(stats.cwnd, WINDOW);
+    assert_eq!(stats.bandwidth_estimate, Some(BANDWIDTH_ESTIMATE));
+}
+
+#[test]
 fn draft_version_compat() {
     let _guard = subscribe();
 
@@ -4675,6 +4746,7 @@ impl Controller for PacingOnlyController {
             // continuously.
             pacing_rate: Some(125_000),
             send_quantum: Some(2 * 1200),
+            bandwidth_estimate: None,
         }
     }
 
@@ -4768,6 +4840,7 @@ impl Controller for FixedQuantumController {
             // 1 GB/s: high enough that the pacer never delays within a single batch.
             pacing_rate: Some(1_000_000_000),
             send_quantum: Some(self.send_quantum),
+            bandwidth_estimate: None,
         }
     }
 

@@ -108,15 +108,16 @@ pub trait Controller: Send + Sync + std::fmt::Debug {
     /// Number of ack-eliciting bytes that may be in flight
     fn window(&self) -> u64;
 
-    /// Retrieve implementation-specific metrics used to populate `qlog` traces when they are
-    /// enabled This is also used to alter the pacing of the connection with
-    /// `pacing_rate` and `send_quantum`
+    /// Retrieve implementation-specific metrics used to populate connection statistics and `qlog`
+    /// traces when they are enabled. This is also used to alter the pacing of the connection with
+    /// `pacing_rate` and `send_quantum`.
     fn metrics(&self) -> ControllerMetrics {
         ControllerMetrics {
             congestion_window: self.window(),
             ssthresh: None,
             pacing_rate: None,
             send_quantum: None,
+            bandwidth_estimate: None,
         }
     }
 
@@ -144,6 +145,8 @@ pub struct ControllerMetrics {
     pub pacing_rate: Option<u64>,
     /// Send Quantum (bytes) used to control the size of packet bursts
     pub send_quantum: Option<u64>,
+    /// Estimated sustainable path bandwidth (bits/s)
+    pub bandwidth_estimate: Option<u64>,
 }
 
 /// Constructs controllers on demand

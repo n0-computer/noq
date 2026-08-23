@@ -187,7 +187,7 @@ impl Transmit<'_> {
 
 /// Returns true if the given I/O error corresponds to a message size error
 ///
-/// Useful, for example, after invoking `io::Error::last_os_error()`
+/// Useful, for example, after invoking `std::io::Error::last_os_error()`
 /// to check if the last OS error was a message size error
 /// (EMSGSIZE on Unix, WSAEMSGSIZE on Windows).
 ///

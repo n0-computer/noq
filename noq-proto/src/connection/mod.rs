@@ -2694,6 +2694,7 @@ impl Connection {
         let mut stats = self.path_stats.get(path_id).unwrap_or_default();
         stats.rtt = path.data.rtt.get();
         stats.cwnd = path.data.congestion.window();
+        stats.bandwidth_estimate = path.data.congestion.metrics().bandwidth_estimate;
         stats.current_mtu = path.data.mtud.current_mtu();
         Some(stats)
     }

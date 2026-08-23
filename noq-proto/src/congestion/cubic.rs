@@ -264,6 +264,7 @@ impl Controller for Cubic {
             ssthresh: Some(self.state.ssthresh),
             pacing_rate: None,
             send_quantum: None,
+            bandwidth_estimate: None,
         }
     }
 

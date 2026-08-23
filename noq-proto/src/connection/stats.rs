@@ -228,6 +228,10 @@ pub struct PathStats {
     pub frame_rx: FrameStats,
     /// Current congestion window of the connection.
     pub cwnd: u64,
+    /// Congestion controller's estimate of sustainable path bandwidth, in bits per second.
+    ///
+    /// `None` when the congestion controller does not provide an estimate.
+    pub bandwidth_estimate: Option<u64>,
     /// Congestion events on the connection.
     pub congestion_events: u64,
     /// Spurious congestion events on the connection.
@@ -329,6 +333,7 @@ impl std::ops::Add<PathStats> for ConnectionStats {
             frame_tx,
             frame_rx,
             cwnd: _,
+            bandwidth_estimate: _,
             congestion_events: _,
             spurious_congestion_events: _,
             sent_packets,
@@ -366,6 +371,7 @@ impl std::ops::AddAssign<PathStats> for ConnectionStats {
             frame_tx: path_frame_tx,
             frame_rx: path_frame_rx,
             cwnd: _,
+            bandwidth_estimate: _,
             congestion_events: _,
             spurious_congestion_events: _,
             sent_packets: path_sent_packets,
