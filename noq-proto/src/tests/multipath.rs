@@ -1,6 +1,6 @@
 //! Tests for multipath
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Duration;
@@ -381,6 +381,230 @@ fn open_path() -> TestResult {
         pair.poll(Server),
         Some(Event::Path(PathEvent::Established { id  })) if id == path_id
     );
+    Ok(())
+}
+
+/// Confirms the proto-level `Connection::open_path` and `open_path_ensure` APIs
+/// normalize `local_ip` before matching or storing paths, even when callers bypass
+/// the `noq` wrapper crate.
+#[test]
+fn open_path_normalizes_local_ip_for_dual_stack_connection() -> TestResult {
+    let _guard = subscribe();
+    let mut pair = ConnPair::builder().enable_multipath().connect();
+
+    let server_addr = pair.routes.public_server_addr();
+    let plain_local_ip = Ipv4Addr::new(192, 0, 2, 1);
+    let mapped_local_ip = IpAddr::V6(plain_local_ip.to_ipv6_mapped());
+
+    let opened_with_mapped = FourTuple::new(server_addr, Some(mapped_local_ip));
+    let path_id = pair.open_path(Client, opened_with_mapped, PathStatus::Available)?;
+    assert_eq!(
+        pair.network_path(Client, path_id)?.local_ip(),
+        Some(mapped_local_ip)
+    );
+
+    let requested_with_plain = FourTuple::new(server_addr, Some(IpAddr::V4(plain_local_ip)));
+    let (same_path_id, existed) =
+        pair.open_path_ensure(Client, requested_with_plain, PathStatus::Available)?;
+
+    assert!(existed);
+    assert_eq!(same_path_id, path_id);
+    assert_eq!(
+        pair.network_path(Client, same_path_id)?.local_ip(),
+        Some(mapped_local_ip)
+    );
+
+    Ok(())
+}
+
+#[test]
+fn open_path_normalizes_remote_for_dual_stack_connection() -> TestResult {
+    let _guard = subscribe();
+    let mut pair = ConnPair::builder().enable_multipath().connect();
+
+    assert!(pair.conn(Client).is_ipv6());
+
+    let remote_ip = Ipv4Addr::new(192, 0, 2, 2);
+    let plain_remote = SocketAddr::new(remote_ip.into(), 4433);
+    let mapped_remote = SocketAddr::new(remote_ip.to_ipv6_mapped().into(), 4433);
+    let path_id = pair.open_path(
+        Client,
+        FourTuple::from_remote(plain_remote),
+        PathStatus::Available,
+    )?;
+
+    assert_eq!(pair.network_path(Client, path_id)?.remote(), mapped_remote);
+
+    let (same_path_id, existed) = pair.open_path_ensure(
+        Client,
+        FourTuple::from_remote(mapped_remote),
+        PathStatus::Available,
+    )?;
+
+    assert!(existed);
+    assert_eq!(same_path_id, path_id);
+    assert_eq!(
+        pair.network_path(Client, same_path_id)?.remote(),
+        mapped_remote
+    );
+
+    Ok(())
+}
+
+#[test]
+fn open_path_normalizes_remote_for_ipv4_connection() -> TestResult {
+    let _guard = subscribe();
+    let transport = Arc::new(TransportConfig {
+        max_concurrent_multipath_paths: NonZeroU32::new(MAX_PATHS),
+        ..TransportConfig::default()
+    });
+    let server_cfg = ServerConfig {
+        transport: transport.clone(),
+        ..server_config()
+    };
+    let client_cfg = ClientConfig {
+        transport,
+        ..client_config()
+    };
+    let server = Endpoint::new(Default::default(), Some(Arc::new(server_cfg)), false);
+    let client = Endpoint::new(Default::default(), None, false);
+    let mut pair = Pair::new_from_endpoint(client, server);
+    pair.routes =
+        ManyToManyRouting::from_routes([("1.1.1.1:44433", 0)], [("2.2.2.1:4433", 0)]).into();
+    let (client_ch, server_ch) = pair.connect_with(client_cfg);
+    let mut pair = ConnPair::new(pair, client_ch, server_ch);
+
+    assert!(!pair.conn(Client).is_ipv6());
+
+    let remote_ip = Ipv4Addr::new(192, 0, 2, 2);
+    let plain_remote = SocketAddr::new(remote_ip.into(), 4433);
+    let mapped_remote = SocketAddr::new(remote_ip.to_ipv6_mapped().into(), 4433);
+    let path_id = pair.open_path(
+        Client,
+        FourTuple::from_remote(mapped_remote),
+        PathStatus::Available,
+    )?;
+
+    assert_eq!(pair.network_path(Client, path_id)?.remote(), plain_remote);
+
+    let (same_path_id, existed) = pair.open_path_ensure(
+        Client,
+        FourTuple::from_remote(plain_remote),
+        PathStatus::Available,
+    )?;
+
+    assert!(existed);
+    assert_eq!(same_path_id, path_id);
+    assert_eq!(
+        pair.network_path(Client, same_path_id)?.remote(),
+        plain_remote
+    );
+
+    Ok(())
+}
+
+#[test]
+fn connection_socket_family_is_fixed_at_establishment() -> TestResult {
+    let _guard = subscribe();
+    let mut pair = ConnPair::builder().enable_multipath().connect();
+
+    assert!(pair.conn(Client).is_ipv6());
+
+    let server_addr_v4 = "192.0.2.2:4433".parse()?;
+    let client_ip_v4 = Ipv4Addr::new(192, 0, 2, 1);
+    let path_id = pair.open_path(
+        Client,
+        FourTuple::new(server_addr_v4, Some(IpAddr::V4(client_ip_v4))),
+        PathStatus::Available,
+    )?;
+
+    assert!(pair.conn(Client).is_ipv6());
+    assert_eq!(
+        pair.network_path(Client, path_id)?.local_ip(),
+        Some(IpAddr::V6(client_ip_v4.to_ipv6_mapped()))
+    );
+
+    Ok(())
+}
+
+#[test]
+fn open_path_with_plain_remote_validates_when_response_uses_mapped_ipv4() -> TestResult {
+    let _guard = subscribe();
+    let client_addr_0 = "[::ffff:1.1.1.0]:44433".parse::<SocketAddr>()?;
+    let server_addr_0 = "[::ffff:2.2.2.0]:4433".parse::<SocketAddr>()?;
+    let client_addr_1 = "[::ffff:1.1.1.1]:44433".parse::<SocketAddr>()?;
+    let server_addr_1_mapped = "[::ffff:2.2.2.1]:4433".parse::<SocketAddr>()?;
+    let server_addr_1_plain = "2.2.2.1:4433".parse::<SocketAddr>()?;
+    let mut pair = ConnPair::builder()
+        .enable_multipath()
+        .disable_mtud_discovery()
+        .with_routes(ManyToManyRouting::from_routes(
+            [(client_addr_0, 0), (client_addr_1, 2)],
+            [
+                (server_addr_0, 0),
+                (server_addr_1_plain, 1),
+                (server_addr_1_mapped, 1),
+            ],
+        ))
+        .connect();
+
+    let path_id = pair.open_path(
+        Client,
+        FourTuple::from_remote(server_addr_1_plain),
+        PathStatus::Available,
+    )?;
+
+    assert!(
+        !pair.drive_bounded(100),
+        "path validation should become idle"
+    );
+
+    assert_matches!(
+        pair.poll(Client),
+        Some(Event::Path(PathEvent::Established { id })) if id == path_id
+    );
+    assert_matches!(
+        pair.poll(Server),
+        Some(Event::Path(PathEvent::Established { id })) if id == path_id
+    );
+
+    Ok(())
+}
+
+#[test]
+fn open_path_with_plain_local_ip_validates_on_mapped_ipv4_route() -> TestResult {
+    let _guard = subscribe();
+    let client_addr_0 = "[::ffff:1.1.1.0]:44433".parse::<SocketAddr>()?;
+    let server_addr_0 = "[::ffff:2.2.2.0]:4433".parse::<SocketAddr>()?;
+    let client_addr_1 = "[::ffff:1.1.1.1]:44433".parse::<SocketAddr>()?;
+    let server_addr_1 = "[::ffff:2.2.2.1]:4433".parse::<SocketAddr>()?;
+    let mut pair = ConnPair::builder()
+        .enable_multipath()
+        .disable_mtud_discovery()
+        .with_routes(ManyToManyRouting::from_routes(
+            [(client_addr_0, 0), (client_addr_1, 1)],
+            [(server_addr_0, 0), (server_addr_1, 1)],
+        ))
+        .connect();
+
+    let client_ip_plain = client_addr_1.ip().to_canonical();
+    let path_id = pair.open_path(
+        Client,
+        FourTuple::new(server_addr_1, Some(client_ip_plain)),
+        PathStatus::Available,
+    )?;
+
+    pair.drive();
+
+    assert_matches!(
+        pair.poll(Client),
+        Some(Event::Path(PathEvent::Established { id })) if id == path_id
+    );
+    assert_matches!(
+        pair.poll(Server),
+        Some(Event::Path(PathEvent::Established { id })) if id == path_id
+    );
+
     Ok(())
 }
 

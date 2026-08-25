@@ -952,33 +952,39 @@ impl Connection {
 
 /// Normalizes a [`FourTuple`] against the connection's address family.
 ///
-/// If the connection already uses IPv6 paths, the remote is canonicalised via
-/// [`ensure_ipv6`]. If it uses IPv4 and the requested remote is IPv6, this returns
-/// [`PathError::InvalidRemoteAddress`].
+/// If the connection already uses IPv6 paths, both `remote` and `local_ip` are
+/// canonicalised via [`ensure_ipv6`]/[`std::net::Ipv4Addr::to_ipv6_mapped`]. If it uses IPv4 and
+/// the requested remote is IPv6, this returns [`PathError::InvalidRemoteAddress`].
+///
+/// `local_ip` used to be passed through unchanged in the IPv6 branch, while `remote`
+/// was canonicalised (#738). This is the one place where addresses supplied by the
+/// caller (as opposed to observed from the OS) enter [`Connection`], so keeping
+/// `local_ip` in the same representation as `remote` here avoids relying on every
+/// downstream comparison to canonicalize it individually. The proto layer now also normalizes
+/// caller-supplied `remote` addresses at `open_path`/`open_path_ensure`, closing the same
+/// representation gap there (#784). Note: unlike the proto-level storage normalization for #738
+/// (which was verified against the actual reported failure on real Android hardware with physical
+/// Wi-Fi/cellular interfaces), this wrapper-level `local_ip` normalization was not independently
+/// verified to fix #738's reported symptom on its own -- see the doc comment on the `noq` crate's
+/// `open_path_with_explicit_ipv4_local_ip_on_dualstack_socket` test for what was and wasn't
+/// reproducible in a loopback-only environment. It is included because it closes a real
+/// inconsistency with `remote`'s handling in this same function, independent of whether it's also
+/// part of #738's root cause.
 fn normalize_network_path(
     network_path: FourTuple,
     conn: &proto::Connection,
 ) -> Result<FourTuple, PathError> {
-    // If endpoint::State::ipv6 is true we want to keep all our IP addresses as IPv6.
-    // If not, we do not support IPv6.  We can not access endpoint::State from here
-    // however, but either all our paths use an IPv6 address, or all our paths use an
-    // IPv4 address.  So we can use that information.
-    let ipv6 = conn
-        .paths()
-        .iter()
-        .filter_map(|id| {
-            conn.network_path(*id)
-                .map(|addrs| addrs.remote().is_ipv6())
-                .ok()
-        })
-        .next()
-        .unwrap_or_default();
+    let ipv6 = conn.is_ipv6();
     let remote = network_path.remote();
     if remote.is_ipv6() && !ipv6 {
         Err(PathError::InvalidRemoteAddress(remote))
     } else if ipv6 {
         let remote = SocketAddr::V6(ensure_ipv6(remote));
-        Ok(FourTuple::new(remote, network_path.local_ip()))
+        let local_ip = network_path.local_ip().map(|ip| match ip {
+            IpAddr::V4(v4) => IpAddr::V6(v4.to_ipv6_mapped()),
+            IpAddr::V6(_) => ip,
+        });
+        Ok(FourTuple::new(remote, local_ip))
     } else {
         Ok(network_path)
     }
