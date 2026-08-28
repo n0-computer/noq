@@ -249,8 +249,8 @@
 <a href=#249 id=249 data-nosnippet>249</a>    <span class="doccomment">/// Convenience method to read all remaining data into a buffer
 <a href=#250 id=250 data-nosnippet>250</a>    ///
 <a href=#251 id=251 data-nosnippet>251</a>    /// Fails with [`ReadToEndError::TooLong`] on reading more than `size_limit` bytes, discarding
-<a href=#252 id=252 data-nosnippet>252</a>    /// all data read. After the first read attempt, uses unordered reads to be more efficient than
-<a href=#253 id=253 data-nosnippet>253</a>    /// using `AsyncRead` would allow. `size_limit` should be set to limit worst-case memory use.
+<a href=#252 id=252 data-nosnippet>252</a>    /// all data read. Uses unordered reads to be more efficient than using `AsyncRead` would
+<a href=#253 id=253 data-nosnippet>253</a>    /// allow. `size_limit` should be set to limit worst-case memory use.
 <a href=#254 id=254 data-nosnippet>254</a>    ///
 <a href=#255 id=255 data-nosnippet>255</a>    /// This operation is *not* cancel-safe. If cancelled after it has begun reading, further read
 <a href=#256 id=256 data-nosnippet>256</a>    /// operations on the stream return [`ReadError::ClosedStream`].
