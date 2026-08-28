@@ -1738,6 +1738,7 @@ async fn recv_stream_cancel_read_to_end_then_ordered_read() {
     let server = factory.endpoint("server");
     let server_addr = server.local_addr().unwrap();
     let client = factory.endpoint("client");
+    let ordered_read_done = tokio::sync::SetOnce::new();
 
     tokio::join!(
         async {
@@ -1750,7 +1751,10 @@ async fn recv_stream_cancel_read_to_end_then_ordered_read() {
             }
 
             let mut buf = [0; 1];
-            recv.read(&mut buf).await.unwrap();
+            let fut = pin!(recv.read(&mut buf));
+            let mut cx = Context::from_waker(Waker::noop());
+            assert!(fut.poll(&mut cx).is_pending());
+            ordered_read_done.set(()).unwrap();
         },
         async {
             let conn = client
@@ -1760,7 +1764,7 @@ async fn recv_stream_cancel_read_to_end_then_ordered_read() {
                 .unwrap();
             let mut send = conn.open_uni().await.unwrap();
             send.write_all(b"hello").await.unwrap();
-            std::future::pending::<()>().await;
+            ordered_read_done.wait().await;
         },
     );
 }
