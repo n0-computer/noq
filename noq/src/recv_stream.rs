@@ -249,11 +249,7 @@ impl RecvStream {
     /// Convenience method to read all remaining data into a buffer
     ///
     /// Fails with [`ReadToEndError::TooLong`] on reading more than `size_limit` bytes, discarding
-    /// all data read. Uses unordered reads to be more efficient than using `AsyncRead` would
-    /// allow. `size_limit` should be set to limit worst-case memory use.
-    ///
-    /// If unordered reads have already been made, the resulting buffer may have gaps containing
-    /// arbitrary data.
+    /// all data read. `size_limit` should be set to limit worst-case memory use.
     ///
     /// This operation is *not* cancel-safe.
     ///
@@ -540,7 +536,7 @@ impl Future for ReadToEnd<'_> {
     type Output = Result<Vec<u8>, ReadToEndError>;
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         loop {
-            match ready!(self.stream.poll_read_chunk(cx, usize::MAX, false))? {
+            match ready!(self.stream.poll_read_chunk(cx, usize::MAX, true))? {
                 Some(chunk) => {
                     self.start = self.start.min(chunk.offset);
                     let end = chunk.bytes.len() as u64 + chunk.offset;
