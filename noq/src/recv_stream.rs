@@ -200,6 +200,17 @@ impl RecvStream {
         })
     }
 
+    fn is_ordered(&self) -> Result<bool, ReadError> {
+        let mut conn = self.conn.lock_without_waking("RecvStream::is_ordered");
+        if self.is_0rtt {
+            conn.check_0rtt().map_err(|()| ReadError::ZeroRttRejected)?;
+        }
+        conn.inner
+            .recv_stream(self.stream)
+            .is_ordered()
+            .map_err(|_| ReadError::ClosedStream)
+    }
+
     /// Reads the next segments of data.
     ///
     /// Fills `bufs` with the segments of data beginning immediately after the last data yielded
@@ -257,13 +268,15 @@ impl RecvStream {
     ///
     /// [`ReadToEndError::TooLong`]: crate::ReadToEndError::TooLong
     pub async fn read_to_end(&mut self, size_limit: usize) -> Result<Vec<u8>, ReadToEndError> {
+        if !self.is_ordered()? {
+            return Err(ReadError::ClosedStream.into());
+        }
         ReadToEnd {
             stream: self,
             size_limit,
             read: Vec::new(),
             start: u64::MAX,
             end: 0,
-            first_read: true,
         }
         .await
     }
@@ -528,18 +541,13 @@ struct ReadToEnd<'a> {
     start: u64,
     end: u64,
     size_limit: usize,
-    first_read: bool,
 }
 
 impl Future for ReadToEnd<'_> {
     type Output = Result<Vec<u8>, ReadToEndError>;
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         loop {
-            // the first call to poll_read_chunk is ordered to trigger a ClosedStream
-            // error if the underlying stream is already in unordered mode.
-            let ordered = self.first_read;
-            self.first_read = false;
-            match ready!(self.stream.poll_read_chunk(cx, usize::MAX, ordered))? {
+            match ready!(self.stream.poll_read_chunk(cx, usize::MAX, false))? {
                 Some(chunk) => {
                     self.start = self.start.min(chunk.offset);
                     let end = chunk.bytes.len() as u64 + chunk.offset;
