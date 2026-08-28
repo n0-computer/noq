@@ -249,9 +249,11 @@ impl RecvStream {
     /// Convenience method to read all remaining data into a buffer
     ///
     /// Fails with [`ReadToEndError::TooLong`] on reading more than `size_limit` bytes, discarding
-    /// all data read. `size_limit` should be set to limit worst-case memory use.
+    /// all data read. Uses unordered reads to be more efficient than using `AsyncRead` would
+    /// allow. `size_limit` should be set to limit worst-case memory use.
     ///
-    /// This operation is *not* cancel-safe.
+    /// This operation is *not* cancel-safe. If cancelled after it has begun reading, further read
+    /// operations on the stream return [`ReadError::ClosedStream`].
     ///
     /// [`ReadToEndError::TooLong`]: crate::ReadToEndError::TooLong
     pub async fn read_to_end(&mut self, size_limit: usize) -> Result<Vec<u8>, ReadToEndError> {
@@ -261,6 +263,7 @@ impl RecvStream {
             read: Vec::new(),
             start: u64::MAX,
             end: 0,
+            first_read: true,
         }
         .await
     }
@@ -387,12 +390,7 @@ impl RecvStream {
                 let mut recv = conn.inner.recv_stream(self.stream);
                 let mut chunks = recv.read(ordered).map_err(|e| match e {
                     ReadableError::ClosedStream => ReadError::ClosedStream,
-                    ReadableError::IllegalOrderedRead => {
-                        // We should never get here because the only way to do unordered reads is
-                        // via UnorderedRecvStream, which allows only unordered reads. It is not
-                        // possible to get a RecvStream from an UnorderedRecvStream.
-                        unreachable!("ordered read after unordered read")
-                    }
+                    ReadableError::IllegalOrderedRead => ReadError::ClosedStream,
                 })?;
                 let status = read_fn(&mut chunks);
                 if chunks.finalize().should_transmit() {
@@ -530,13 +528,18 @@ struct ReadToEnd<'a> {
     start: u64,
     end: u64,
     size_limit: usize,
+    first_read: bool,
 }
 
 impl Future for ReadToEnd<'_> {
     type Output = Result<Vec<u8>, ReadToEndError>;
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         loop {
-            match ready!(self.stream.poll_read_chunk(cx, usize::MAX, true))? {
+            // the first call to poll_read_chunk is ordered to trigger a ClosedStream
+            // error if the underlying stream is already in unordered mode.
+            let ordered = self.first_read;
+            self.first_read = false;
+            match ready!(self.stream.poll_read_chunk(cx, usize::MAX, ordered))? {
                 Some(chunk) => {
                     self.start = self.start.min(chunk.offset);
                     let end = chunk.bytes.len() as u64 + chunk.offset;

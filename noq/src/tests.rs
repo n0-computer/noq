@@ -1730,9 +1730,10 @@ async fn recv_stream_cancel_stop_drop() {
     );
 }
 
-/// Dropping a pending `read_to_end` future must not make a subsequent ordered read panic.
+/// Dropping a pending `read_to_end` future makes subsequent reads fail because `read_to_end` uses
+/// the unordered API internally.
 #[tokio::test]
-async fn recv_stream_cancel_read_to_end_then_ordered_read() {
+async fn recv_stream_cancel_read_to_end_then_ordered_read_is_closed() {
     let _guard = subscribe();
     let factory = EndpointFactory::new();
     let server = factory.endpoint("server");
@@ -1750,10 +1751,19 @@ async fn recv_stream_cancel_read_to_end_then_ordered_read() {
                 assert!(fut.poll(&mut cx).is_pending());
             }
 
-            let mut buf = [0; 1];
-            let fut = pin!(recv.read(&mut buf));
-            let mut cx = Context::from_waker(Waker::noop());
-            assert!(fut.poll(&mut cx).is_pending());
+            {
+                let mut buf = [0; 1];
+                let fut = pin!(recv.read(&mut buf));
+                let mut cx = Context::from_waker(Waker::noop());
+                assert!(matches!(
+                    fut.poll(&mut cx),
+                    Poll::Ready(Err(crate::ReadError::ClosedStream))
+                ));
+            }
+            assert_eq!(
+                recv.read_to_end(usize::MAX).await,
+                Err(crate::ReadToEndError::Read(crate::ReadError::ClosedStream))
+            );
             ordered_read_done.set(()).unwrap();
         },
         async {
