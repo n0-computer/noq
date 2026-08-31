@@ -20,6 +20,7 @@ use rustls::{
 use tracing::{debug, info, info_span, trace};
 
 use crate::crypto::rustls::{QuicClientConfig, QuicServerConfig, configured_provider};
+use crate::connection::timer::Timer;
 use crate::{
     ClientConfig, ClosePathError, ClosedPath, Connection, ConnectionError, ConnectionEvent,
     ConnectionHandle, ConnectionStats, DatagramEvent, Datagrams, Dir, Duration, EcnCodepoint,
@@ -764,6 +765,40 @@ impl ConnPair {
 
     pub(super) fn poll_timeout(&mut self, side: Side) -> Option<Instant> {
         self.conn_mut(side).poll_timeout()
+    }
+
+    /// Advances virtual time and drives both endpoints until `timer` fires on `side`.
+    ///
+    /// [`Self::drive`] refuses to step past a point where the only timers still pending
+    /// are idle timers (see `Connection::is_idle`), so it cannot be used to reach an idle
+    /// timeout: the timeout is exactly what `is_idle` discounts. This loop keeps stepping
+    /// to each next wakeup until `timer` is no longer armed.
+    ///
+    /// Note that timers fire in `drive_client`/`drive_server`, not in `advance_time`, so
+    /// every step has to drive both endpoints. A timer that is *cancelled* rather than
+    /// fired also ends the loop; callers should still assert on the event they expect, so
+    /// that a cancellation fails loudly instead of passing silently.
+    ///
+    /// Each step advances the clock *before* driving, so packets that must be sent at the
+    /// current time have to be driven out by a preceding [`Self::drive`]; otherwise they
+    /// are queued until after the first step.
+    ///
+    /// Panics if the timer is still armed after 1024 steps.
+    #[track_caller]
+    pub(super) fn drive_until_timer(&mut self, side: Side, timer: Timer) {
+        let mut steps = 0;
+        while self.conn(side).timer_pending(timer).is_some() {
+            // If `timer` is armed, this endpoint has a wakeup scheduled, so the advance
+            // cannot run out of timers.
+            assert!(
+                self.advance_time(),
+                "{timer:?} is armed but no endpoint has a wakeup scheduled"
+            );
+            self.drive_client();
+            self.drive_server();
+            steps += 1;
+            assert!(steps < 1024, "{timer:?} still armed after {steps} steps");
+        }
     }
 
     pub(super) fn poll(&mut self, side: Side) -> Option<Event> {
