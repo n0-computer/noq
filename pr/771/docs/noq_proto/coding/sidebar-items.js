@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"struct":["UnexpectedEnd"],"trait":["Decodable","Encodable"],"type":["Result"]};
