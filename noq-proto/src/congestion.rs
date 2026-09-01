@@ -23,6 +23,12 @@ pub trait Controller: Send + Sync + std::fmt::Debug {
     #[allow(unused_variables)]
     fn on_packet_sent(&mut self, now: Instant, bytes: u16, pn: u64) {}
 
+    /// The connection had data to send but was blocked by the congestion window
+    ///
+    /// Reports the spec's `C.is_cwnd_limited` signal to the controller: the sender fully utilized
+    /// the congestion window at this point in the current round trip.
+    fn on_cwnd_limited(&mut self) {}
+
     /// Packet deliveries were confirmed
     ///
     /// `app_limited` indicates whether the connection was blocked on outgoing

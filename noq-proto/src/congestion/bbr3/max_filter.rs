@@ -2,28 +2,7 @@ use std::fmt::Debug;
 
 const MAX_FILTER_LEN: usize = 3;
 
-/// Based on Linux kernel code released here:
-/// <https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=f672258391b42a5c7cc2732c9c063e56a85c8dbe>
-///
-/// Kathleen Nichols' algorithm for tracking the maximum
-/// value of a data stream over some fixed time interval.  (E.g.,
-/// the maximum Bandwidth achieved over the past 3 rounds.) It uses constant
-/// space and constant time per update yet almost always delivers
-/// the same maximum as an implementation that has to keep all the
-/// data in the window.
-///
-/// The algorithm keeps track of the best, 2nd best & 3rd highest max
-/// values, maintaining an invariant that the measurement time of
-/// the n'th best >= n-1'th best. It also makes sure that the three
-/// values are widely separated in the time window since that bounds
-/// the worst case error when that data is monotonically increasing
-/// over the window.
-///
-/// Upon getting a new max, we can forget everything earlier because
-/// it has no value - the new max is >= everything else in the window
-/// by definition, and it samples the most recent one. So we restart fresh on
-/// every new max and overwrites 2nd & 3rd choices. The same property
-/// holds for 2nd & 3rd best.
+/// Tracks the maximum value of a data stream over a fixed time window.
 #[derive(Copy, Clone, Debug)]
 pub(super) struct MaxFilter {
     window: u64,
@@ -43,6 +22,8 @@ impl MaxFilter {
         self.samples[0].value.unwrap_or(0)
     }
 
+    /// Update the tracked maximum with a new `measurement` at `current_round`.
+    ///
     /// `current_round` represents a sequence number counting upwards from 0 monotonically
     /// `measurement` is what is tracked as the max values over time
     pub(super) fn update_max(&mut self, current_round: u64, measurement: u64) {
@@ -122,6 +103,29 @@ struct MaxSample {
     round: u64,
     value: Option<u64>,
 }
+
+// Based on Linux kernel code released here
+// <https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=f672258391b42a5c7cc2732c9c063e56a85c8dbe>
+//
+// Kathleen Nichols' algorithm for tracking the maximum
+// value of a data stream over some fixed time interval.  (E.g.,
+// the maximum Bandwidth achieved over the past 3 rounds.) It uses constant
+// space and constant time per update yet almost always delivers
+// the same maximum as an implementation that has to keep all the
+// data in the window.
+//
+// The algorithm keeps track of the best, 2nd best & 3rd highest max
+// values, maintaining an invariant that the measurement time of
+// the n'th best >= n-1'th best. It also makes sure that the three
+// values are widely separated in the time window since that bounds
+// the worst case error when that data is monotonically increasing
+// over the window.
+//
+// Upon getting a new max, we can forget everything earlier because
+// it has no value - the new max is >= everything else in the window
+// by definition, and it samples the most recent one. So we restart fresh on
+// every new max and overwrites 2nd & 3rd choices. The same property
+// holds for 2nd & 3rd best.
 
 #[cfg(test)]
 mod test {

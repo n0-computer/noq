@@ -15,12 +15,18 @@ env:
   RUST_BACKTRACE: 1
   RUSTFLAGS: -Dwarnings
 
+# Default to read-only; jobs that need more grant it explicitly.
+permissions:
+  contents: read
+
 jobs:
   wine_test:
     name: Wine Sanity Check
     runs-on: [self-hosted, linux, X64]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Install Wine
         run: |
@@ -35,8 +41,9 @@ jobs:
           WINEARCH=win64 wineboot --init
 
       - name: Install Rust + mingw target
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
+          toolchain: stable
           targets: x86_64-pc-windows-gnu
 
       - name: Install mingw-w64
@@ -44,7 +51,7 @@ jobs:
 
       - name: Build tests
         # Release mode required - debug builds exceed mingw's export ordinal limit (~65k symbols)
-        run: cargo build --target x86_64-pc-windows-gnu --tests --release
+        run: cargo build --locked --target x86_64-pc-windows-gnu --tests --release
 
       - name: List available tests
         run: |

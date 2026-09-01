@@ -2,7 +2,28 @@
 
 All notable changes to noq will be documented in this file.
 
-## [1.1.0](https://github.com/n0-computer/noq/compare/noq-v1.0.1..1.1.0) - 2026-07-20
+## [1.2.0](https://github.com/n0-computer/noq/compare/noq-v1.1.0..1.2.0) - 2026-08-24
+
+### ⛰️  Features
+
+- *(proto)* Sync bbrv3 from quinn ([#785](https://github.com/n0-computer/noq/issues/785)) - ([64a7e4c](https://github.com/n0-computer/noq/commit/64a7e4cb9b11def5fbfc4cc419df4bfe58a94ee2))
+- *(udp)* Support wasm32-wasip2 ([#773](https://github.com/n0-computer/noq/issues/773)) - ([f07006e](https://github.com/n0-computer/noq/commit/f07006e735ba0ea8624601f5e18b16bc7fe6f127))
+
+### 🐛 Bug Fixes
+
+- *(proto)* Correctly set per path idle timer ([#771](https://github.com/n0-computer/noq/issues/771)) - ([f1ae905](https://github.com/n0-computer/noq/commit/f1ae90533aad86942b7fdc6562744006268989b3))
+- *(proto)* Ignore coalesced datagram tail for unknown path ([#782](https://github.com/n0-computer/noq/issues/782)) - ([898cea7](https://github.com/n0-computer/noq/commit/898cea7d0358201c99b8c8419c792dc5d43e2202))
+- *(udp)* Disable SO_TIMESTAMPNS for now ([#776](https://github.com/n0-computer/noq/issues/776)) - ([20d6fec](https://github.com/n0-computer/noq/commit/20d6fec70df507a242183dbde2bd7202bbaecdde))
+
+### ⚙️ Miscellaneous Tasks
+
+- *(docs)* Remove the unmaintained book ([#793](https://github.com/n0-computer/noq/issues/793)) - ([f96c494](https://github.com/n0-computer/noq/commit/f96c4946a1976db4edf157d63f10d7c63d7c2fef))
+- *(secruity)* Ensure locked cargo files and dependabot cooldown ([#788](https://github.com/n0-computer/noq/issues/788)) - ([c334d2d](https://github.com/n0-computer/noq/commit/c334d2da218226777d61fdfd32cb0a45b2cdb7e3))
+- Run daily CI even two hours earlier ([#767](https://github.com/n0-computer/noq/issues/767)) - ([8cae43a](https://github.com/n0-computer/noq/commit/8cae43aed1377835fd03edf5bca22b88984fd0ea))
+- Run `cargo update` and adjust `deny.toml` accordingly ([#762](https://github.com/n0-computer/noq/issues/762)) - ([5cf07f4](https://github.com/n0-computer/noq/commit/5cf07f4830270ca2262e6e2f0c190dab54936c5a))
+- Auto format and wrap comments ([#744](https://github.com/n0-computer/noq/issues/744)) - ([db9bf72](https://github.com/n0-computer/noq/commit/db9bf72ac4398276d629a825bd2ce7460f9f5d70))
+
+## [noq-v1.1.0](https://github.com/n0-computer/noq/compare/noq-v1.0.1..noq-v1.1.0) - 2026-07-20
 
 ### ⛰️  Features
 
@@ -10,11 +31,17 @@ All notable changes to noq will be documented in this file.
 - *(proto)* Allow ProtectedHeader::decode to use a generic reference - ([8f80192](https://github.com/n0-computer/noq/commit/8f8019266659691be7094420bcd210ec5f476d66))
 - *(proto)* Use path idle timeout for validation when opening a new path ([#721](https://github.com/n0-computer/noq/issues/721)) - ([b570682](https://github.com/n0-computer/noq/commit/b57068277c66fc625b9fe6a4abb331fcb81d67ee))
 - *(proto)* Make Connection::poll_timeout immutable - ([a17cb24](https://github.com/n0-computer/noq/commit/a17cb24292421347701d3a3110402f04f0aa6c3b))
+- *(quinn-udp)* Make Apple fast datapath opt-in - ([a0ec97a](https://github.com/n0-computer/noq/commit/a0ec97a50bdab237450dce97b69a63419ef0ef25))
+- *(udp)* Add IP_RECVERR / IPV6_RECVERR support (Linux/Android) - ([81582f4](https://github.com/n0-computer/noq/commit/81582f48f6f10efc5b16f589332587e24001d846))
 - *(udp)* Implement kernel receive timestamps on Linux/Android - ([b454d17](https://github.com/n0-computer/noq/commit/b454d1799f20027d3dd05edfd5080ecae181ddad))
+- Implement kernel receive timestamps on Linux/Android - ([9849790](https://github.com/n0-computer/noq/commit/9849790f028e431b3303e7d731db970f1bc73006))
 
 ### 🐛 Bug Fixes
 
 - *(noq)* Handle overdue timers without polling the async timer - ([f165c03](https://github.com/n0-computer/noq/commit/f165c03e993b40f1f8a0c341226ace15de5009fc))
+- *(perf)* Suppress table output in JSON mode - ([f853e5e](https://github.com/n0-computer/noq/commit/f853e5e0826a00f4b80551986eba0ca251ae1b45))
+- *(proto)* Discard stale abandoned path packets ([#732](https://github.com/n0-computer/noq/issues/732)) - ([52a5000](https://github.com/n0-computer/noq/commit/52a500044d47ade2ebba07e0bb59c7b224104df5))
+- *(proto)* Make path_stats not require self mutably - api unchanged ([#736](https://github.com/n0-computer/noq/issues/736)) - ([54bae7f](https://github.com/n0-computer/noq/commit/54bae7f87d3e687b2627b382931364e52b2bca8e))
 - *(proto)* Congestion: avoid double-reducing CUBIC fast convergence - ([4cfbafa](https://github.com/n0-computer/noq/commit/4cfbafa4cfb0e47b8d58d80ecfabe15596a1dc8c))
 - *(proto)* Congestion: preserve excess CUBIC cwnd increment - ([6039c93](https://github.com/n0-computer/noq/commit/6039c9375b6b5701411264769152fda062bb2fc1))
 - *(proto)* Set loss detection timer on path validation failure - ([f847bb0](https://github.com/n0-computer/noq/commit/f847bb0b9470e4a6242d49644fc8409c39f341a5))
@@ -23,43 +50,179 @@ All notable changes to noq will be documented in this file.
 - *(proto)* Reject DATAGRAMs larger than the send buffer - ([1e8a5a9](https://github.com/n0-computer/noq/commit/1e8a5a99636ff8e6e93b39b588c2bbce229b2258))
 - *(proto)* Use binary search in ArrayRangeSet - ([ba90d78](https://github.com/n0-computer/noq/commit/ba90d786a394b1e21136293393c16b2a6e172243))
 - *(proto)* Drop Initials silently when saturated - ([f2968cf](https://github.com/n0-computer/noq/commit/f2968cf8861c09f2a8b5aa1cb6452c95bb5c15ae))
+- *(quinn)* Handle overdue timers without polling the async timer - ([76020ba](https://github.com/n0-computer/noq/commit/76020ba4abd89716e4bf6e365169d5728983cef9))
 - *(readme)* Use correct crates.io badge link in README.md ([#756](https://github.com/n0-computer/noq/issues/756)) - ([ab91554](https://github.com/n0-computer/noq/commit/ab91554446488cbf6bf5122b15bf05867c81c283))
 - *(udp)* Log sendmsg errors on debug ([#759](https://github.com/n0-computer/noq/issues/759)) - ([603c5e6](https://github.com/n0-computer/noq/commit/603c5e64cd7ac86efc55f3dc53be8dccbf466038))
-- *(proto)* Deprecate UdpStats::ios as io-operations can't be measured from this crate ([#725](https://github.com/n0-computer/noq/issues/725)) - ([d6e525d41](https://github.com/n0-computer/noq/commit/d6e525d41))
+- *(unix)* Disable GSO after probing - ([8acb578](https://github.com/n0-computer/noq/commit/8acb578f10b02986050bc600e629f56f40162266))
+- *(windows)* Use `effective_segment_size` - ([ab9da17](https://github.com/n0-computer/noq/commit/ab9da17120056536e2e442891eb8547f496f445d))
+- Evaluate `max_gso_segments` for every socket on Windows - ([41bf1db](https://github.com/n0-computer/noq/commit/41bf1db60d9db95913224811280a2dd171b02e13))
+- Reuse existing socket for probing GRO/GSO support - ([ee8f946](https://github.com/n0-computer/noq/commit/ee8f9469b8b13502cbad587940cf2c36a69bdeef))
+- Remove opportunistic GRO syscall - ([04ba57c](https://github.com/n0-computer/noq/commit/04ba57c643a573b2cd9a9666a5e5cd92dad05504))
+- Resolve `sendmsg_x`/`recvmsg_x` via `dlsym` - ([e01f99e](https://github.com/n0-computer/noq/commit/e01f99e2658b1d0d7f31930ee014701cb34bc2d0))
+- Patches for Redox targets - ([ef21cf5](https://github.com/n0-computer/noq/commit/ef21cf5bcad9a69f1a3bae1447d5305a8f30189c))
 - Patches for Redox targets - ([5c05d21](https://github.com/n0-computer/noq/commit/5c05d21002096d5b824a850dae32c03f869f06b1))
+- Set loss detection timer on path validation failure - ([31f7f12](https://github.com/n0-computer/noq/commit/31f7f12f5fecc6a849e3b6053bd39bb7e7294a04))
 
 ### 🚜 Refactor
 
 - *(noq)* Use let-else in drive_timer - ([ef3fce8](https://github.com/n0-computer/noq/commit/ef3fce83276e22fa57b9054b7660028d9183b3c1))
 - *(proto)* Make `state.rs` handle emitting events instead of callers ([#753](https://github.com/n0-computer/noq/issues/753)) - ([22fbed2](https://github.com/n0-computer/noq/commit/22fbed2ffa5943fada6747ce906d081258f4a02e))
+- *(quinn)* Use let-else in drive_timer - ([485f9b6](https://github.com/n0-computer/noq/commit/485f9b65fa5030748d258da00941b9a789a780ae))
+- *(quinn-udp)* Make `decode_recv` generic over `MsgHdr` - ([98aadf2](https://github.com/n0-computer/noq/commit/98aadf2b326c515fb659b26497734fb593c04ae1))
+- *(quinn-udp)* Extract `decode_socket_addr` helper - ([42de9dd](https://github.com/n0-computer/noq/commit/42de9dd2bec578bee21c9e0bf966dee01f8b229b))
+- *(quinn-udp)* Extract `ControlMetadata` helper - ([4742a70](https://github.com/n0-computer/noq/commit/4742a70e336e2d724b5900144d5fb164fbe31a18))
+- *(quinn-udp)* Split fast&slow send/recv paths - ([2964782](https://github.com/n0-computer/noq/commit/2964782b4fcc8157755ecf17e439b28f8d4e4fea))
+- *(quinn-udp)* Add `retry_if_interrupted` helper - ([52c7ad1](https://github.com/n0-computer/noq/commit/52c7ad18982e02fa112d6f401572213e08709df6))
+- *(udp)* Extract linux module - ([aa95f97](https://github.com/n0-computer/noq/commit/aa95f97927442f9d07bfb800919a37b07b731f28))
+- *(udp)* Extract apple_fast module - ([db4ae65](https://github.com/n0-computer/noq/commit/db4ae654cb364b14a72b02ef2fd16700734eef63))
 - *(udp)* Extract linux module - ([0fcc14b](https://github.com/n0-computer/noq/commit/0fcc14bc18bedf7f534cd9012ac206ac579cadf2))
 - *(udp)* Extract apple_fast module - ([2cc4e3f](https://github.com/n0-computer/noq/commit/2cc4e3f25b3358cf7dc93cd332edac42ab37eead))
+- Introduce `Transmit::effective_segment_size` - ([99abc2b](https://github.com/n0-computer/noq/commit/99abc2b3e2b95446ea0abb9b6ce9f41a2633feff))
+- Remove `gro` module - ([56bba7c](https://github.com/n0-computer/noq/commit/56bba7c0fa393a7aed8b5f99989f02e69cee72a4))
 
 ### 📚 Documentation
 
 - *(noq)* Expand RecvStream::is_0rtt docs - ([497973c](https://github.com/n0-computer/noq/commit/497973c8604e3a1e4163ba4a403c443c7e301557))
 - *(noq)* Document SendStream::stopped for detecting 0-RTT rejection - ([7e2de91](https://github.com/n0-computer/noq/commit/7e2de9179e5198b37e2769f4f9fb6cbfe9c14536))
 - *(proto)* Tweak Window docstrings - ([4586890](https://github.com/n0-computer/noq/commit/4586890ef8f565da5f2239d46fd843018a426d90))
+- *(quinn)* Improve `Connection::close_reason()` documentation - ([f0905db](https://github.com/n0-computer/noq/commit/f0905db64178771a62c433c8b0b0e095dfaa8f66))
 - *(udp)* Clean up docstrings - ([1411814](https://github.com/n0-computer/noq/commit/141181495bbafd7be3678cf0485be27bf46d3aee))
+- Fix typo in EndpointStats - ([5db36fe](https://github.com/n0-computer/noq/commit/5db36fe4ee7228631f382d6dedd49f1002f6ef7d))
+- Fix book build with mdbook 0.5.2 - ([bb00530](https://github.com/n0-computer/noq/commit/bb005309e60b1d056d004dca44dee838bcaa13b8))
+- Clarify that `Event::ConnectionLost` is not emitted on local close - ([0adcd20](https://github.com/n0-computer/noq/commit/0adcd2053107e302347c4b9741159a7ff0b6c9bb))
+
+### 🎨 Styling
+
+- *(proto)* Move Window below Dedup - ([90857a8](https://github.com/n0-computer/noq/commit/90857a868a789a808273efeda0ae727299ebb41c))
+- *(udp)* Move msghdr_x and IpTosTy definitions down - ([fc6b02b](https://github.com/n0-computer/noq/commit/fc6b02ba722eee1c8c283d70e893a589860b6adf))
+- *(udp)* Move CMSG_LEN to cmsg::LEN - ([f14b1b4](https://github.com/n0-computer/noq/commit/f14b1b452124c32f9fa9a86515557075b6ac8537))
 
 ### 🧪 Testing
 
 - *(noq)* Improve 0-RTT integration test - ([190ef12](https://github.com/n0-computer/noq/commit/190ef12009ffa9b9ec4fe499b24b84269d76de27))
+- *(proto)* Fix description of how ManyToMany routing works ([#726](https://github.com/n0-computer/noq/issues/726)) - ([79745ed](https://github.com/n0-computer/noq/commit/79745edeb07f4435e5ec4da3b15b341c9fcf2a81))
 - *(proto)* Implement bandwidth-limited routing ([#720](https://github.com/n0-computer/noq/issues/720)) - ([41cbdbe](https://github.com/n0-computer/noq/commit/41cbdbe26dd9f294b16c14288775d384fa40068e))
 
 ### ⚙️ Miscellaneous Tasks
 
 - *(ci)* Fix docs cleanup job ([#751](https://github.com/n0-computer/noq/issues/751)) - ([d0456ce](https://github.com/n0-computer/noq/commit/d0456ce2c76bf30d5df371b8f904933d7d5df229))
+- *(deps)* Bump log from 0.4.28 to 0.4.29 - ([2b51fa7](https://github.com/n0-computer/noq/commit/2b51fa72035eb13ee4e76ba37f5987e690a16f0f))
+- *(deps)* Bump criterion from 0.7.0 to 0.8.1 - ([4de6d2c](https://github.com/n0-computer/noq/commit/4de6d2cefc4f98793b0c908f1a332989715c8b18))
+- *(deps)* Bump rcgen from 0.14.5 to 0.14.6 - ([bb359cc](https://github.com/n0-computer/noq/commit/bb359ccd7dfbc18b472bcb61e6800be6dc886264))
+- *(deps)* Bump serde_json from 1.0.145 to 1.0.146 - ([1713c04](https://github.com/n0-computer/noq/commit/1713c04012f512ae1ba2dbae6e777ebf7d980b31))
+- *(deps)* Bump serde_json from 1.0.146 to 1.0.148 - ([bb0240c](https://github.com/n0-computer/noq/commit/bb0240c376a7b5c9b69ca5cb27ad9a4562550c1d))
+- *(deps)* Bump serde_json from 1.0.148 to 1.0.149 - ([cc3cf27](https://github.com/n0-computer/noq/commit/cc3cf2702ccbd4c685227730423ca07f40b7a11c))
+- *(deps)* Bump fastbloom from 0.14.0 to 0.14.1 - ([516d28f](https://github.com/n0-computer/noq/commit/516d28f7ae696aec489ff10a3027948e9c2e73c2))
+- *(deps)* Bump url from 2.5.7 to 2.5.8 - ([26a7766](https://github.com/n0-computer/noq/commit/26a776626ecab4ec85daa7be043c89bf387d0725))
+- *(deps)* Bump socket2 from 0.6.1 to 0.6.2 - ([909fc60](https://github.com/n0-computer/noq/commit/909fc6017563b5080cd4781bcfdc42e3a63fcb48))
+- *(deps)* Bump rcgen from 0.14.6 to 0.14.7 - ([02cc41e](https://github.com/n0-computer/noq/commit/02cc41ed5a6ae202030a2e3b925daa8af22a87d1))
+- *(deps)* Bump bytes from 1.11.0 to 1.11.1 - ([3aafa80](https://github.com/n0-computer/noq/commit/3aafa8039eaa32accd539fbba5bbf05479a55b98))
+- *(deps)* Bump time from 0.3.45 to 0.3.47 - ([7ea60c1](https://github.com/n0-computer/noq/commit/7ea60c10ff58731810b7f15426865ee76ed3d7d6))
+- *(deps)* Bump criterion from 0.8.1 to 0.8.2 - ([e841ce4](https://github.com/n0-computer/noq/commit/e841ce456d1de6893a5f3ead4676ed010f53d8c5))
+- *(deps)* Bump pin-project-lite from 0.2.16 to 0.2.17 - ([ea2876b](https://github.com/n0-computer/noq/commit/ea2876b7544f8c86497d20084e35bde9193a5394))
+- *(deps)* Bump aws-lc-fips-sys from 0.13.11 to 0.13.12 - ([8635675](https://github.com/n0-computer/noq/commit/863567548c54df8c594adc76c56f401c09c6b73c))
+- *(deps)* Bump socket2 from 0.6.2 to 0.6.3 - ([c67e9d8](https://github.com/n0-computer/noq/commit/c67e9d8930c87270c37f142ffab2a8f50b21d50b))
+- *(deps)* Bump rustc-hash from 2.1.1 to 2.1.2 - ([42d531d](https://github.com/n0-computer/noq/commit/42d531d24f0f619d4634da901dba1f24aaa4f507))
+- *(deps)* Bump codecov/codecov-action from 5 to 6 - ([44c71fe](https://github.com/n0-computer/noq/commit/44c71fe7dd1f643f4af63b29b6b0af21ad1db778))
+- *(deps)* Bump android-actions/setup-android from 3 to 4 - ([ea43cf3](https://github.com/n0-computer/noq/commit/ea43cf33f6fef9b1a8e7544093c447cae811fe9c))
+- *(deps)* Bump rcgen from 0.14.7 to 0.14.8 - ([41dce31](https://github.com/n0-computer/noq/commit/41dce314263fe5d4340f44e0c23ce762ce562396))
+- *(deps)* Bump log from 0.4.29 to 0.4.30 - ([995512f](https://github.com/n0-computer/noq/commit/995512ff7843f6da9d64232435e303ab7ebf25a5))
+- *(deps)* Bump serde_json from 1.0.149 to 1.0.150 - ([b2f4d93](https://github.com/n0-computer/noq/commit/b2f4d932a21bc7b2ac1d142bd2320b1d0a222bb9))
+- *(deps)* Bump log from 0.4.30 to 0.4.31 - ([89d9eaa](https://github.com/n0-computer/noq/commit/89d9eaacc3664ce8a7236f8b1659c571198319c7))
+- *(deps)* Bump socket2 from 0.6.3 to 0.6.4 - ([63d7512](https://github.com/n0-computer/noq/commit/63d75122a2f8cc47fb1c11d6485e72958a059409))
+- *(deps)* Bump codecov/codecov-action from 6 to 7 - ([81c0363](https://github.com/n0-computer/noq/commit/81c0363fac2fc5d5631970040b036279ec110efd))
+- *(deps)* Bump libfuzzer-sys from 0.4.12 to 0.4.13 - ([00b4b74](https://github.com/n0-computer/noq/commit/00b4b7493fe70d777c32df86a8889895bb439c90))
+- *(deps)* Bump log from 0.4.31 to 0.4.32 - ([1b17cc7](https://github.com/n0-computer/noq/commit/1b17cc79631f67c8849c9badc991c5985020f047))
+- *(deps)* Bump log from 0.4.32 to 0.4.33 - ([5e4bb6c](https://github.com/n0-computer/noq/commit/5e4bb6cef54b29f2e15b21070090440ddffc56d7))
+- *(deps)* Bump getrandom from 0.4.1 to 0.4.3 - ([92cd707](https://github.com/n0-computer/noq/commit/92cd707c96646e739f3021175171e328f35faf91))
+- *(noq-udp)* Apply suggestion from @mxinden - ([9a95dbd](https://github.com/n0-computer/noq/commit/9a95dbd5cdd25fe6e66f04948be1dc054b98b04e))
+- *(noq-udp)* Remove orphaned apple_fast/linux modules - ([9573207](https://github.com/n0-computer/noq/commit/9573207b66aa108bcf0e892dd461867f7b536523))
 - *(proto)* Apply suggestions from clippy 1.96 - ([ccfad4d](https://github.com/n0-computer/noq/commit/ccfad4d195080206d59d30ad307164ba5d1887c8))
 - *(proto)* Demote error! log to debug! log ([#741](https://github.com/n0-computer/noq/issues/741)) - ([bbfd024](https://github.com/n0-computer/noq/commit/bbfd02472c745a230ad715be75790d228347dc3f))
+- *(quinn-udp)* Use consts from libc - ([e57e974](https://github.com/n0-computer/noq/commit/e57e97427dd2e709bb621026d097c641c7c7ada1))
+- Fix `unnecessary_unwrap` clippy - ([6be1919](https://github.com/n0-computer/noq/commit/6be19194ae6131117c0ed226e759cd63a69afc66))
+- Fix workflow syntax - ([7cbb05f](https://github.com/n0-computer/noq/commit/7cbb05f92cd5d6b995475fe3f74a8f3e857dc70e))
+- Make cids_exhausted overflow-safe on 32-bit - ([e96c279](https://github.com/n0-computer/noq/commit/e96c27943767ede70bb958107a9e64b7827896b0))
+- Cancel in progress workflows on force pushes - ([345336e](https://github.com/n0-computer/noq/commit/345336e738d8de528b380043e038f3907bd7bf2d))
+- Update relevant release branches - ([737e837](https://github.com/n0-computer/noq/commit/737e837f413f8cf86bd8f66a609df9dc16084799))
+- Drop async-io feature from coverage builds - ([d51b17a](https://github.com/n0-computer/noq/commit/d51b17a29bd0d310bb4bd90307b9cfa841ac9cbb))
+- `quinn-udp@0.6.1` - ([38c036a](https://github.com/n0-computer/noq/commit/38c036ad39aaa421b0cc2c51c6d708f225c425ab))
+- Bump rcgen from 0.14.7 to 0.14.8 - ([a604254](https://github.com/n0-computer/noq/commit/a6042549b464513091a68b499aa4d16141b9e533))
+- Bump log to 0.4.30 - ([51d7043](https://github.com/n0-computer/noq/commit/51d70431df2d20eee3d66df9ac701cd7d11594b1))
+- Bump serde_json to 1.0.150 - ([ab43c64](https://github.com/n0-computer/noq/commit/ab43c64cea134d7f156a3bbd01555c6d3b78e85d))
+- Bump log to 0.4.31 - ([5b65b30](https://github.com/n0-computer/noq/commit/5b65b30afd3817ae325c55d1ba047ac7c4a76216))
+- Bump socket2 to 0.6.4 - ([d3ad06c](https://github.com/n0-computer/noq/commit/d3ad06c0f144c834b2de61824bf89138d5fc31a5))
+- Avoid double-reducing CUBIC fast convergence - ([3c43d45](https://github.com/n0-computer/noq/commit/3c43d45bdf8859185dabbadb21ccb995464f5826))
+- Clean up docstrings - ([0d3c3be](https://github.com/n0-computer/noq/commit/0d3c3be358a36728305a62db4d0677804d611279))
+- Record quinn integration up to 3ca0ff137 ([#739](https://github.com/n0-computer/noq/issues/739)) - ([a2b5572](https://github.com/n0-computer/noq/commit/a2b5572dce2eeef6c86d964871888ef646534031))
 - Update for rust 1.97 ([#745](https://github.com/n0-computer/noq/issues/745)) - ([21eea63](https://github.com/n0-computer/noq/commit/21eea63fbce3ea20d1eff49abcfa15c246f3fb82))
 - Improve semver checks for stable releases ([#734](https://github.com/n0-computer/noq/issues/734)) - ([9663986](https://github.com/n0-computer/noq/commit/966398681f861861714fed52fecf1c4467fc968f))
 - Add more guidance on llm use ([#752](https://github.com/n0-computer/noq/issues/752)) - ([b6b47f1](https://github.com/n0-computer/noq/commit/b6b47f148d63cf27f36eaf3700e032ad8dfb7c52))
 - Run daily CI jobs 2 hours earlier ([#758](https://github.com/n0-computer/noq/issues/758)) - ([403ce63](https://github.com/n0-computer/noq/commit/403ce6307363a3d0d6a7b4722873d434822e248f))
+- Warn for unused_qualifications - ([34530a8](https://github.com/n0-computer/noq/commit/34530a823811e6f8100fbf716fcfa790cbbf8dad))
+- Bump codecov/codecov-action from 5 to 7 - ([a2db989](https://github.com/n0-computer/noq/commit/a2db989f82de2344f660865776085f5fdb7f7b9d))
+- Bump libfuzzer-sys to 0.4.13 - ([2e010a7](https://github.com/n0-computer/noq/commit/2e010a72a1539527a8508dc82e941ac2edd914f9))
+- Fix codecov tests - ([b41c030](https://github.com/n0-computer/noq/commit/b41c03090f4108080dfdc0b358fbb2051181fadf))
 - Improve `CONTRIBUTING.md` ([#761](https://github.com/n0-computer/noq/issues/761)) - ([193b807](https://github.com/n0-computer/noq/commit/193b8079571ce56f6ad65cd6710a9aeb54fe23a3))
 - Remove version number from noq dependency in the `docs/book` - ([14853b4](https://github.com/n0-computer/noq/commit/14853b4d29acd319108a706319ae89c21af58d06))
 - Update `proto` and `udp` dependency versions in `noq`. - ([474d034](https://github.com/n0-computer/noq/commit/474d0349498243464f1b41f526a4693c3dcc7612))
 - Release - ([92a164e](https://github.com/n0-computer/noq/commit/92a164ec475243eaa37304e3aecbb7c98f8df967))
+
+### Connection
+
+- Make poll_timeout immutable - ([cb6ac60](https://github.com/n0-computer/noq/commit/cb6ac60c864c79a3b6bd908fcae04bde503c515d))
+
+### Congestion
+
+- Preserve excess CUBIC cwnd increment - ([bd0c3bf](https://github.com/n0-computer/noq/commit/bd0c3bfea5451448e2c2162287ba537553ddc0a2))
+
+### Deps
+
+- Bump anyhow version to avoid unsoundness ([#731](https://github.com/n0-computer/noq/issues/731)) - ([424652d](https://github.com/n0-computer/noq/commit/424652d6a9d9f97dc81483eb9df1295fd099b89c))
+
+### Fuzz
+
+- Add fuzzing target for parsing transport parameters - ([57b9d0a](https://github.com/n0-computer/noq/commit/57b9d0abf33cf59e0cbd787ca79e2687807c7c85))
+
+### Proto
+
+- Use new constructor where possible - ([98e2c26](https://github.com/n0-computer/noq/commit/98e2c26325be65dffaf366c4cf5fff05cf62c09f))
+- Drop unused From impl - ([c5ab01a](https://github.com/n0-computer/noq/commit/c5ab01a75e996b9ba649ec20c9d7a2a4e6faa5d1))
+- Avoid unwrapping varint decoding during parameters parsing - ([655a8ad](https://github.com/n0-computer/noq/commit/655a8ad094e4fad463c90c4666c62db7de56384b))
+- Send STREAMS_BLOCKED when stream limit is hit   ([#2579](https://github.com/n0-computer/noq/issues/2579)) - ([eff5572](https://github.com/n0-computer/noq/commit/eff55728936615479edeb32df3847372fab55c32))
+- Move Window below Dedup - ([1e77dc0](https://github.com/n0-computer/noq/commit/1e77dc0eb7ed67f23fd6477f40feb5799961004f))
+- Tweak Window docstrings - ([5751078](https://github.com/n0-computer/noq/commit/5751078a9dff1ec1048e6c5a6c605ad7924f16e3))
+
+### Qlog
+
+- Emit RTT values in milliseconds - ([c9b40f1](https://github.com/n0-computer/noq/commit/c9b40f1096a3301d699a0118359f5b176dde38d1))
+
+### Quinn
+
+- Import more types - ([4e3711f](https://github.com/n0-computer/noq/commit/4e3711f65acb220fd60f3bc83d6961d9ff0ce840))
+- Remove indirection in connection initialization - ([67fcd79](https://github.com/n0-computer/noq/commit/67fcd79020e0d80387c79279cada3eec7a22458b))
+- Re-export InvalidCid from quinn-proto - ([e58b3df](https://github.com/n0-computer/noq/commit/e58b3df9d6da7b6528c984d77bc934f0facabe58))
+- Make Endpoint::server dual-stack V6 by default - ([b8e4d3b](https://github.com/n0-computer/noq/commit/b8e4d3b9acf205c5c3304fe901ac40d80408e199))
+- Fix ref count logic for ConnectionRef and EndpointRef - ([37625fe](https://github.com/n0-computer/noq/commit/37625fe2d8104466ba8dd6743bab88daa65b1ed1))
+
+### Quinn-proto
+
+- Drop Initials silently when saturated - ([d4fc3ef](https://github.com/n0-computer/noq/commit/d4fc3efd5e18e6f58bb75f1c4793c89b0d3f1003))
+
+### Quinn-udp
+
+- Make ECN best-effort on Windows (Wine/Proton) - ([e5b30f5](https://github.com/n0-computer/noq/commit/e5b30f51341c323ca3fbaa4006912b105efc1018))
+
+### Udp
+
+- Avoid rebinding argument - ([bb446eb](https://github.com/n0-computer/noq/commit/bb446ebb4afb91e4bd617c5c241c3e63f35f05b4))
+- Move LinuxError down - ([d9ddb81](https://github.com/n0-computer/noq/commit/d9ddb81103fb5f9be389393e7c7da4845e69fcd2))
+- Move msghdr_x and IpTosTy definitions down - ([4b354e2](https://github.com/n0-computer/noq/commit/4b354e22af8aea5a3353b78c3944fd410bbb0f61))
+- Move CMSG_LEN to cmsg::LEN - ([3ca0ff1](https://github.com/n0-computer/noq/commit/3ca0ff137eed3ec8b3e5a6bced10a03515b56c36))
+- Extract linux module - ([35ba3c4](https://github.com/n0-computer/noq/commit/35ba3c45112bafa8b2f3963444f57fa58b10bcee))
+- Extract apple_fast module - ([517028f](https://github.com/n0-computer/noq/commit/517028f4bde8f59aee5516c83f68a34616af2dd8))
+- LinuxError style tweaks - ([5999e14](https://github.com/n0-computer/noq/commit/5999e14cb23b1c84162ff626a6111fb22abb8ca0))
+- Fix clippy suggestions for Windows code - ([bd017d2](https://github.com/n0-computer/noq/commit/bd017d2ba8208c30fa1e135d279ebac7db43f570))
 
 ## [noq-v1.0.1](https://github.com/n0-computer/noq/compare/noq-v1.0.0..noq-v1.0.1) - 2026-06-29
 
