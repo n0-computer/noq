@@ -2453,11 +2453,8 @@ fn datagram_batch_send_no_drop_stops_when_full() {
     assert_matches!(pair.server_datagrams(server_ch).recv(), None);
 }
 
-/// `send_many` with `drop = true` applies drop-oldest backpressure exactly like
-/// `send(data, true)` called in a loop: the buffer is trimmed to fit before each
-/// push, so the newest datagrams survive and the oldest are displaced. It also
-/// enqueues a datagram larger than the budget (but under `max_size`) once the
-/// queue is empty, matching `send(data, true)`.
+/// `send_many` with `drop = true` applies drop-oldest backpressure like repeated
+/// `send(data, true)` calls, so the newest datagrams survive.
 #[test]
 fn datagram_batch_send_drop_oldest() {
     let _guard = subscribe();
@@ -2497,18 +2494,14 @@ fn datagram_batch_send_drop_oldest() {
     assert_eq!(got, 1);
     assert_eq!(out[0], c);
 
-    // A datagram larger than the budget (but under `max_size`) is still enqueued
-    // once the queue is empty for it, just like `send(data, true)`.
+    // Batched and single sends reject datagrams larger than the send buffer.
     let big = Bytes::from(vec![0xD0; WINDOW + 10]);
     assert!(big.len() < max);
-    let queued = pair
-        .client_datagrams(client_ch)
-        .send_many(std::slice::from_ref(&big), true)
-        .unwrap();
-    assert_eq!(queued, 1);
-    pair.drive();
-    assert_eq!(pair.server_datagrams(server_ch).recv().unwrap(), big);
-    assert_matches!(pair.server_datagrams(server_ch).recv(), None);
+    assert_matches!(
+        pair.client_datagrams(client_ch)
+            .send_many(std::slice::from_ref(&big), true),
+        Err(SendDatagramError::TooLarge)
+    );
 }
 
 #[test]

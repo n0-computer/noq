@@ -56,11 +56,10 @@ impl Datagrams<'_> {
 
     /// Queue many unreliable, unordered datagrams for transmission in a single call.
     ///
-    /// This is the batch analogue of [`send`](Self::send): it applies the peer-support
-    /// and size checks once for the whole batch.
+    /// This is the batch analogue of [`send`](Self::send), avoiding repeated connection checks.
     ///
     /// The batch is rejected atomically if any datagram is too large: when any element
-    /// exceeds [`max_size`](Self::max_size) this returns [`TooLarge`] and queues nothing.
+    /// exceeds the maximum size or send buffer size this returns [`TooLarge`] and queues nothing.
     ///
     /// `drop` selects the backpressure behaviour, matching [`send`](Self::send):
     ///
@@ -84,11 +83,14 @@ impl Datagrams<'_> {
         let max = self
             .max_size()
             .ok_or(SendDatagramError::UnsupportedByPeer)?;
-        if datagrams.iter().any(|data| data.len() > max) {
+        let send_buffer_size = self.conn.config.datagram_send_buffer_size;
+        if datagrams
+            .iter()
+            .any(|data| data.len() > Ord::min(max, send_buffer_size))
+        {
             return Err(SendDatagramError::TooLarge);
         }
 
-        let send_buffer_size = self.conn.config.datagram_send_buffer_size;
         let mut queued = 0usize;
         for data in datagrams {
             if drop {
@@ -290,10 +292,12 @@ impl DatagramState {
     /// `out.len()` if fewer are buffered). Remaining datagrams stay queued.
     pub(super) fn recv_many(&mut self, out: &mut [Bytes]) -> usize {
         let n = out.len().min(self.incoming.len());
+        let mut received_bytes = 0;
         for (i, d) in self.incoming.drain(..n).enumerate() {
-            self.recv_buffered -= d.data.len();
+            received_bytes += d.data.len();
             out[i] = d.data;
         }
+        self.recv_buffered -= received_bytes;
         n
     }
 }
