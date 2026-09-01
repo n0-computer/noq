@@ -191,9 +191,8 @@ async fn run_side(conn: Connection, opt: DatagramOpt, role: Role) -> Result<Data
 /// DONE datagram; only the close is coordinated over a reliable bidi stream so
 /// neither side's close cuts off datagrams the other is still counting:
 ///
-/// 1. the client writes `S` right after opening the stream so the server's
-///    `accept_bi` resolves immediately (a stream only reaches the peer once data
-///    is written on it),
+/// 1. the client writes `S` right after opening the stream so the server's `accept_bi` resolves
+///    immediately (a stream only reaches the peer once data is written on it),
 /// 2. each side floods, then repeats the DONE marker,
 /// 3. each side writes `F` once it has received the peer's DONE (done receiving),
 /// 4. each side closes only after reading the peer's `F` (peer got our DONE).

@@ -64,11 +64,11 @@ impl Datagrams<'_> {
     ///
     /// `drop` selects the backpressure behaviour, matching [`send`](Self::send):
     ///
-    /// - `drop = true` drops the oldest queued datagrams to make room, so every element
-    ///   is queued and `Ok(datagrams.len())` is returned.
-    /// - `drop = false` queues elements until the send buffer is full, then stops and
-    ///   returns `Ok(n)` for the `n` elements queued. The remaining elements are the
-    ///   caller's to retry once space frees up.
+    /// - `drop = true` drops the oldest queued datagrams to make room, so every element is queued
+    ///   and `Ok(datagrams.len())` is returned.
+    /// - `drop = false` queues elements until the send buffer is full, then stops and returns
+    ///   `Ok(n)` for the `n` elements queued. The remaining elements are the caller's to retry once
+    ///   space frees up.
     ///
     /// Returns `Err` if datagrams are unsupported by the peer or disabled locally.
     ///
