@@ -26,6 +26,10 @@ env:
   CRATES_LIST: "noq,noq-proto,noq-udp"
   NEXTEST_VERSION: "0.9.80"
 
+# Default to read-only; jobs that need more grant it explicitly.
+permissions:
+  contents: read
+
 jobs:
   build_and_test_nix:
     timeout-minutes: 30
@@ -54,26 +58,27 @@ jobs:
       RUSTC_WRAPPER: "sccache"
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           ref: ${{ inputs.git-ref }}
+          persist-credentials: false
 
       - name: Install ${{ matrix.rust }} rust
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
           toolchain: ${{ matrix.rust }}
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@b20dedce73af6905cdc30d6611090c9b67557c8d # v2.85.12
         with:
           tool: nextest@${{ env.NEXTEST_VERSION }}
 
       - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
+        uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
 
       # Go is required for FIPS builds (aws-lc-rs-fips feature)
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: "stable"
 
@@ -100,31 +105,35 @@ jobs:
           do
             echo "Checking $i $FEATURES"
             targets="--lib --bins"
-            echo cargo check -p $i $FEATURES $targets
-            cargo check -p $i $FEATURES $targets
+            echo cargo check --locked -p $i $FEATURES $targets
+            cargo check --locked -p $i $FEATURES $targets
           done
         env:
           RUST_LOG: ${{ runner.debug && 'TRACE' || 'DEBUG'}}
 
       - name: build tests
         run: |
-          cargo nextest run --workspace --exclude fuzz ${{ env.FEATURES }} --lib --bins --tests --no-run
+          cargo nextest run --locked --workspace --exclude fuzz $FEATURES --lib --bins --tests --no-run
 
       - name: list ignored tests
         run: |
-          cargo nextest list --workspace --exclude fuzz ${{ env.FEATURES }} --lib --bins --tests --run-ignored ignored-only
+          cargo nextest list --locked --workspace --exclude fuzz $FEATURES --lib --bins --tests --run-ignored ignored-only
 
       - name: run tests
         run: |
           mkdir -p output
-          cargo nextest run --workspace --exclude fuzz ${{ env.FEATURES }} --lib --bins --tests --profile ci --run-ignored ${{ inputs.flaky && 'all' || 'default' }} ${{ inputs.flaky && '--verbose' || '' }} --no-fail-fast --message-format ${{ inputs.flaky && 'libtest-json' || 'human' }} > output/${{ matrix.name }}_${{ matrix.features }}_${{ matrix.rust }}.json
+          cargo nextest run --locked --workspace --exclude fuzz $FEATURES --lib --bins --tests --profile ci --run-ignored "$RUN_IGNORED" $VERBOSE --no-fail-fast --message-format "$MSG_FORMAT" > "output/${OUT_NAME}.json"
         env:
           RUST_LOG: ${{ runner.debug && 'TRACE' || 'DEBUG'}}
           NEXTEST_EXPERIMENTAL_LIBTEST_JSON: 1
+          RUN_IGNORED: ${{ inputs.flaky && 'all' || 'default' }}
+          VERBOSE: ${{ inputs.flaky && '--verbose' || '' }}
+          MSG_FORMAT: ${{ inputs.flaky && 'libtest-json' || 'human' }}
+          OUT_NAME: ${{ matrix.name }}_${{ matrix.features }}_${{ matrix.rust }}
 
       - name: upload results
         if: ${{ failure() && inputs.flaky }}
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: libtest_run_${{ github.run_number }}-${{ github.run_attempt }}-${{ matrix.name }}_${{ matrix.features }}_${{ matrix.rust }}.json
           path: output
@@ -136,7 +145,7 @@ jobs:
         env:
           RUST_LOG: ${{ runner.debug && 'TRACE' || 'DEBUG'}}
         run: |
-          cargo test --workspace --all-features --doc
+          cargo test --locked --workspace --all-features --doc
 
       - name: Check doctest features
         if: ${{ ! inputs.flaky }}
@@ -146,11 +155,13 @@ jobs:
           for i in ${CRATES_LIST//,/ }
           do
             echo "Checking $i doctest $FEATURES"
-            echo cargo test -p $i --doc $FEATURES
-            cargo test -p $i --doc $FEATURES
+            echo cargo test --locked -p $i --doc $FEATURES
+            cargo test --locked -p $i --doc $FEATURES
           done
 
-      - uses: taiki-e/install-action@cargo-make
+      - uses: taiki-e/install-action@b20dedce73af6905cdc30d6611090c9b67557c8d # v2.85.12
+        with:
+          tool: cargo-make
 
       - name: run proptests (1 minute minimum)
         if: ${{ ! inputs.flaky }}
@@ -180,20 +191,24 @@ jobs:
       BINDGEN_EXTRA_CLANG_ARGS: "--target=x86_64-pc-windows-msvc"
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           ref: ${{ inputs.git-ref }}
+          persist-credentials: false
 
       - name: Install ${{ matrix.rust }}
+        env:
+          RUST_TOOLCHAIN: ${{ matrix.rust }}
+          RUST_TARGET: ${{ matrix.target }}
         run: |
-          rustup toolchain install ${{ matrix.rust }}
-          rustup toolchain default ${{ matrix.rust }}
-          rustup target add ${{ matrix.target }}
-          rustup set default-host ${{ matrix.target }}
+          rustup toolchain install $env:RUST_TOOLCHAIN
+          rustup toolchain default $env:RUST_TOOLCHAIN
+          rustup target add $env:RUST_TARGET
+          rustup set default-host $env:RUST_TARGET
 
       - name: Cache cargo-nextest
         id: cache-nextest
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.cargo/bin/cargo-nextest.exe
           key: nextest-windows-${{ env.NEXTEST_VERSION }}
@@ -226,24 +241,24 @@ jobs:
           }
 
       - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
+        uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
 
-      - uses: msys2/setup-msys2@v2
+      - uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2.32.0
         with:
           release: false
 
       # FIPS dependencies for Windows
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: "stable"
 
       - name: Install NASM
-        uses: ilammy/setup-nasm@v1
+        uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b # v1.5.2
 
       - name: Cache Strawberry Perl
         id: cache-perl
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: C:\Strawberry
           key: strawberry-perl-5.38.2.2
@@ -260,12 +275,12 @@ jobs:
           echo "C:\Strawberry\c\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Install cmake
-        uses: lukka/get-cmake@latest
+        uses: lukka/get-cmake@fffaaafeea488556c2c12dad60690008bc1caacb # v4.4.2
 
       # Install LLVM for libclang (required by bindgen for aws-lc-fips-sys)
       - name: Cache LLVM
         id: cache-llvm
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: C:\Program Files\LLVM
           key: llvm-17.0.6-windows
@@ -283,27 +298,38 @@ jobs:
           echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Setup MSVC dev environment
-        uses: ilammy/msvc-dev-cmd@v1
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
 
       - name: build tests
+        env:
+          RUST_TARGET: ${{ matrix.target }}
         run: |
-          cargo nextest run --workspace --exclude fuzz ${{ env.FEATURES }} --lib --bins --tests --target ${{ matrix.target }} --no-run
+          $feat = if ($env:FEATURES) { $env:FEATURES -split '\s+' } else { @() }
+          cargo nextest run --locked --workspace --exclude fuzz @feat --lib --bins --tests --target $env:RUST_TARGET --no-run
 
       - name: list ignored tests
+        env:
+          RUST_TARGET: ${{ matrix.target }}
         run: |
-          cargo nextest list --workspace --exclude fuzz ${{ env.FEATURES }} --lib --bins --tests --target ${{ matrix.target }} --run-ignored ignored-only
+          $feat = if ($env:FEATURES) { $env:FEATURES -split '\s+' } else { @() }
+          cargo nextest list --locked --workspace --exclude fuzz @feat --lib --bins --tests --target $env:RUST_TARGET --run-ignored ignored-only
 
       - name: tests
         run: |
           mkdir -p output
-          cargo nextest run --workspace --exclude fuzz ${{ env.FEATURES }} --lib --bins --tests --profile ci --target ${{ matrix.target }} --run-ignored ${{ inputs.flaky && 'all' || 'default' }} --no-fail-fast --message-format ${{ inputs.flaky && 'libtest-json' || 'human' }} > output/${{ matrix.name }}_${{ matrix.features }}_${{ matrix.rust }}.json
+          $feat = if ($env:FEATURES) { $env:FEATURES -split '\s+' } else { @() }
+          cargo nextest run --locked --workspace --exclude fuzz @feat --lib --bins --tests --profile ci --target $env:RUST_TARGET --run-ignored $env:RUN_IGNORED --no-fail-fast --message-format $env:MSG_FORMAT > "output/$($env:OUT_NAME).json"
         env:
           RUST_LOG: ${{ runner.debug && 'TRACE' || 'DEBUG'}}
           NEXTEST_EXPERIMENTAL_LIBTEST_JSON: 1
+          RUST_TARGET: ${{ matrix.target }}
+          RUN_IGNORED: ${{ inputs.flaky && 'all' || 'default' }}
+          MSG_FORMAT: ${{ inputs.flaky && 'libtest-json' || 'human' }}
+          OUT_NAME: ${{ matrix.name }}_${{ matrix.features }}_${{ matrix.rust }}
 
       - name: upload results
         if: ${{ failure() && inputs.flaky }}
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: libtest_run_${{ github.run_number }}-${{ github.run_attempt }}-${{ matrix.name }}_${{ matrix.features }}_${{ matrix.rust }}.json
           path: output
@@ -312,7 +338,7 @@ jobs:
 
       - name: Cache cargo-make
         id: cache-cargo-make
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.cargo/bin/cargo-make.exe
           key: cargo-make-windows-0.37.24
@@ -327,7 +353,10 @@ jobs:
 
   minimal-crates:
     timeout-minutes: 45
+    # Ephemeral only: this job runs build scripts from unvetted versions.
     runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -337,29 +366,43 @@ jobs:
             os: ubuntu-latest
             release-os: linux
             release-arch: amd64
-            runner: [self-hosted, linux, X64]
+            runner: ubuntu-latest
           - name: macOS-arm-latest
             os: macOS-latest
             release-os: darwin
             release-arch: aarch64
-            runner: [self-hosted, macOS, ARM64]
+            runner: macos-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          # Keep the token out of .git/config, readable by any build script.
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: nightly
       - name: Install Go (required for aws-lc-rs FIPS)
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: "stable"
           cache: false
       - name: cargo check
+        # No --locked: re-resolving is the point, so -Z min-publish-age guards
+        # the versions the lockfile has never seen. Inline flag only, the
+        # config.toml form is ignored on stable.
         run: |
           rm -f Cargo.lock
-          cargo +nightly check -Z minimal-versions --workspace --exclude fuzz --all-features --lib --bins
+          cargo +nightly check -Z minimal-versions -Z min-publish-age \
+            --config 'registry.global-min-publish-age="3 days"' \
+            --workspace --exclude fuzz --all-features --lib --bins
 
   minimal-crates-windows:
     timeout-minutes: 30
     name: "Minimal Crates (Windows)"
+    # Still self-hosted; moving to windows-latest needs sccache switched to
+    # SCCACHE_GHA_ENABLED. Follow-up.
     runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -379,9 +422,10 @@ jobs:
       BINDGEN_EXTRA_CLANG_ARGS: "--target=x86_64-pc-windows-msvc"
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           ref: ${{ inputs.git-ref }}
+          persist-credentials: false
 
       - name: Install Rust nightly
         run: |
@@ -390,21 +434,21 @@ jobs:
           rustup set default-host ${{ matrix.target }}
 
       - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
+        uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
 
-      - uses: msys2/setup-msys2@v2
+      - uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2.32.0
         with:
           release: false
 
       - name: Install cmake
-        uses: lukka/get-cmake@latest
+        uses: lukka/get-cmake@fffaaafeea488556c2c12dad60690008bc1caacb # v4.4.2
 
       - name: Install NASM
-        uses: ilammy/setup-nasm@v1
+        uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b # v1.5.2
 
       - name: Cache Strawberry Perl
         id: cache-perl
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: C:\Strawberry
           key: strawberry-perl-5.38.2.2
@@ -421,7 +465,7 @@ jobs:
           echo "C:\Strawberry\c\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Install Go (required for aws-lc-rs FIPS)
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: "stable"
           cache: false
@@ -429,7 +473,7 @@ jobs:
       # Install LLVM for libclang (required by bindgen for aws-lc-fips-sys)
       - name: Cache LLVM
         id: cache-llvm
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: C:\Program Files\LLVM
           key: llvm-17.0.6-windows
@@ -448,9 +492,14 @@ jobs:
 
       # Set up MSVC environment to ensure clang/bindgen uses MSVC headers instead of mingw
       - name: Setup MSVC dev environment
-        uses: ilammy/msvc-dev-cmd@v1
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
 
       - name: cargo check
+        # No --locked: re-resolving is the point, so -Z min-publish-age guards
+        # the versions the lockfile has never seen. Inline flag only, the
+        # config.toml form is ignored on stable.
         run: |
           rm -Force Cargo.lock
-          cargo +nightly check -Z minimal-versions --workspace --exclude fuzz --all-features --lib --bins
+          cargo +nightly check -Z minimal-versions -Z min-publish-age `
+            --config 'registry.global-min-publish-age="3 days"' `
+            --workspace --exclude fuzz --all-features --lib --bins

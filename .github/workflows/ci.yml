@@ -19,6 +19,10 @@ env:
   MSRV: "1.88"
   SCCACHE_CACHE_SIZE: "10G"
 
+# Default to read-only; jobs that need more grant it explicitly.
+permissions:
+  contents: read
+
 jobs:
   tests:
     name: CI Test Suite
@@ -34,11 +38,15 @@ jobs:
       RUSTC_WRAPPER: "sccache"
       SCCACHE_GHA_ENABLED: "on"
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: stable
+      - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
       # Go is required for FIPS builds
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: "stable"
       # Prevent feature unification from selecting *ring* as the crypto provider
@@ -58,9 +66,13 @@ jobs:
       SCCACHE_GHA_ENABLED: "on"
       RUSTFLAGS: "-Dwarnings --cfg posix_minimal"
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: stable
+      - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
       - name: Build and test noq-udp (posix_minimal)
         run: cargo test --locked -p noq-udp
 
@@ -87,17 +99,20 @@ jobs:
       CC_aarch64_unknown_linux_musl: musl-gcc
       CC_x86_64_unknown_linux_musl: musl-gcc
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: stable
           target: ${{ matrix.target }}
-      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
       - name: Install musl toolchain
         run: |
           sudo apt-get update
           sudo apt-get install -y musl-tools
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@b20dedce73af6905cdc30d6611090c9b67557c8d # v2.85.12
         with:
           tool: nextest@0.9.80
       - name: Run tests
@@ -115,13 +130,18 @@ jobs:
       RUSTC_WRAPPER: "sccache"
       SCCACHE_GHA_ENABLED: "on"
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
+          persist-credentials: false
+      # Pinned: nightly-2026-07-30+ fails to build std for espidf, libc has no
+      # AT_FDCWD there. Unpin once libc catches up (n0-computer/net-tools#202).
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: nightly-2026-07-29
           components: rust-src
-      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
       - name: Check noq for ESP32-C3
-        run: cargo check -Z build-std=std,panic_abort --target riscv32imc-esp-espidf -p noq -p noq-proto -p noq-udp --no-default-features
+        run: cargo check --locked -Z build-std=std,panic_abort --target riscv32imc-esp-espidf -p noq -p noq-proto -p noq-udp --no-default-features
 
   wasm_test:
     name: Build & test wasm32
@@ -133,20 +153,24 @@ jobs:
       AR_wasm32_unknown_unknown: llvm-ar
       RUSTFLAGS: '--cfg getrandom_backend="wasm_js"'
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
 
       - name: Install LLVM tools for wasm
         run: |
           sudo apt-get update
           sudo apt-get install -y llvm clang lld
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: stable
       - run: rustup target add wasm32-unknown-unknown
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 20
-      - uses: bytecodealliance/actions/wasm-tools/setup@v1
-      - uses: cargo-bins/cargo-binstall@v1.16.3
+      - uses: bytecodealliance/actions/wasm-tools/setup@9152e710e9f7182e4c29ad218e4f335a7b203613 # v1.1.3
+      - uses: cargo-bins/cargo-binstall@8110b3aa84cb581a90696bc57469b0656f972494 # v1.16.3
 
       - name: wasm32 test build (noq-proto)
         run: cargo test --locked -p noq-proto --target wasm32-unknown-unknown --no-run
@@ -184,27 +208,30 @@ jobs:
           - armv7-linux-androideabi
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
+          toolchain: stable
           target: ${{ matrix.target }}
 
       - name: Install rustup target
         run: rustup target add ${{ matrix.target }}
 
       - name: Setup Java
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
           distribution: "temurin"
           java-version: "17"
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
 
       - name: Setup Android NDK
-        uses: arqu/setup-ndk@main
+        uses: arqu/setup-ndk@4f8a02c22e2c17ff9ebba9026e599da847aa8374 # main
         id: setup-ndk
         with:
           ndk-version: r23
@@ -213,13 +240,13 @@ jobs:
       - name: Install cargo-ndk
         run: |
           if ! cargo ndk --version 2>/dev/null | grep -q "3.5.4"; then
-            cargo install --version 3.5.4 cargo-ndk
+            cargo install --locked --version 3.5.4 cargo-ndk
           fi
 
       - name: Build
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
-        run: cargo ndk --target ${{ matrix.target }} build
+        run: cargo ndk --target ${{ matrix.target }} build --locked
 
   android_emulator_test:
     name: Android Emulator Tests
@@ -237,26 +264,29 @@ jobs:
       API_LEVEL: ${{ matrix.api-level }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
+          toolchain: stable
           target: ${{ matrix.target }}
 
-      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
 
       - name: Setup Java
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
           distribution: "temurin"
           java-version: "17"
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
 
       - name: Setup Android NDK
-        uses: arqu/setup-ndk@main
+        uses: arqu/setup-ndk@4f8a02c22e2c17ff9ebba9026e599da847aa8374 # main
         id: setup-ndk
         with:
           ndk-version: r23
@@ -265,14 +295,14 @@ jobs:
       - name: Install cargo-ndk
         run: |
           if ! cargo ndk --version 2>/dev/null | grep -q "3.5.4"; then
-            cargo install --version 3.5.4 cargo-ndk
+            cargo install --locked --version 3.5.4 cargo-ndk
           fi
 
       - name: Build unit tests for Android
         env:
           RUSTC_WRAPPER: "sccache"
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
-        run: cargo ndk -t ${{ matrix.target }} test --no-run
+        run: cargo ndk -t ${{ matrix.target }} test --locked --no-run
 
       - name: Enable KVM group perms
         run: |
@@ -284,7 +314,7 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
-        uses: reactivecircus/android-emulator-runner@v2
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
         with:
           api-level: ${{ matrix.api-level }}
           arch: ${{ matrix.emulator-arch }}
@@ -296,12 +326,22 @@ jobs:
     timeout-minutes: 30
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: nightly
       - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz
+        run: cargo install --locked cargo-fuzz
+      # `cargo fuzz build` takes no --locked: fetch what Cargo.lock names,
+      # then build offline.
+      - name: Fetch locked dependencies
+        run: cargo fetch --locked
       - name: Build fuzz targets
         run: cargo +nightly fuzz build
+        env:
+          CARGO_NET_OFFLINE: "true"
 
   check_fmt:
     timeout-minutes: 30
@@ -311,13 +351,21 @@ jobs:
       RUSTC_WRAPPER: "sccache"
       SCCACHE_GHA_ENABLED: "on"
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: stable
           components: rustfmt
-      - uses: mozilla-actions/sccache-action@v0.0.9
-      - uses: taiki-e/install-action@cargo-make
+      - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
+      - uses: taiki-e/install-action@b20dedce73af6905cdc30d6611090c9b67557c8d # v2.85.12
+        with:
+          tool: cargo-make
       - run: cargo make format-check
+      - name: Lockfile must not have moved
+        # cargo make takes no --locked; assert the lockfile instead.
+        run: git diff --exit-code Cargo.lock
 
   check_docs:
     timeout-minutes: 30
@@ -328,20 +376,24 @@ jobs:
       SCCACHE_GHA_ENABLED: "on"
       RUSTDOCFLAGS: -Dwarnings
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@nightly
-      - uses: dtolnay/install@cargo-docs-rs
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: nightly
+      - uses: dtolnay/install@982daea0f5d846abc3c83e01a6a1d73c040047c1 # cargo-docs-rs
       - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
+        uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
 
       - name: noq docs-rs
-        run: cargo docs-rs -p noq
+        run: cargo docs-rs --locked -p noq
       - name: noq-proto docs-rs
-        run: cargo docs-rs -p noq-proto
+        run: cargo docs-rs --locked -p noq-proto
       - name: noq-udp docs-rs
-        run: cargo docs-rs -p noq-udp
+        run: cargo docs-rs --locked -p noq-udp
       - name: noq internal docs
-        run: cargo doc --workspace --no-deps --document-private-items
+        run: cargo doc --locked --workspace --no-deps --document-private-items
 
   clippy_check:
     timeout-minutes: 30
@@ -351,21 +403,24 @@ jobs:
       RUSTC_WRAPPER: "sccache"
       SCCACHE_GHA_ENABLED: "on"
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: stable
           components: clippy
       - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
+        uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
 
       - name: clippy check (all features)
-        run: cargo clippy --workspace --exclude fuzz --all-features --all-targets --lib --bins --tests --benches --examples -- -D warnings
+        run: cargo clippy --locked --workspace --exclude fuzz --all-features --all-targets --lib --bins --tests --benches --examples -- -D warnings
 
       - name: clippy check (no features)
-        run: cargo clippy --workspace --exclude fuzz --no-default-features --all-targets --lib --bins --tests --benches --examples -- -D warnings
+        run: cargo clippy --locked --workspace --exclude fuzz --no-default-features --all-targets --lib --bins --tests --benches --examples -- -D warnings
 
       - name: clippy check (default features)
-        run: cargo clippy --workspace --exclude fuzz --all-targets --lib --bins --tests --benches --examples -- -D warnings
+        run: cargo clippy --locked --workspace --exclude fuzz --all-targets --lib --bins --tests --benches --examples -- -D warnings
 
   msrv:
     if: "github.event_name != 'pull_request' || ! contains(github.event.pull_request.labels.*.name, 'flaky-test')"
@@ -376,38 +431,46 @@ jobs:
       RUSTC_WRAPPER: "sccache"
       SCCACHE_GHA_ENABLED: "on"
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@master
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
           toolchain: ${{ env.MSRV }}
       - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
+        uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
 
       - name: Check MSRV all features
         run: |
-          cargo +$MSRV check --workspace --exclude fuzz --all-targets
+          cargo +$MSRV check --locked --workspace --exclude fuzz --all-targets
 
   external_types:
     runs-on: ubuntu-latest
     env:
       RUSTC_WRAPPER: "sccache"
       SCCACHE_GHA_ENABLED: "on"
-      # Pin to the nightly that the pinned `cargo-check-external-types`
-      # release was last tested against. Update both together.
-      CARGO_CHECK_EXTERNAL_TYPES_VERSION: "0.4.0"
-      TOOLCHAIN: "nightly-2025-10-18"
+      # Fork adds --locked passthrough (awslabs/cargo-check-external-types#251);
+      # back to binstall once released. TOOLCHAIN mirrors the fork's
+      # rust-toolchain.toml -- bump both together.
+      CARGO_CHECK_EXTERNAL_TYPES_REV: "ebc3670edce4f62ad1be7622a5654172ce0c6ffd"
+      TOOLCHAIN: "nightly-2026-03-20"
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@master
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
           toolchain: ${{ env.TOOLCHAIN }}
       - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
-      - name: Install cargo-binstall
-        uses: cargo-bins/cargo-binstall@v1.18.1
-      - uses: taiki-e/install-action@cargo-make
+        uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
+      - uses: taiki-e/install-action@b20dedce73af6905cdc30d6611090c9b67557c8d # v2.85.12
+        with:
+          tool: cargo-make
       - name: Install cargo-check-external-types
-        run: cargo binstall cargo-check-external-types@${{ env.CARGO_CHECK_EXTERNAL_TYPES_VERSION }} --locked --no-confirm
+        # Pinned to a rev, not a branch -- same rule as every other ref here.
+        run: |
+          cargo install --locked --git https://github.com/dignifiedquire/cargo-check-external-types \
+            --rev ${{ env.CARGO_CHECK_EXTERNAL_TYPES_REV }} cargo-check-external-types
       - name: Check external types
         run: cargo make check-external-types
 
@@ -416,8 +479,10 @@ jobs:
     name: cargo deny
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: EmbarkStudios/cargo-deny-action@v2
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           arguments: --workspace --all-features
           command: check
@@ -427,9 +492,11 @@ jobs:
     timeout-minutes: 30
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
       - name: Cache pip
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.cache/pip
           key: pip-codespell-2.4.1
@@ -442,18 +509,19 @@ jobs:
       RUSTC_WRAPPER: "sccache"
       SCCACHE_GHA_ENABLED: "on"
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
+        uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
       # Go is required for FIPS builds
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: "stable"
 
       - name: Check semver
-        # uses: obi1kenobi/cargo-semver-checks-action@v2
-        uses: n0-computer/cargo-semver-checks-action@feat-baseline
+        # uses: obi1kenobi/cargo-semver-checks-action@6b69fcf40e9b5fb17adeb57e4b6ecd020649a239 # v2
+        uses: n0-computer/cargo-semver-checks-action@b49de9133f8849bb51cae32c6bdeb19a5c37e61f # feat-baseline
         with:
           package: noq, noq-proto, noq-udp

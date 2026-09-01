@@ -608,10 +608,8 @@ impl PathData {
             smoothed_rtt,
             bytes_to_send,
             self.current_mtu(),
-            metrics.congestion_window,
             now,
-            metrics.send_quantum,
-            metrics.pacing_rate,
+            &metrics,
         )
     }
 

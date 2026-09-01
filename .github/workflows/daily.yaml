@@ -17,6 +17,10 @@ env:
   RUST_BACKTRACE: 1
   RUSTFLAGS: -Dwarnings
 
+# Default to read-only; jobs that need more grant it explicitly.
+permissions:
+  contents: read
+
 jobs:
   proptests:
     name: Extended Proptest Run
@@ -25,19 +29,25 @@ jobs:
     env:
       RUSTC_WRAPPER: "sccache"
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: stable
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@b20dedce73af6905cdc30d6611090c9b67557c8d # v2.85.12
         with:
           tool: nextest@0.9.80
 
-      - uses: taiki-e/install-action@cargo-make
+      - uses: taiki-e/install-action@b20dedce73af6905cdc30d6611090c9b67557c8d # v2.85.12
+        with:
+          tool: cargo-make
 
       - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
+        uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
 
       - name: Run proptests (10 minutes)
         run: cargo make proptests-long
@@ -49,9 +59,11 @@ jobs:
     name: test on freebsd
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
       - name: test on freebsd
-        uses: vmactions/freebsd-vm@v1
+        uses: vmactions/freebsd-vm@83b151f58c6047089f4c80eb5ba2039d158ce093 # v1.5.3
         with:
           usesh: true
           mem: 4096
@@ -74,9 +86,11 @@ jobs:
     name: build on solaris
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
       - name: build on Solaris
-        uses: vmactions/solaris-vm@v1
+        uses: vmactions/solaris-vm@315163f088b66e55bbcc45928bd224d4973b2312 # v1.3.8
         with:
           release: "11.4-gcc"
           usesh: true
@@ -99,10 +113,12 @@ jobs:
     name: test on illumos
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
       - name: test on Illumos
         # pinned: v1 tag moves and builder v2.0.3+ ships a VM with broken DNS
-        uses: vmactions/omnios-vm@4f4fcbf0847b079a6e0eafe6ff06b3d15510f0b0
+        uses: vmactions/omnios-vm@4f4fcbf0847b079a6e0eafe6ff06b3d15510f0b0 # v1.1.5
         with:
           usesh: true
           mem: 4096
@@ -131,16 +147,25 @@ jobs:
       # skip FIPS features outside of Linux
       SKIP_FEATURES: ${{ matrix.os != 'linux' && 'aws-lc-rs-fips,aws-lc-fips-sys,__rustls-post-quantum-test' || '' }}
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: taiki-e/install-action@cargo-hack
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: stable
+      - uses: taiki-e/install-action@b20dedce73af6905cdc30d6611090c9b67557c8d # v2.85.12
+        with:
+          tool: cargo-hack
       - name: Setup Go (required for aws-lc-rs FIPS)
         if: matrix.os == 'linux'
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: 'stable'
 
-      - run: cargo hack check --feature-powerset --depth 3 --optional-deps --no-dev-deps --ignore-private --skip "${{env.SKIP_FEATURES}}"
+      # --no-dev-deps rewrites Cargo.toml mid-run, so cargo rejects --locked.
+      # Fetch locked first, then run offline -- same guarantee.
+      - run: cargo fetch --locked
+      - run: cargo hack check --offline --feature-powerset --depth 3 --optional-deps --no-dev-deps --ignore-private --skip "$SKIP_FEATURES"
 
   notify:
     timeout-minutes: 45
@@ -149,14 +174,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Extract test results
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
         run: |
-          printf '${{ toJSON(needs) }}\n'
+          printf '%s\n' "$NEEDS_JSON"
 
-          proptests_result=$(echo '${{ toJSON(needs) }}' | jq -r '.proptests.result')
-          freebsd_result=$(echo '${{ toJSON(needs) }}' | jq -r '.["test-freebsd"].result')
-          solaris_result=$(echo '${{ toJSON(needs) }}' | jq -r '.["build-solaris"].result')
-          illumos_result=$(echo '${{ toJSON(needs) }}' | jq -r '.["test-illumos"].result')
-          features_result=$(echo '${{ toJSON(needs) }}' | jq -r '.features.result')
+          proptests_result=$(echo "$NEEDS_JSON" | jq -r '.proptests.result')
+          freebsd_result=$(echo "$NEEDS_JSON" | jq -r '.["test-freebsd"].result')
+          solaris_result=$(echo "$NEEDS_JSON" | jq -r '.["build-solaris"].result')
+          illumos_result=$(echo "$NEEDS_JSON" | jq -r '.["test-illumos"].result')
+          features_result=$(echo "$NEEDS_JSON" | jq -r '.features.result')
 
           # Check if any failed
           if [ "$proptests_result" = "failure" ] || [ "$freebsd_result" = "failure" ] || [ "$solaris_result" = "failure" ] || [ "$illumos_result" = "failure" ] || [ "$features_result" = "failure" ]; then
@@ -178,7 +205,7 @@ jobs:
           echo "EOF" >>"$GITHUB_ENV"
 
       - name: Notify discord on failure
-        uses: n0-computer/discord-webhook-notify@v1
+        uses: n0-computer/discord-webhook-notify@1399c1b2d57cc05894d506d2cfdc33c5f012b993 # v1.1.1
         if: ${{ env.TESTS_RESULT == 'failure' }}
         with:
           text: "Daily CI failures in **${{ github.repository }}**"

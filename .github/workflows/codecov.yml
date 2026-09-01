@@ -5,6 +5,10 @@ on:
   push:
     branches: ['main']
 
+# Default to read-only; jobs that need more grant it explicitly.
+permissions:
+  contents: read
+
 jobs:
   coverage:
     timeout-minutes: 5
@@ -14,9 +18,15 @@ jobs:
         os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: stable
+      - uses: taiki-e/install-action@b20dedce73af6905cdc30d6611090c9b67557c8d # v2.85.12
+        with:
+          tool: cargo-llvm-cov
       - shell: bash
         # Run llvm-cov _without_ the "aws-lc-rs-fips" feature, since
         # that has complex build requirements:
@@ -29,11 +39,11 @@ jobs:
         #       | grep -vFx -e 'default' -e 'aws-lc-rs-fips' \
         #       | paste -sd ',' -
         run: |
-          cargo llvm-cov \
+          cargo llvm-cov --locked \
             --features="arbitrary,aws-lc-rs,bloom,fast-apple-datapath,futures-io,json-output,lock_tracking,log,platform-verifier,qlog,ring,runtime-smol,runtime-tokio,rustls,rustls-log,rustls,ring,serde,serde_json,tracing,tracing-log" \
             --workspace --lcov --output-path lcov.info
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v7
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: lcov.info

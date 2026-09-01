@@ -1,4 +1,7 @@
 [advisories]
+# Yanking is how the 2026-08-20 arrayref attack was staged: yank every version
+# satisfying a range so the malicious upload is the only one left.
+yanked = "deny"
 ignore = [
     # gcc is only included as a minimal-versions workaround, not actually used
     "RUSTSEC-2025-0121",

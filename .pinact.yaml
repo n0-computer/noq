@@ -1,0 +1,26 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/suzuki-shunsuke/pinact/refs/heads/main/json-schema/pinact.json
+version: 3
+
+min_age:
+  value: 7 # days, matches the dependabot cooldown
+
+# No semver tag upstream to verify the version comment against. Forks and
+# tool-named tags; revisit rather than leave indefinitely.
+rules:
+  - ignore: true
+    conditions:
+      # fork of nttld/setup-ndk, 1 commit ahead ("allow other hosts").
+      # Upstream the patch and switch to v1.6.0.
+      - expr: |
+          ActionName == "arqu/setup-ndk"
+  - ignore: true
+    conditions:
+      # dtolnay/install tags are tool names, not semver.
+      - expr: |
+          ActionName == "dtolnay/install"
+  - ignore: true
+    conditions:
+      # fork of obi1kenobi/cargo-semver-checks-action (now v2.9); check if the
+      # baseline feature landed upstream.
+      - expr: |
+          ActionName == "n0-computer/cargo-semver-checks-action"

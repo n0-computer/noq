@@ -26,6 +26,10 @@ env:
   SCCACHE_GHA_ENABLED: "true"
   RUSTC_WRAPPER: "sccache"
 
+# Default to read-only; jobs that need more grant it explicitly.
+permissions:
+  contents: read
+
 jobs:
   build:
     name: Build ${{ matrix.impl }} perf
@@ -40,12 +44,16 @@ jobs:
           - impl: upstream-quinn
             artifact: quinn-perf-upstream
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         if: matrix.impl == 'noq'
+        with:
+          persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: stable
 
-      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
 
       - name: Get latest quinn release tag
         if: matrix.impl == 'upstream-quinn'
@@ -59,15 +67,17 @@ jobs:
         if: matrix.impl == 'upstream-quinn'
         run: |
           rm -rf /tmp/upstream-quinn
-          git clone --depth 1 --branch ${{ steps.quinn-release.outputs.tag }} \
+          git clone --depth 1 --branch ${STEPS_QUINN_RELEASE_OUTPUTS_TAG} \
             https://github.com/quinn-rs/quinn.git /tmp/upstream-quinn
+        env:
+          STEPS_QUINN_RELEASE_OUTPUTS_TAG: ${{ steps.quinn-release.outputs.tag }}
 
       - name: Build perf binary
-        run: cargo build --release -p perf --features json-output
+        run: cargo build --locked --release -p perf --features json-output
         working-directory: ${{ matrix.impl == 'upstream-quinn' && '/tmp/upstream-quinn' || '.' }}
 
       - name: Upload binary
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.impl == 'upstream-quinn' && '/tmp/upstream-quinn/target/release/quinn-perf' || 'target/release/noq-perf' }}
@@ -88,9 +98,11 @@ jobs:
           - impl: upstream-quinn
             artifact: quinn-perf-upstream
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
 
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
         with:
           name: ${{ matrix.artifact }}
           path: ./bin
@@ -101,7 +113,7 @@ jobs:
           chmod +x "$PERF_BIN"
           ./.github/scripts/run_perf.sh "$PERF_BIN" results/${{ matrix.impl }}
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: raw-results-${{ matrix.impl }}
           path: results/
@@ -122,9 +134,11 @@ jobs:
           - impl: upstream-quinn
             artifact: quinn-perf-upstream
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
 
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
         with:
           name: ${{ matrix.artifact }}
           path: ./bin
@@ -165,7 +179,7 @@ jobs:
           cp /tmp/chuck/netsim/report/*.json results/${{ matrix.impl }}/ 2>/dev/null || true
           cp /tmp/chuck/netsim/logs/*.log results/${{ matrix.impl }}/ 2>/dev/null || true
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         if: always()
         with:
           name: netsim-results-${{ matrix.impl }}
@@ -179,28 +193,33 @@ jobs:
           ./cleanup.sh || true
 
   compare:
+    permissions:
+      contents: read
+      pull-requests: write   # posts the comparison comment
     name: Compare results
     needs: [raw-perf, netsim-perf]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
 
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
         with:
           pattern: raw-results-*
           merge-multiple: true
           path: raw-results/
 
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
         with:
           pattern: netsim-results-*
           merge-multiple: true
           path: netsim-results/
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.11'
 
@@ -226,7 +245,7 @@ jobs:
           cat metro.json
 
       - name: Upload comparison report
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: perf-comparison-report
           path: |
@@ -249,7 +268,7 @@ jobs:
 
       - name: Find existing comment
         if: github.event_name == 'pull_request'
-        uses: peter-evans/find-comment@v3
+        uses: peter-evans/find-comment@3eae4d37986fb5a8592848f6a574fdf654e61f9e # v3.1.0
         id: find-comment
         with:
           issue-number: ${{ github.event.pull_request.number }}
@@ -258,7 +277,7 @@ jobs:
 
       - name: Create new PR comment
         if: github.event_name == 'pull_request' && steps.find-comment.outputs.comment-id == ''
-        uses: peter-evans/create-or-update-comment@v5
+        uses: peter-evans/create-or-update-comment@e8674b075228eee787fea43ef493e45ece1004c9 # v5.0.0
         with:
           issue-number: ${{ github.event.pull_request.number }}
           body: |
@@ -274,7 +293,7 @@ jobs:
 
       - name: Update existing PR comment
         if: github.event_name == 'pull_request' && steps.find-comment.outputs.comment-id != ''
-        uses: peter-evans/create-or-update-comment@v5
+        uses: peter-evans/create-or-update-comment@e8674b075228eee787fea43ef493e45ece1004c9 # v5.0.0
         with:
           comment-id: ${{ steps.find-comment.outputs.comment-id }}
           edit-mode: append

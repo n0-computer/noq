@@ -17,6 +17,10 @@ env:
   IROH_FORCE_STAGING_RELAYS: "1"
   NEXTEST_VERSION: "0.9.80"
 
+# Default to read-only; jobs that need more grant it explicitly.
+permissions:
+  contents: read
+
 jobs:
   iroh_patchbay:
     name: iroh patchbay
@@ -30,21 +34,25 @@ jobs:
         continue-on-error: true
 
       - name: Checkout noq
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           path: noq
+          persist-credentials: false
 
       - name: Checkout iroh
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           repository: n0-computer/iroh
           ref: main
           path: iroh
+          persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: stable
+      - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
       - name: Install cargo-make and cargo-nextest
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@b20dedce73af6905cdc30d6611090c9b67557c8d # v2.85.12
         with:
           tool: nextest@${{ env.NEXTEST_VERSION }},cargo-make
 
@@ -87,6 +95,8 @@ jobs:
           sed -i -E "/^noq = \"[0-9.]+\"/s/\"[0-9.]+\"/$NOQ_VERSION/" iroh/bench/Cargo.toml
 
 
+      # No --locked: patching iroh to this checkout regenerates iroh's
+      # lockfile. Pinning there is the iroh repo's job.
       - name: Build patchbay tests
         working-directory: iroh
         run: cargo make patchbay --no-run
@@ -102,7 +112,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: iroh-patchbay-testdir-${{ github.sha }}
           path: |
