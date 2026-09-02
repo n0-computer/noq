@@ -56,12 +56,12 @@ impl Datagrams<'_> {
 
     /// Queue many unreliable, unordered datagrams for transmission in a single call.
     ///
-    /// This is the batch analogue of [`send`](Self::send), avoiding repeated connection checks.
+    /// This is the batch analogue of [`Self::send`], avoiding repeated connection checks.
     ///
-    /// The batch is rejected atomically if any datagram is too large: when any element
-    /// exceeds the maximum size or send buffer size this returns [`TooLarge`] and queues nothing.
+    /// The batch is rejected atomically with the [`TooLarge`] error if any datagram
+    /// in the batch is too large.
     ///
-    /// `drop` selects the backpressure behaviour, matching [`send`](Self::send):
+    /// `drop` selects the backpressure behaviour, matching [`Self::send`]:
     ///
     /// - `drop = true` drops the oldest queued datagrams to make room, so every element is queued
     ///   and `Ok(datagrams.len())` is returned.
@@ -151,7 +151,7 @@ impl Datagrams<'_> {
 
     /// Drain up to `out.len()` buffered datagrams into `out`, in arrival order.
     ///
-    /// This is the batch analogue of [`recv`](Self::recv): a single call takes many
+    /// This is the batch analogue of [`Self::recv`]: a single call takes many
     /// datagrams at once. `out` is filled from the front and overwritten in place;
     /// pass a slice of empty `Bytes` sized to the batch you want. Returns the number
     /// of datagrams written, which may be less than `out.len()` if fewer are buffered
