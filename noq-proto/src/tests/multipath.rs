@@ -12,7 +12,7 @@ use tracing::info;
 use crate::{
     ClientConfig, ConnectionId, ConnectionIdGenerator, Endpoint, EndpointConfig, FourTuple,
     LOCAL_CID_COUNT, NetworkChangeHint, PathId, PathStatus, RandomConnectionIdGenerator,
-    ServerConfig, Side::*, TransportConfig, cid_queue::CidQueue,
+    ServerConfig, Side::*, StreamId, TransportConfig, cid_queue::CidQueue,
 };
 use crate::{
     ClosePathError, Dir, Event, PathAbandonReason, PathEvent, StreamEvent, TransportErrorCode,
@@ -1539,6 +1539,257 @@ fn abandon_path_data_continues() -> TestResult {
     // Connection alive
     assert!(!pair.is_closed(Client));
     assert!(!pair.is_closed(Server));
+
+    Ok(())
+}
+
+/// Reads whatever is currently available on the server side of stream `s`
+/// into `buf`, returning `true` once the FIN was reached.
+fn read_available(pair: &mut ConnPair, s: StreamId, buf: &mut Vec<u8>) -> bool {
+    let mut recv = pair.recv_stream(Server, s);
+    let Ok(mut chunks) = recv.read(true) else {
+        return false;
+    };
+    let fin = loop {
+        match chunks.next(usize::MAX) {
+            Ok(Some(chunk)) => buf.extend_from_slice(&chunk.bytes),
+            Ok(None) => break true,
+            Err(_) => break false,
+        }
+    };
+    let _ = chunks.finalize();
+    fin
+}
+
+/// In-flight data on an abandoned path is retransmitted 2*PTO after the abandon.
+///
+/// The client sends stream data which is lost in transit on path 0, then
+/// abandons path 0. From that moment all server-to-client traffic is dropped,
+/// so the client never receives the server's reciprocal PATH_ABANDON and the
+/// PathDrained cleanup never arms: only the client's own declare-in-flight-lost
+/// deadline can free the stranded data for retransmission over path 1.
+#[test]
+fn abandoned_path_in_flight_retransmits_after_pto_delay() -> TestResult {
+    let _guard = subscribe();
+    let mut pair = ConnPair::builder().enable_multipath().connect();
+
+    // Path 1 is Backup, so stream data goes out on path 0.
+    let server_addr = pair.routes.public_server_addr();
+    let path1 = pair.open_path(
+        Client,
+        FourTuple::from_remote(server_addr),
+        PathStatus::Backup,
+    )?;
+    pair.drive();
+    while pair.poll(Client).is_some() {}
+    while pair.poll(Server).is_some() {}
+
+    const MSG: &[u8] = b"stranded on the abandoned path";
+    let path0_datagrams = pair
+        .path_stats(Client, PathId::ZERO)
+        .unwrap()
+        .udp_tx
+        .datagrams;
+    let path1_datagrams = pair.path_stats(Client, path1).unwrap().udp_tx.datagrams;
+    let s = pair.streams(Client).open(Dir::Uni).unwrap();
+    pair.send_stream(Client, s).write(MSG).unwrap();
+    pair.send_stream(Client, s).finish().unwrap();
+    pair.drive_client();
+
+    // The data went out on path 0 and is dropped in transit.
+    let stats0 = pair.path_stats(Client, PathId::ZERO).unwrap();
+    let stats1 = pair.path_stats(Client, path1).unwrap();
+    assert!(stats0.udp_tx.datagrams > path0_datagrams);
+    assert_eq!(stats1.udp_tx.datagrams, path1_datagrams);
+    info!("dropping the stream data in flight on path 0");
+    pair.server.inbound.clear();
+
+    let abandoned_at = pair.time;
+    pair.close_path(Client, PathId::ZERO, 0u8.into())?;
+
+    // Probe a time below the smallest possible 2*PTO deadline
+    // (2*max_ack_delay bounds it from below) without advancing the pair's
+    // clock: the stranded data must not have been declared lost yet.
+    pair.handle_timeout(Client, abandoned_at + Duration::from_millis(40));
+    assert_eq!(
+        pair.path_stats(Client, PathId::ZERO).unwrap().lost_packets,
+        0,
+        "in-flight data was declared lost before 2*PTO elapsed"
+    );
+
+    // Step the pair with all server-to-client traffic dropped until the
+    // stream data arrives over path 1.
+    let mut buf = Vec::new();
+    let mut accepted = false;
+    let mut fin = false;
+    for _ in 0..500 {
+        if !pair.blackhole_step(false, true) {
+            break;
+        }
+        if !accepted {
+            accepted = pair.streams(Server).accept(Dir::Uni).is_some();
+        }
+        if accepted && read_available(&mut pair, s, &mut buf) {
+            fin = true;
+            break;
+        }
+        if pair.time - abandoned_at > Duration::from_secs(10) {
+            break;
+        }
+    }
+
+    assert!(fin, "stream data never arrived over the remaining path");
+    assert_eq!(buf, MSG);
+    let elapsed = pair.time - abandoned_at;
+    // 2*PTO is at least 2*max_ack_delay (default 25ms), regardless of RTT. An
+    // immediate declare-lost at abandon time would arrive within ~one RTT.
+    assert!(
+        elapsed >= Duration::from_millis(50),
+        "in-flight data was retransmitted {elapsed:?} after the abandon, not deferred by 2*PTO"
+    );
+
+    Ok(())
+}
+
+/// In-flight data acknowledged during the 2*PTO window is not retransmitted.
+///
+/// The client abandons path 0 while the acknowledgment for its in-flight
+/// stream data is itself still in flight. The acknowledgment is processed
+/// during the 2*PTO window, so when the declare-in-flight-lost deadline fires
+/// there is nothing left to retransmit. This is the reason the declare-lost
+/// is deferred at all: an immediate declare-lost at abandon time would resend
+/// data the peer already received.
+#[test]
+fn abandoned_path_acked_in_flight_not_retransmitted() -> TestResult {
+    let _guard = subscribe();
+    let mut pair = ConnPair::builder().enable_multipath().connect();
+
+    // Path 1 is Backup, so stream data goes out on path 0.
+    let server_addr = pair.routes.public_server_addr();
+    let _path1 = pair.open_path(
+        Client,
+        FourTuple::from_remote(server_addr),
+        PathStatus::Backup,
+    )?;
+    pair.drive();
+    while pair.poll(Client).is_some() {}
+    while pair.poll(Server).is_some() {}
+
+    const MSG: &[u8] = b"acked during the abandon window";
+    let s = pair.streams(Client).open(Dir::Uni).unwrap();
+    pair.send_stream(Client, s).write(MSG).unwrap();
+    pair.send_stream(Client, s).finish().unwrap();
+    // The flight is delivered and the server's (delayed) acknowledgment
+    // departs, but the client has not processed it: it sits in the client's
+    // inbound queue when the path is abandoned.
+    pair.drive_client();
+    pair.drive_server();
+    pair.time = pair.server.next_wakeup().expect("ack delay timer armed");
+    pair.drive_server();
+    assert!(
+        !pair.client.inbound.is_empty(),
+        "expected the ACK in flight"
+    );
+    let stream_frames_sent = pair.stats(Client).frame_tx.stream;
+
+    pair.close_path(Client, PathId::ZERO, 0u8.into())?;
+    // The in-flight acknowledgment is processed and the 2*PTO deadline passes.
+    pair.drive();
+
+    assert_matches!(pair.streams(Server).accept(Dir::Uni), Some(stream) if stream == s);
+    let mut buf = Vec::new();
+    assert!(read_available(&mut pair, s, &mut buf));
+    assert_eq!(buf, MSG);
+
+    assert_eq!(
+        pair.stats(Client).frame_tx.stream,
+        stream_frames_sent,
+        "acknowledged in-flight data was retransmitted after the abandon"
+    );
+
+    Ok(())
+}
+
+/// Only the still-unacknowledged part of an abandoned path's in-flight data
+/// is retransmitted.
+///
+/// Two flights are in the air on path 0 when it is abandoned: the first is
+/// delivered and its acknowledgment arrives during the 2*PTO window; the
+/// second is lost. When the declare-in-flight-lost deadline fires, only the
+/// lost flight's data is requeued. This also exercises the deadline surviving
+/// the mid-window acknowledgment: processing an ACK re-runs the loss detection
+/// arming, which must leave an abandoned path's deadline untouched.
+#[test]
+fn abandoned_path_partially_acked_retransmits_only_rest() -> TestResult {
+    let _guard = subscribe();
+    let mut pair = ConnPair::builder().enable_multipath().connect();
+
+    // Path 1 is Backup, so stream data goes out on path 0.
+    let server_addr = pair.routes.public_server_addr();
+    let _path1 = pair.open_path(
+        Client,
+        FourTuple::from_remote(server_addr),
+        PathStatus::Backup,
+    )?;
+    pair.drive();
+    while pair.poll(Client).is_some() {}
+    while pair.poll(Server).is_some() {}
+
+    const FIRST: &[u8] = b"delivered and acked mid-window; ";
+    const SECOND: &[u8] = b"lost and retransmitted";
+    let s = pair.streams(Client).open(Dir::Uni).unwrap();
+
+    // First flight: reaches the server (its delayed ACK arrives later, during
+    // the abandon window).
+    pair.send_stream(Client, s).write(FIRST).unwrap();
+    pair.drive_client();
+    pair.drive_server();
+
+    // Second flight: lost in transit.
+    pair.send_stream(Client, s).write(SECOND).unwrap();
+    pair.send_stream(Client, s).finish().unwrap();
+    pair.drive_client();
+    info!("dropping the second flight on path 0");
+    pair.server.inbound.clear();
+
+    let stream_frames_sent = pair.stats(Client).frame_tx.stream;
+    let abandoned_at = pair.time;
+    pair.close_path(Client, PathId::ZERO, 0u8.into())?;
+
+    // Step normally (nothing dropped from here on) until the whole stream
+    // has arrived.
+    let mut buf = Vec::new();
+    let mut accepted = false;
+    let mut fin = false;
+    for _ in 0..500 {
+        if !pair.step() {
+            break;
+        }
+        if !accepted {
+            accepted = pair.streams(Server).accept(Dir::Uni).is_some();
+        }
+        if accepted && read_available(&mut pair, s, &mut buf) {
+            fin = true;
+            break;
+        }
+        if pair.time - abandoned_at > Duration::from_secs(10) {
+            break;
+        }
+    }
+
+    assert!(fin, "stream data never arrived over the remaining path");
+    assert_eq!(buf, [FIRST, SECOND].concat());
+    // Only the second flight's stream frame was sent again.
+    assert_eq!(
+        pair.stats(Client).frame_tx.stream,
+        stream_frames_sent + 1,
+        "expected exactly the lost flight to be retransmitted"
+    );
+    let elapsed = pair.time - abandoned_at;
+    assert!(
+        elapsed >= Duration::from_millis(50),
+        "in-flight data was retransmitted {elapsed:?} after the abandon, not deferred by 2*PTO"
+    );
 
     Ok(())
 }
