@@ -54,6 +54,8 @@ pub struct TransportConfig {
     pub(crate) datagram_send_buffer_size: usize,
     #[cfg(test)]
     pub(crate) deterministic_packet_numbers: bool,
+    #[cfg(test)]
+    pub(crate) initial_key_phase_size: Option<u64>,
 
     pub(crate) congestion_controller_factory: Arc<dyn congestion::ControllerFactory + Send + Sync>,
 
@@ -332,6 +334,23 @@ impl TransportConfig {
         self
     }
 
+    /// Override the size of the first 1-RTT key phase
+    ///
+    /// A fresh connection picks a short key phase at random (10..1000 packets) so that peers
+    /// which mishandle key updates fail early. That makes the first autonomous key update land
+    /// wherever the seed likes, which is a liability in tests that merely happen to run long
+    /// enough: it arms a `KeyDiscard` timer ahead of the deadline they are waiting for. Set this
+    /// to a size the test will never reach to keep the connection on its initial keys; peer
+    /// initiated and forced updates are unaffected, and the AEAD confidentiality limit still
+    /// applies.
+    ///
+    /// Defaults to `None`, i.e. the random production behavior.
+    #[cfg(test)]
+    pub(crate) fn initial_key_phase_size(&mut self, packets: Option<u64>) -> &mut Self {
+        self.initial_key_phase_size = packets;
+        self
+    }
+
     /// How to construct new `congestion::Controller`s
     ///
     /// Typically the refcounted configuration of a `congestion::Controller`,
@@ -582,6 +601,8 @@ impl Default for TransportConfig {
             datagram_send_buffer_size: 1024 * 1024,
             #[cfg(test)]
             deterministic_packet_numbers: false,
+            #[cfg(test)]
+            initial_key_phase_size: None,
 
             congestion_controller_factory: Arc::new(congestion::CubicConfig::default()),
 
@@ -631,6 +652,8 @@ impl fmt::Debug for TransportConfig {
             datagram_send_buffer_size,
             #[cfg(test)]
                 deterministic_packet_numbers: _,
+            #[cfg(test)]
+                initial_key_phase_size: _,
             congestion_controller_factory: _,
             enable_segmentation_offload,
             address_discovery_role,
