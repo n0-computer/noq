@@ -103,7 +103,7 @@ pub use streams::{
     ShouldTransmit, StreamEvent, Streams, WriteError,
 };
 
-mod timer;
+pub(crate) mod timer;
 use timer::{Timer, TimerTable};
 
 mod transmit_buf;
@@ -453,6 +453,15 @@ impl Connection {
     #[must_use]
     pub fn poll_timeout(&self) -> Option<Instant> {
         self.timers.peek()
+    }
+
+    /// Returns the instant at which `timer` is armed to fire, or `None` if it is not.
+    ///
+    /// `None` covers the timer never having been armed, having fired, and having been
+    /// cancelled.
+    #[cfg(test)]
+    pub(crate) fn timer_pending(&self, timer: Timer) -> Option<Instant> {
+        self.timers.get(timer)
     }
 
     /// Returns application-facing events
