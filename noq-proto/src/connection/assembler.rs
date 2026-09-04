@@ -37,6 +37,10 @@ impl Assembler {
         self.data.clear();
     }
 
+    pub(super) fn is_ordered(&self) -> bool {
+        self.state.is_ordered()
+    }
+
     pub(super) fn ensure_ordering(&mut self, ordered: bool) -> Result<(), IllegalOrderedRead> {
         if ordered && !self.state.is_ordered() {
             return Err(IllegalOrderedRead);

@@ -10,7 +10,7 @@ use tracing::trace;
 use super::spaces::Retransmits;
 use crate::{
     Dir, StreamId, VarInt,
-    connection::streams::state::{get_or_insert_recv, get_or_insert_send},
+    connection::streams::state::{StreamRecv, get_or_insert_recv, get_or_insert_send},
     frame,
 };
 
@@ -110,6 +110,23 @@ pub struct RecvStream<'a> {
 }
 
 impl RecvStream<'_> {
+    /// Whether this stream is still in ordered read mode.
+    ///
+    /// A stream switches permanently to unordered mode when [`Self::read`] is called with
+    /// `ordered` set to `false`.
+    pub fn is_ordered(&self) -> Result<bool, ClosedStream> {
+        let Some(stream) = self.state.recv.get(&self.id) else {
+            return Err(ClosedStream { _private: () });
+        };
+        let Some(stream) = stream.as_ref().and_then(StreamRecv::as_open_recv) else {
+            return Ok(true);
+        };
+        if stream.stopped {
+            return Err(ClosedStream { _private: () });
+        }
+        Ok(stream.assembler.is_ordered())
+    }
+
     /// Read from the given recv stream
     ///
     /// `max_length` limits the maximum size of the returned `Bytes` value; passing `usize::MAX`

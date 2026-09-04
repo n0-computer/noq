@@ -1730,6 +1730,55 @@ async fn recv_stream_cancel_stop_drop() {
     );
 }
 
+/// Dropping a pending `read_to_end` future makes subsequent reads fail because `read_to_end` uses
+/// the unordered API internally.
+#[tokio::test]
+async fn recv_stream_cancel_read_to_end_then_ordered_read_is_closed() {
+    let _guard = subscribe();
+    let factory = EndpointFactory::new();
+    let server = factory.endpoint("server");
+    let server_addr = server.local_addr().unwrap();
+    let client = factory.endpoint("client");
+    let ordered_read_done = tokio::sync::SetOnce::new();
+
+    tokio::join!(
+        async {
+            let conn = server.accept().await.unwrap().await.unwrap();
+            let mut recv = conn.accept_uni().await.unwrap();
+            {
+                let fut = pin!(recv.read_to_end(usize::MAX));
+                let mut cx = Context::from_waker(Waker::noop());
+                assert!(fut.poll(&mut cx).is_pending());
+            }
+
+            {
+                let mut buf = [0; 1];
+                let fut = pin!(recv.read(&mut buf));
+                let mut cx = Context::from_waker(Waker::noop());
+                assert!(matches!(
+                    fut.poll(&mut cx),
+                    Poll::Ready(Err(crate::ReadError::ClosedStream))
+                ));
+            }
+            assert_eq!(
+                recv.read_to_end(usize::MAX).await,
+                Err(crate::ReadToEndError::Read(crate::ReadError::ClosedStream))
+            );
+            ordered_read_done.set(()).unwrap();
+        },
+        async {
+            let conn = client
+                .connect(server_addr, "localhost")
+                .unwrap()
+                .await
+                .unwrap();
+            let mut send = conn.open_uni().await.unwrap();
+            send.write_all(b"hello").await.unwrap();
+            ordered_read_done.wait().await;
+        },
+    );
+}
+
 /// Regression test for an `active_connections` underflow panic in the endpoint driver.
 ///
 /// `ConnectionSet::insert` used to only increment `active_connections` when the endpoint

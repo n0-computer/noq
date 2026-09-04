@@ -1194,6 +1194,7 @@ mod tests {
         assert!(recv.stop(0u32.into()).is_err());
         assert_eq!(recv.read(true).err(), Some(ReadableError::ClosedStream));
         assert_eq!(recv.read(false).err(), Some(ReadableError::ClosedStream));
+        assert!(recv.is_ordered().is_err());
 
         assert_eq!(client.local_max_data - initial_max, 32);
         assert_eq!(
@@ -1212,6 +1213,33 @@ mod tests {
         );
         assert_eq!(client.local_max_data - initial_max, 48);
         assert!(!client.recv.contains_key(&id));
+    }
+
+    #[test]
+    fn recv_stream_ordering_mode() {
+        let mut client = make(Side::Client);
+        let id = StreamId::new(Side::Server, Dir::Uni, 0);
+        let _ = client
+            .received(
+                frame::Stream {
+                    id,
+                    offset: 0,
+                    fin: false,
+                    data: Bytes::from_static(b"hello"),
+                },
+                5,
+            )
+            .unwrap();
+
+        let mut pending = Retransmits::default();
+        let mut recv = RecvStream {
+            id,
+            state: &mut client,
+            pending: &mut pending,
+        };
+        assert_eq!(recv.is_ordered(), Ok(true));
+        let _ = recv.read(false).unwrap().finalize();
+        assert_eq!(recv.is_ordered(), Ok(false));
     }
 
     #[test]
