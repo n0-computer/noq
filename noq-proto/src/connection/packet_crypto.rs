@@ -137,6 +137,17 @@ impl CryptoState {
         }
     }
 
+    /// Override how many packets the first key phase lasts
+    ///
+    /// See `TransportConfig::initial_key_phase_size`.
+    #[cfg(test)]
+    pub(super) fn with_key_phase_size(mut self, packets: Option<u64>) -> Self {
+        if let Some(packets) = packets {
+            self.key_phase_size = packets;
+        }
+        self
+    }
+
     /// Removes header protection of a packet, or returns `None` if the packet was dropped.
     pub(super) fn unprotect_header(
         &self,
