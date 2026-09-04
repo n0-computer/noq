@@ -521,6 +521,7 @@ pub(super) struct ConnPairBuilder {
     pub(super) client_endpoint_cfg: EndpointConfig,
     server_cfg: Option<ServerConfig>,
     routes: Option<Routing>,
+    key_updates: bool,
 }
 
 impl Default for ConnPairBuilder {
@@ -542,6 +543,7 @@ impl Default for ConnPairBuilder {
             client_endpoint_cfg: Default::default(),
             server_cfg: None,
             routes: None,
+            key_updates: false,
         }
     }
 }
@@ -563,6 +565,17 @@ impl ConnPairBuilder {
     pub(super) fn with_transport_cfg(mut self, cfg: TransportConfig) -> Self {
         self.server_transport_cfg = cfg.clone();
         self.client_transport_cfg = cfg;
+        self
+    }
+
+    /// Let the connection update its keys on its own, as it pleases.
+    ///
+    /// By default a built pair pins the first key phase out of reach, so that a test cannot be
+    /// interrupted by an autonomous key update it never asked for. Tests about key updates
+    /// themselves, or about what an update does to timers and paths, should call this. Peer
+    /// initiated and forced updates (`Self::force_key_update`) work either way.
+    pub(super) fn with_key_update(mut self) -> Self {
+        self.key_updates = true;
         self
     }
 
@@ -619,13 +632,22 @@ impl ConnPairBuilder {
         let Self {
             latency,
             mtu,
-            server_transport_cfg,
-            client_transport_cfg,
+            mut server_transport_cfg,
+            mut client_transport_cfg,
             server_endpoint_cfg,
             client_endpoint_cfg,
             server_cfg,
             routes,
+            key_updates,
         } = self;
+
+        // Tests that are not about key updates should not be subject to one: a fresh connection
+        // picks a short key phase at random, so the first autonomous update lands wherever the
+        // seed likes. Opt back in with `Self::with_key_update`.
+        if !key_updates {
+            client_transport_cfg.initial_key_phase_size(Some(u64::MAX));
+            server_transport_cfg.initial_key_phase_size(Some(u64::MAX));
+        }
 
         let server_cfg = server_cfg.unwrap_or(ServerConfig {
             transport: Arc::new(server_transport_cfg),
