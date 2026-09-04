@@ -153,6 +153,24 @@ impl<'a> TransmitBuf<'a> {
         self.buf_capacity = self.buf.len();
     }
 
+    /// Finishes the current datagram, so the next packet starts a new datagram
+    ///
+    /// Used when what is left of the current datagram is too small to hold another packet.
+    /// The datagram then ends up shorter than the segment size: if it is the first
+    /// datagram of the batch the segment size is clipped to it, otherwise the batch has to
+    /// end with it, because only the first and the last datagram of a GSO batch may be
+    /// smaller than the segment size.
+    pub(super) fn finish_datagram(&mut self) {
+        debug_assert!(self.num_datagrams > 0);
+        if self.num_datagrams == 1 {
+            self.clip_segment_size();
+        } else {
+            // This datagram is shorter than the segment size, so the batch has to end here.
+            self.buf_capacity = self.buf.len();
+            self.max_datagrams = NonZeroUsize::MIN.saturating_add(self.num_datagrams - 1);
+        }
+    }
+
     /// Returns the GSO segment size
     ///
     /// This is also the maximum size datagrams are allowed to be. The first and last
