@@ -7,7 +7,7 @@ use crate::{
     ConnectionId, FrameStats, Instant, MIN_INITIAL_SIZE, TransportError,
     coding::Encodable,
     connection::{ConnectionSide, EncryptionLevel, qlog::QlogSentPacket, spaces::Retransmits},
-    frame::EncodableFrame,
+    frame::{self, EncodableFrame, FrameStruct},
     packet::{FIXED_BIT, Header, InitialHeader, LongType, PacketNumber, PartialEncode, SpaceId},
 };
 
@@ -42,7 +42,7 @@ impl<'a, 'b> PacketBuilder<'a, 'b> {
     /// Write a new packet header to `buffer` and determine the packet's properties
     ///
     /// Marks the connection drained and returns `None` if the confidentiality limit would be
-    /// violated.
+    /// violated, or an Initial token leaves insufficient space for frames.
     pub(super) fn new(
         now: Instant,
         space_id: SpaceId,
@@ -155,7 +155,22 @@ impl<'a, 'b> PacketBuilder<'a, 'b> {
             buffer.len() + (sample_size + 4).saturating_sub(number.len() + tag_len),
             partial_encode.start + dst_cid.len() + 6,
         );
-        let max_size = buffer.datagram_max_offset() - tag_len;
+        let max_size = buffer.datagram_max_offset().saturating_sub(tag_len);
+        if space_id == SpaceId::Initial
+            && (max_size < min_size
+                || max_size.saturating_sub(buffer.len())
+                    <= frame::Crypto::SIZE_BOUND.max(frame::ConnectionClose::SIZE_BOUND))
+        {
+            buffer.truncate(partial_encode.start);
+            // Both Retry and cached address validation tokens originate from the peer.
+            conn.kill(
+                TransportError::PROTOCOL_VIOLATION(
+                    "Initial token leaves insufficient packet space",
+                )
+                .into(),
+            );
+            return None;
+        }
         debug_assert!(max_size >= min_size);
 
         qlog.header(&header, Some(packet_number), level, path_id);

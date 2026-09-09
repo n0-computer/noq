@@ -1633,8 +1633,9 @@ impl Connection {
             let Some(mut builder) =
                 PacketBuilder::new(now, space_id, path_id, remote_cid, transmit, self)
             else {
-                // Confidentiality limit is exceeded and the connection has been killed. We
-                // should not send any other packets. This works in a roundabout way: We
+                // Confidentiality limit is exceeded, or an Initial token left no room for
+                // frames, and the connection has been killed. We should not send any other
+                // packets. This works in a roundabout way: We
                 // have started a datagram but not written anything into it. So even if we
                 // get called again for another space we will see an already started
                 // datagram and try and start another packet here. Then be stopped by the
