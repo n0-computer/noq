@@ -1691,11 +1691,11 @@ impl Connection {
                 //    write the CONNECTION_CLOSE even if we have many PATH_ACKs to send:
                 //    https://github.com/n0-computer/noq/issues/367.
                 debug_assert!(
-                    builder.frame_space_remaining() > frame::ConnectionClose::SIZE_BOUND,
+                    builder.frame_space_remaining() >= frame::ConnectionClose::SIZE_BOUND,
                     "ACKs should leave space for ConnectionClose"
                 );
                 let stats = &mut self.path_stats.get_mut(path_id).frame_tx;
-                if frame::ConnectionClose::SIZE_BOUND < builder.frame_space_remaining() {
+                if frame::ConnectionClose::SIZE_BOUND <= builder.frame_space_remaining() {
                     let max_frame_size = builder.frame_space_remaining();
                     let close: Close = match self.state.as_type() {
                         StateType::Closed => {
