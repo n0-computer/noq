@@ -286,6 +286,20 @@ impl<'a, 'b> PacketBuilder<'a, 'b> {
             false => 0,
         };
 
+        // `lost_packets` is not incremented for MTUD probes, so we avoid incrementing
+        // `sent_packets` for it as well.
+        if conn.path_data(path_id).mtud.in_flight_mtu_probe() == Some(packet_number) {
+            conn.path_stats.get_mut(path_id).sent_plpmtud_probes += 1;
+        } else {
+            // Needs to be incremented in the same place that constructs `SentPacket`s,
+            // to ensure it matches `lost_packets` (`lost_packets <= sent_packets`).
+            // Similarly, `sent_bytes` needs to match how `lost_bytes` are incremented.
+            // Hence, the weird case of sent_packets increasing, but sent_bytes not,
+            // because the `size` above is what makes it into `lost_bytes` eventually.
+            conn.path_stats.get_mut(path_id).sent_packets += 1;
+            conn.path_stats.get_mut(path_id).sent_bytes += size as u64;
+        }
+
         let packet = SentPacket {
             path_generation: conn.paths.get_mut(&path_id).unwrap().data.generation(),
             largest_acked: sent.largest_acked,
