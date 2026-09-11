@@ -2206,6 +2206,10 @@ impl Connection {
         packet_size: usize,
         connection_close_pending: bool,
     ) -> SendableFrames {
+        let (paths, remote_cids, abandoned) =
+            (&self.paths, &self.remote_cids, &self.abandoned_paths);
+        let carries_own_acks =
+            |p: PathId| Self::path_carries_own_acks(paths, remote_cids, abandoned, p);
         let space = &mut self.spaces[space_id];
         let space_has_crypto = self.crypto_state.has_keys(space_id.encryption_level());
 
@@ -2218,7 +2222,7 @@ impl Connection {
             return SendableFrames::empty();
         }
 
-        let mut can_send = space.can_send(path_id, &self.streams);
+        let mut can_send = space.can_send(path_id, &self.streams, carries_own_acks);
 
         // Check for 1RTT space.
         if space_id == SpaceId::Data {
@@ -6099,6 +6103,27 @@ impl Connection {
         let is_0rtt = space_id == SpaceId::Data && !space_has_keys;
         let stats = &mut self.path_stats.get_mut(path_id).frame_tx;
         let space = &mut self.spaces[space_id];
+        // Other paths whose acks must not ride this packet because they can carry their own
+        // (see the ACK section below). Only relevant with more than one path; the list is at
+        // most the number of paths.
+        let other_own_carriers: Vec<PathId> = if space.number_spaces.len() > 1 {
+            space
+                .number_spaces
+                .keys()
+                .copied()
+                .filter(|&p| {
+                    p != path_id
+                        && Self::path_carries_own_acks(
+                            &self.paths,
+                            &self.remote_cids,
+                            &self.abandoned_paths,
+                            p,
+                        )
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         let path = &mut self.paths.get_mut(&path_id).expect("known path").data;
         space
             .for_path(path_id)
@@ -6134,11 +6159,19 @@ impl Connection {
         }
 
         // ACK
+        //
+        // A path's acknowledgements are sent on that path whenever it can carry them, and only
+        // piggybacked onto another path's packet when it cannot (not yet validated, abandoned,
+        // no CIDs). Sending path B's PATH_ACKs on path A ties B's loss recovery and congestion
+        // feedback to A's fate: if A degrades, B's RTT and delivery-rate estimates inflate with
+        // A's queue even though B itself is healthy.
         if !scheduling_info.is_abandoned && scheduling_info.may_send_data {
             for path_id in space
                 .number_spaces
                 .iter_mut()
-                .filter(|(_, pns)| pns.pending_acks.can_send())
+                .filter(|(pid, pns)| {
+                    pns.pending_acks.can_send() && !other_own_carriers.contains(pid)
+                })
                 .map(|(&path_id, _)| path_id)
                 .collect::<Vec<_>>()
             {
@@ -6944,6 +6977,22 @@ impl Connection {
             }
             self.connection_close_pending = true;
         }
+    }
+
+    /// Whether path `p` can currently carry its own acknowledgements: known CIDs, not abandoned
+    /// and validated. Acks for such a path are sent on the path itself rather than piggybacked on
+    /// whichever path happens to transmit first (see the ACK section of `populate_packet`).
+    ///
+    /// Takes the fields rather than `&self` so callers can hold `&mut self.spaces` meanwhile.
+    fn path_carries_own_acks(
+        paths: &BTreeMap<PathId, PathState>,
+        remote_cids: &FxHashMap<PathId, CidQueue>,
+        abandoned: &AbandonedPaths,
+        p: PathId,
+    ) -> bool {
+        remote_cids.contains_key(&p)
+            && !abandoned.contains(&p)
+            && paths.get(&p).is_some_and(|path| path.data.validated)
     }
 
     /// Whether we have **on-path** 1-RTT data to send.
