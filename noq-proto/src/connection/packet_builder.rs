@@ -286,6 +286,15 @@ impl<'a, 'b> PacketBuilder<'a, 'b> {
             false => 0,
         };
 
+        let is_mtud_probe =
+            conn.path_data(path_id).mtud.in_flight_mtu_probe() == Some(packet_number);
+        {
+            let path_stats = conn.path_stats.get_mut(path_id);
+            path_stats.sent_packets += 1;
+            path_stats.sent_bytes += size as u64;
+            path_stats.sent_plpmtud_probes += is_mtud_probe as u64;
+        }
+
         let packet = SentPacket {
             path_generation: conn.paths.get_mut(&path_id).unwrap().data.generation(),
             largest_acked: sent.largest_acked,
