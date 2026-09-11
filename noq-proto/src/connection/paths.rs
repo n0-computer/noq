@@ -797,6 +797,12 @@ impl RttEstimator {
         }
     }
 
+    /// Whether at least one RTT sample has been taken (before that, [`Self::get`] returns the
+    /// configured initial estimate).
+    pub fn has_sample(&self) -> bool {
+        self.smoothed.is_some()
+    }
+
     /// The current best RTT estimation.
     pub fn get(&self) -> Duration {
         self.smoothed.unwrap_or(self.latest)
