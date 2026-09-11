@@ -234,15 +234,14 @@ pub struct PathStats {
     pub spurious_congestion_events: u64,
     /// The number of QUIC packets sent on this path.
     ///
-    /// The intention for this stat is to capture all the packets we send that are congestion controlled
-    /// and which we *expect to be received*.
+    /// This counts all packets that are tracked for acknowledgement, including MTUD probes
+    /// and other probes. It does *not* count off-path packets (e.g. off-path path challenges,
+    /// off-path path responses, or NAT traversal probes) which are sent via a different code
+    /// path and are not tracked for acknowledgement.
     ///
-    /// This does *not* count off-path path challenges, off-path path responses, any path challenges
-    /// or responses sent for NAT traversal or MTUD probes (we expect these packets to not make it in
-    /// many cases).
-    ///
-    /// This value should be meaningful relative to [`Self::lost_packets`], packets this way can get lost
-    /// and will be counted in lost packets.
+    /// More specific counters such as [`Self::sent_plpmtud_probes`] allow breaking this number
+    /// down further. To get the number of non-probe packets sent, subtract
+    /// [`Self::sent_plpmtud_probes`] from this value.
     ///
     /// This counts individual QUIC packets, which may differ from [`UdpStats::datagrams`] when
     /// packets are coalesced into a single UDP datagram.
@@ -250,25 +249,29 @@ pub struct PathStats {
     /// The total number of QUIC bytes sent on this path (sum of all sent packet sizes).
     ///
     /// This counts only the QUIC packet payload bytes, not UDP/IP header bytes.
-    /// It also doesn't count ACK-only packets in an effort to stay consistent with
-    /// [`Self::lost_bytes`], which doesn't count ACK-only packets either.
+    /// It does not count bytes for ACK-only (non-ack-eliciting, non-padded) packets, in an
+    /// effort to stay consistent with [`Self::lost_bytes`].
     ///
     /// If you're interested in the full amount of bytes transmitted, consider looking
     /// at [`ConnectionStats::udp_tx`].
-    ///
-    /// Caveats similar to the ones in [`Self::sent_packets`] apply.
     pub sent_bytes: u64,
     /// The number of packets lost on this path.
+    ///
+    /// This counts all packets declared lost, including MTUD probes. More specific counters
+    /// such as [`Self::lost_plpmtud_probes`] allow breaking this number down further.
     pub lost_packets: u64,
     /// The number of bytes lost on this path.
+    ///
+    /// This does not count bytes for ACK-only (non-ack-eliciting, non-padded) packets.
     pub lost_bytes: u64,
     /// The number of PLPMTUD probe packets sent on this path.
     ///
-    /// These are also counted by [`UdpStats::datagrams`].
+    /// These are also counted by [`Self::sent_packets`] and [`Self::sent_bytes`].
+    /// They are also counted by [`UdpStats::datagrams`].
     pub sent_plpmtud_probes: u64,
     /// The number of PLPMTUD probe packets lost on this path.
     ///
-    /// These are not included in [`Self::lost_packets`] and [`Self::lost_bytes`].
+    /// These are also counted by [`Self::lost_packets`] and [`Self::lost_bytes`].
     pub lost_plpmtud_probes: u64,
     /// The number of times a black hole was detected in the path.
     pub black_holes_detected: u64,
@@ -293,17 +296,19 @@ pub struct ConnectionStats {
     pub frame_rx: FrameStats,
     /// The number of QUIC packets sent on the connection (sum across all paths).
     ///
-    /// This does not count bytes for some kinds of probing packets, for more information
-    /// see [`PathStats::sent_packets`].
+    /// See also [`PathStats::sent_packets`].
     pub sent_packets: u64,
     /// The total number of QUIC bytes sent on the connection (sum across all paths).
     ///
-    /// This does not count bytes for some kinds of probing packets, for more information
-    /// see [`PathStats::sent_bytes`] and [`PathStats::sent_packets`].
+    /// See also [`PathStats::sent_bytes`].
     pub sent_bytes: u64,
     /// The number of packets lost on the connection.
+    ///
+    /// See also [`PathStats::lost_packets`].
     pub lost_packets: u64,
     /// The number of bytes lost on the connection.
+    ///
+    /// See also [`PathStats::lost_bytes`].
     pub lost_bytes: u64,
 
     /// Number of [`super::Transmit`] produced by this connection.

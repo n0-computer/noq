@@ -5122,8 +5122,8 @@ fn sent_packets_stats_snapshot_test() {
 
     let client_stats = pair.client_conn_mut(client_ch).stats();
     let server_stats = pair.server_conn_mut(server_ch).stats();
-    assert_eq!(client_stats.sent_packets, 9);
-    assert_eq!(server_stats.sent_packets, 6);
+    assert_eq!(client_stats.sent_packets, 13);
+    assert_eq!(server_stats.sent_packets, 10);
 
     let s = pair.client_streams(client_ch).open(Dir::Uni).unwrap();
     const MSG: &[u8] = b"Hello, World!";
@@ -5132,6 +5132,6 @@ fn sent_packets_stats_snapshot_test() {
 
     let client_stats2 = pair.client_conn_mut(client_ch).stats();
     let server_stats2 = pair.server_conn_mut(server_ch).stats();
-    assert_eq!(client_stats2.sent_packets, 10);
-    assert_eq!(server_stats2.sent_packets, 7);
+    assert_eq!(client_stats2.sent_packets, 14);
+    assert_eq!(server_stats2.sent_packets, 11);
 }
