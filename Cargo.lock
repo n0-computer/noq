@@ -327,20 +327,6 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "aws-lc-fips-sys"
-version = "0.13.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8bce4948d2520386c6d92a6ea2d472300257702242e5a1d01d6add52bd2e7c1"
-dependencies = [
- "bindgen",
- "cc",
- "cmake",
- "dunce",
- "fs_extra",
- "regex",
-]
-
-[[package]]
-name = "aws-lc-fips-sys"
 version = "0.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "03367707e92796b190a4207d4d39b0a4271d574503d2969c2b0cfbf5c87658ee"
@@ -360,21 +346,9 @@ version = "1.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b281d307588d634de920874890732659e2e7672f72b5e10e81badc1a8a83621e"
 dependencies = [
- "aws-lc-fips-sys 0.14.2",
- "aws-lc-sys 0.45.0",
+ "aws-lc-fips-sys",
+ "aws-lc-sys",
  "zeroize",
-]
-
-[[package]]
-name = "aws-lc-sys"
-version = "0.39.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1fa7e52a4c5c547c741610a2c6f123f3881e409b714cd27e6798ef020c514f0a"
-dependencies = [
- "cc",
- "cmake",
- "dunce",
- "fs_extra",
 ]
 
 [[package]]
@@ -1852,8 +1826,8 @@ dependencies = [
  "async-fs",
  "async-global-executor",
  "async-io",
- "aws-lc-fips-sys 0.13.13",
- "aws-lc-sys 0.39.0",
+ "aws-lc-fips-sys",
+ "aws-lc-sys",
  "bytes",
  "cfg_aliases",
  "clap",
