@@ -1196,6 +1196,25 @@ fn streams_blocked_not_sent_under_limit() {
     );
 }
 
+/// A built pair holds a connection's initial keys unless the test says otherwise
+///
+/// Production starts a connection with a short key phase (10..1000 packets) so that peers which
+/// mishandle key updates fail early. That puts the first autonomous update at an unpredictable
+/// point, so `ConnPairBuilder` pins it out of reach; see `ConnPairBuilder::with_key_update`.
+#[test]
+fn connpair_initial_key_phase_is_pinned() {
+    let pair = ConnPair::builder().connect();
+    assert_eq!(pair.conn(Client).key_phase_size(), u64::MAX);
+    assert_eq!(pair.conn(Server).key_phase_size(), u64::MAX);
+
+    let pair = ConnPair::builder().with_key_update().connect();
+    let size = pair.conn(Client).key_phase_size();
+    assert!(
+        (10..1000).contains(&size),
+        "opted into key updates, expected a short initial phase, got {size}"
+    );
+}
+
 #[test]
 fn key_update_simple() {
     let _guard = subscribe();
