@@ -1899,6 +1899,15 @@ impl State {
         }
         shared.handshake_confirmed.notify_waiters();
         wake_all_notify(&mut self.stopped);
+        // Resolve pending `OpenPath` futures: a path that never finished
+        // validation cannot be established anymore, which semantically equals
+        // `ValidationFailed` (see the `PathEvent::Abandoned` handling in
+        // `forward_app_events`). Without this the futures would never
+        // resolve, keeping the connection state alive through their
+        // `ConnectionRef`s.
+        for (_, sender) in self.open_path.drain() {
+            sender.send_modify(|value| *value = Err(PathError::ValidationFailed));
+        }
         shared.closed.notify_waiters();
         // Send to the registered on_closed futures.
         if !self.on_closed.is_empty() {
