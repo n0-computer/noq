@@ -2299,3 +2299,55 @@ fn regression_discarded_path_stats_are_up_to_date() -> TestResult {
 
     Ok(())
 }
+
+/// A path's acknowledgements are sent on that path, not on whichever path happens to transmit
+/// first. With two validated paths and data flowing on both, the server must transmit PATH_ACK
+/// frames on path 1 as well as on path 0; before the fix every path's acks were coalesced into
+/// path 0's packets, which ties path 1's loss recovery and RTT/delivery samples to path 0's fate.
+#[test]
+fn path_acks_sent_on_own_path() -> TestResult {
+    let _guard = subscribe();
+    let mut pair = ConnPair::builder().enable_multipath().connect();
+    let server_addr = pair.routes.public_server_addr();
+    let path_1 = pair.open_path(
+        Client,
+        FourTuple::from_remote(server_addr),
+        PathStatus::Available,
+    )?;
+    pair.drive();
+    while pair.poll(Client).is_some() {}
+    while pair.poll(Server).is_some() {}
+
+    let before_0 = pair
+        .path_stats(Server, PathId::ZERO)
+        .unwrap()
+        .frame_tx
+        .path_acks;
+    let before_1 = pair.path_stats(Server, path_1).unwrap().frame_tx.path_acks;
+
+    // Client data on both paths: path 0 first, then path 1 as the only available path.
+    let s = pair.streams(Client).open(Dir::Uni).unwrap();
+    pair.send_stream(Client, s).write(&[1u8; 20_000]).unwrap();
+    pair.drive();
+    pair.set_path_status(Client, PathId::ZERO, PathStatus::Backup)?;
+    pair.send_stream(Client, s).write(&[2u8; 20_000]).unwrap();
+    pair.drive();
+    pair.set_path_status(Client, PathId::ZERO, PathStatus::Available)?;
+    pair.send_stream(Client, s).write(&[3u8; 20_000]).unwrap();
+    pair.drive();
+
+    let acks_0 = pair
+        .path_stats(Server, PathId::ZERO)
+        .unwrap()
+        .frame_tx
+        .path_acks
+        - before_0;
+    let acks_1 = pair.path_stats(Server, path_1).unwrap().frame_tx.path_acks - before_1;
+    info!("server PATH_ACKs transmitted: path 0 = {acks_0}, path 1 = {acks_1}");
+    assert!(acks_0 > 0, "path 0 carried data, its acks go on path 0");
+    assert!(
+        acks_1 > 0,
+        "path 1 carried data, its acks must go on path 1 (got {acks_1}; path 0 carried {acks_0})"
+    );
+    Ok(())
+}
