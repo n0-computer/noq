@@ -74,15 +74,14 @@ use packet_crypto::CryptoState;
 pub(crate) use packet_crypto::EncryptionLevel;
 
 mod paths;
-pub use paths::{
-    ClosedPath, PathAbandonReason, PathEvent, PathId, PathStatus, RttEstimator, SetPathStatusError,
-};
+pub use paths::{ClosedPath, PathAbandonReason, PathEvent, PathId, RttEstimator, SetPathStatusError};
 use paths::{PathData, PathState};
 
 pub(crate) mod qlog;
 pub(crate) mod send_buffer;
 
 pub(crate) mod spaces;
+pub use spaces::PathStatus;
 #[cfg(fuzzing)]
 pub use spaces::Retransmits;
 #[cfg(not(fuzzing))]
@@ -593,8 +592,9 @@ impl Connection {
             return Err(PathError::RemoteCidsExhausted);
         }
 
-        let path = self.create_path(path_id, network_path, now, None);
-        path.status.local_update(initial_status);
+        self.create_network_path(path_id, network_path, now, None);
+        let pns = self.spaces[SpaceKind::Data].for_path(path_id);
+        pns.status.local_update(initial_status);
 
         Ok(path_id)
     }
@@ -803,8 +803,10 @@ impl Connection {
 
     /// Gets the local [`PathStatus`] for a known [`PathId`]
     pub fn path_status(&self, path_id: PathId) -> Result<PathStatus, ClosedPath> {
-        self.path(path_id)
-            .map(PathData::local_status)
+        self.spaces[SpaceKind::Data]
+            .number_spaces
+            .get(&path_id)
+            .map(|pns| pns.local_status())
             .ok_or(ClosedPath { _private: () })
     }
 
@@ -826,28 +828,32 @@ impl Connection {
         if !self.is_multipath_negotiated() {
             return Err(SetPathStatusError::MultipathNotNegotiated);
         }
-        let path = self
-            .path_mut(path_id)
+        let pns = self.spaces[SpaceKind::Data]
+            .number_spaces
+            .get_mut(&path_id)
             .ok_or(SetPathStatusError::ClosedPath)?;
-        let prev = match path.status.local_update(status) {
+        let prev = match pns.status.local_update(status) {
             Some(prev) => {
-                self.spaces[SpaceId::Data]
+                self.spaces[SpaceKind::Data]
                     .pending
                     .path_status
                     .insert(path_id);
                 prev
             }
-            None => path.local_status(),
+            None => pns.local_status(),
         };
         Ok(prev)
     }
 
-    /// Returns the remote path status
+    /// Returns the remote path status.
     // TODO(flub): Probably should also be some kind of path event?  Not even sure if I like
     //    this as an API, but for now it allows me to write a test easily.
-    // TODO(flub): Technically this should be a Result<Option<PathSTatus>>?
+    // TODO(flub): Technically this should be a Result<Option<PathStatus>>?
     pub fn remote_path_status(&self, path_id: PathId) -> Option<PathStatus> {
-        self.path(path_id).and_then(|path| path.remote_status())
+        self.spaces[SpaceKind::Data]
+            .number_spaces
+            .get(&path_id)
+            .and_then(|pns| pns.remote_status())
     }
 
     /// Sets the max_idle_timeout for a specific path.
@@ -943,7 +949,7 @@ impl Connection {
     /// Creates the [`PathData`] for a new [`PathId`].
     ///
     /// Called for incoming packets as well as when opening a new path locally.
-    fn create_path(
+    fn create_network_path(
         &mut self,
         path_id: PathId,
         network_path: FourTuple,
@@ -1163,10 +1169,12 @@ impl Connection {
     fn scheduling_info(&self, path_id: PathId) -> PathSchedulingInfo {
         // Such a space is preferred for SpaceKind::Data frames.
         let have_validated_status_available_space = self.paths.iter().any(|(path_id, path)| {
+            // pns can never be None here, that would be a logical error.
+            let pns = self.spaces[SpaceKind::Data].number_spaces.get(path_id);
             self.remote_cids.contains_key(path_id)
                 && !self.abandoned_paths.contains(path_id)
                 && path.data.validated
-                && path.data.local_status() == PathStatus::Available
+                && pns.map(|pns| pns.local_status()).unwrap_or_default() == PathStatus::Available
         });
 
         // Such a space is able to send SpaceKind::Data frames.
@@ -1181,7 +1189,10 @@ impl Connection {
         let is_abandoned = self.abandoned_paths.contains(&path_id);
         let path_data = self.path_data(path_id);
         let validated = path_data.validated;
-        let status = path_data.local_status();
+
+        // pns can never be None here, that would be a logical error.
+        let pns = self.spaces[SpaceKind::Data].number_spaces.get(&path_id);
+        let status = pns.map(|pns| pns.local_status()).unwrap_or_default();
 
         // This is the core packet scheduling, whether this space ID may send
         // SpaceKind::Data frames.
@@ -4396,7 +4407,7 @@ impl Connection {
 
                         if self.side().is_server() && !self.abandoned_paths.contains(&path_id) {
                             // Only the client is allowed to open paths
-                            self.create_path(path_id, network_path, now, pn);
+                            self.create_network_path(path_id, network_path, now, pn);
                         }
                         if self.paths.contains_key(&path_id) {
                             self.on_packet_authenticated(
@@ -5882,11 +5893,13 @@ impl Connection {
         let is_client = self.side().is_client();
         let immediate_ack_allowed = self.peer_supports_ack_frequency();
 
-        for (path_id, path) in self.paths.iter_mut() {
+        for path_id in self.spaces[SpaceKind::Data].number_spaces.keys() {
             if self.abandoned_paths.contains(path_id) {
                 continue;
             }
             open_paths += 1;
+
+            let path = self.paths.get_mut(path_id).expect("PathData missing");
 
             // Read the network path BEFORE clearing local_ip, so the hint can
             // check which interface the path was using.
@@ -5914,7 +5927,7 @@ impl Connection {
             if attempt_to_recover {
                 recoverable_paths.push((*path_id, remote));
             } else {
-                non_recoverable_paths.push((*path_id, remote, path.data.local_status()))
+                non_recoverable_paths.push((*path_id, remote));
             }
         }
 
@@ -5928,12 +5941,16 @@ impl Connection {
         // We prefer closing paths first unless we identify this is the last open path.
         let open_first = open_paths == non_recoverable_paths.len();
 
-        for (path_id, remote, status) in non_recoverable_paths.into_iter() {
+        for (path_id, remote) in non_recoverable_paths.into_iter() {
             let network_path = FourTuple {
                 remote,
                 local_ip: None, /* allow the local ip to be discovered */
             };
-
+            let status = self.spaces[SpaceKind::Data]
+                .number_spaces
+                .get(&path_id)
+                .map(|pns| pns.local_status())
+                .expect("spaces iterated above");
             if open_first && let Err(e) = self.open_path(network_path, status, now) {
                 if self.side().is_client() {
                     debug!(%e, "Failed to open new path for network change");
@@ -6388,13 +6405,13 @@ impl Connection {
             let Some(path_id) = space.pending.path_status.pop_first() else {
                 break;
             };
-            let Some(path) = self.paths.get(&path_id).map(|path_state| &path_state.data) else {
+            let Some(pns) = space.number_spaces.get(&path_id) else {
                 trace!(%path_id, "discarding queued path status for unknown path");
                 continue;
             };
 
-            let seq = path.status.seq();
-            match path.local_status() {
+            let seq = pns.status.seq();
+            match pns.local_status() {
                 PathStatus::Available => {
                     let frame = frame::PathStatusAvailable {
                         path_id,
@@ -7079,18 +7096,18 @@ impl Connection {
 
     /// Handle new path status information: PATH_STATUS_AVAILABLE, PATH_STATUS_BACKUP
     fn on_path_status(&mut self, path_id: PathId, status: PathStatus, status_seq_no: VarInt) {
-        if let Some(path) = self.paths.get_mut(&path_id) {
-            path.data.status.remote_update(status, status_seq_no);
+        if let Some(pns) = self.spaces[SpaceKind::Data].number_spaces.get_mut(&path_id) {
+            pns.status.remote_update(status, status_seq_no);
+            self.events.push_back(
+                PathEvent::RemoteStatus {
+                    id: path_id,
+                    status,
+                }
+                .into(),
+            );
         } else {
             debug!("PATH_STATUS_AVAILABLE received unknown path {:?}", path_id);
         }
-        self.events.push_back(
-            PathEvent::RemoteStatus {
-                id: path_id,
-                status,
-            }
-            .into(),
-        );
     }
 
     /// Returns the maximum [`PathId`] to be used for sending in this connection.
