@@ -674,8 +674,8 @@
 <a href=#674 id=674 data-nosnippet>674</a>        <span class="comment">// Regression test: bytes read in ordered mode should not be returned again in unordered
 <a href=#675 id=675 data-nosnippet>675</a>        // mode
 <a href=#676 id=676 data-nosnippet>676</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>x = Assembler::new();
-<a href=#677 id=677 data-nosnippet>677</a>        x.insert(<span class="number">0</span>, Bytes::from_static(<span class="string">b"a"</span>), <span class="number">1</span>);
-<a href=#678 id=678 data-nosnippet>678</a>        x.insert(<span class="number">0</span>, Bytes::from_static(<span class="string">b"a"</span>), <span class="number">1</span>); <span class="comment">// duplicate
+<a href=#677 id=677 data-nosnippet>677</a>        x.insert(<span class="number">0</span>, Bytes::from_static(<span class="string">b"a"</span>), <span class="number">1</span>).unwrap();
+<a href=#678 id=678 data-nosnippet>678</a>        x.insert(<span class="number">0</span>, Bytes::from_static(<span class="string">b"a"</span>), <span class="number">1</span>).unwrap(); <span class="comment">// duplicate
 <a href=#679 id=679 data-nosnippet>679</a>        </span><span class="macro">assert_eq!</span>(
 <a href=#680 id=680 data-nosnippet>680</a>            x.read(<span class="number">1</span>, <span class="bool-val">true</span>),
 <a href=#681 id=681 data-nosnippet>681</a>            <span class="prelude-val">Some</span>(Chunk::new(<span class="number">0</span>, Bytes::from_static(<span class="string">b"a"</span>)))
@@ -794,7 +794,7 @@
 <a href=#794 id=794 data-nosnippet>794</a>            <span class="kw">match </span>op {
 <a href=#795 id=795 data-nosnippet>795</a>                Op::Insert { offset, len } =&gt; {
 <a href=#796 id=796 data-nosnippet>796</a>                    <span class="kw">let </span>bytes = get_slice(<span class="kw-2">&amp;</span>data, offset, len);
-<a href=#797 id=797 data-nosnippet>797</a>                    asm.insert(offset, bytes, len);
+<a href=#797 id=797 data-nosnippet>797</a>                    asm.insert(offset, bytes, len).unwrap();
 <a href=#798 id=798 data-nosnippet>798</a>                    reference.insert(offset, len);
 <a href=#799 id=799 data-nosnippet>799</a>                }
 <a href=#800 id=800 data-nosnippet>800</a>                Op::Read { max_len } =&gt; {
