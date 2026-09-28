@@ -141,7 +141,8 @@ fn endpoint_shutdown_wakes_waiters() {
         (endpoint, connecting)
     };
 
-    // Never run the runtime: the connection cannot drain before the driver is dropped.
+    // `wait_*` should never resolve on its own, because we never drive the connection.
+    // So it should only resolve because the endpoint driver was dropped.
     let mut draining = pin!(endpoint.wait_all_draining());
     let mut idle = pin!(endpoint.wait_idle());
     let (draining_waker, draining_wakes) = new_count_waker();
