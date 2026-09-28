@@ -260,7 +260,7 @@ impl Endpoint {
         Ok(endpoint
             .recv_state
             .connections
-            .insert(ch, conn, sender, self.runtime.clone()))
+            .insert(ch, conn, sender, false, self.runtime.clone()))
     }
 
     /// Switch to a new UDP socket
@@ -525,10 +525,11 @@ impl EndpointInner {
                 state.stats.accepted_handshakes += 1;
                 let sender = state.socket.create_sender();
                 let runtime = state.runtime.clone();
+                let driver_lost = state.driver_lost;
                 Ok(state
                     .recv_state
                     .connections
-                    .insert(handle, conn, sender, runtime))
+                    .insert(handle, conn, sender, driver_lost, runtime))
             }
             Err(error) => {
                 if let Some(transmit) = error.response {
@@ -765,6 +766,7 @@ impl ConnectionSet {
         handle: ConnectionHandle,
         conn: proto::Connection,
         sender: Pin<Box<dyn UdpSender>>,
+        driver_lost: bool,
         runtime: Arc<dyn Runtime>,
     ) -> Connecting {
         let (send, recv) = mpsc::unbounded_channel();
@@ -775,8 +777,16 @@ impl ConnectionSet {
             })
             .unwrap();
         }
-        self.senders.insert(handle, send);
-        self.active_connections += 1;
+        if driver_lost {
+            // Nothing can process this connection's `Draining`/`Drained` events once the
+            // endpoint driver is gone, so registering it would strand `wait_all_draining`
+            // and `wait_idle`. Close its event channel before spawning the connection
+            // driver instead, so it fails promptly rather than waiting for a timeout.
+            drop(send);
+        } else {
+            self.senders.insert(handle, send);
+            self.active_connections += 1;
+        }
         Connecting::new(handle, conn, self.sender.clone(), recv, sender, runtime)
     }
 
