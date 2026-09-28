@@ -130,6 +130,36 @@ async fn close_endpoint() {
 }
 
 #[test]
+fn endpoint_shutdown_wakes_waiters() {
+    let runtime = rt_basic();
+    let (endpoint, _connecting) = {
+        let _guard = runtime.enter();
+        let endpoint = endpoint();
+        let connecting = endpoint
+            .connect(endpoint.local_addr().unwrap(), "localhost")
+            .unwrap();
+        (endpoint, connecting)
+    };
+
+    // Never run the runtime: the connection cannot drain before the driver is dropped.
+    let mut draining = pin!(endpoint.wait_all_draining());
+    let mut idle = pin!(endpoint.wait_idle());
+    let (draining_waker, draining_wakes) = new_count_waker();
+    let (idle_waker, idle_wakes) = new_count_waker();
+    let mut draining_cx = Context::from_waker(&draining_waker);
+    let mut idle_cx = Context::from_waker(&idle_waker);
+    assert!(draining.as_mut().poll(&mut draining_cx).is_pending());
+    assert!(idle.as_mut().poll(&mut idle_cx).is_pending());
+
+    drop(runtime);
+
+    assert!(draining_wakes.wakes() > 0, "draining waiter was not woken");
+    assert!(idle_wakes.wakes() > 0, "idle waiter was not woken");
+    assert!(draining.as_mut().poll(&mut draining_cx).is_ready());
+    assert!(idle.as_mut().poll(&mut idle_cx).is_ready());
+}
+
+#[test]
 fn local_addr() {
     let socket = UdpSocket::bind((Ipv6Addr::LOCALHOST, 0)).unwrap();
     let addr = socket.local_addr().unwrap();
