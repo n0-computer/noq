@@ -4432,6 +4432,15 @@ impl Connection {
             match conn_err {
                 ConnectionError::ApplicationClosed(reason) => self.state.move_to_closed(reason),
                 ConnectionError::ConnectionClosed(reason) => self.state.move_to_closed(reason),
+                ConnectionError::Reset if matches!(self.state.as_type(), StateType::Draining) => {
+                    // The peer has already closed the connection and its reason is the
+                    // reason the connection ended. A stateless reset only requires us to
+                    // enter the draining period and stop sending, which we already did:
+                    // https://www.rfc-editor.org/rfc/rfc9000.html#section-10.3.1-5
+                    // So it ends the draining period early without replacing that reason
+                    // or reporting the connection as lost a second time.
+                    self.state.move_to_drained(None, &mut self.endpoint_events);
+                }
                 ConnectionError::Reset
                 | ConnectionError::TransportError(TransportError {
                     code: TransportErrorCode::AEAD_LIMIT_REACHED,
