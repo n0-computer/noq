@@ -212,7 +212,7 @@
 <a href=#212 id=212 data-nosnippet>212</a>                }),
 <a href=#213 id=213 data-nosnippet>213</a>                frames: <span class="prelude-val">None</span>,
 <a href=#214 id=214 data-nosnippet>214</a>                trigger: <span class="prelude-val">Some</span>(
-<a href=#215 id=215 data-nosnippet>215</a>                    <span class="kw">match </span>info.time_sent.saturating_duration_since(now) &gt;= loss_delay {
+<a href=#215 id=215 data-nosnippet>215</a>                    <span class="kw">match </span>now.saturating_duration_since(info.time_sent) &gt;= loss_delay {
 <a href=#216 id=216 data-nosnippet>216</a>                        <span class="bool-val">true </span>=&gt; PacketLostTrigger::TimeThreshold,
 <a href=#217 id=217 data-nosnippet>217</a>                        <span class="bool-val">false </span>=&gt; PacketLostTrigger::ReorderingThreshold,
 <a href=#218 id=218 data-nosnippet>218</a>                    },
