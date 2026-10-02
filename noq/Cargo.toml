@@ -103,7 +103,6 @@ rcgen = { workspace = true }
 clap = { workspace = true }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "time", "macros", "test-util"] }
 tracing-subscriber = { workspace = true }
-tracing-futures = { workspace = true }
 url = { workspace = true }
 tokio-stream = "0.1.15"
 testresult = "0.4.1"
