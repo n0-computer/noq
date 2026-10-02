@@ -1557,6 +1557,77 @@ async fn close_path() -> TestResult {
     Ok(())
 }
 
+/// A pending [`OpenPath`] must resolve when the connection is closed;
+/// previously it never resolved (the open-path watch senders were not
+/// drained on terminate), keeping the connection state alive through the
+/// future's `ConnectionRef`.
+///
+/// [`OpenPath`]: crate::OpenPath
+#[tokio::test]
+async fn open_path_resolves_on_connection_close() -> TestResult {
+    let _logging = subscribe();
+    let factory = EndpointFactory::new();
+
+    let mut transport_config = TransportConfig::default();
+    transport_config.max_concurrent_multipath_paths(2);
+    let server = factory.endpoint_with_config("server", transport_config);
+    let server_addr = server.local_addr()?;
+
+    let server_task = async move {
+        let conn = server.accept().await.ok_or("closed conn?")?.await?;
+        conn.closed().await;
+        TestResult::Ok(())
+    }
+    .instrument(info_span!("server"));
+
+    let mut transport_config = TransportConfig::default();
+    transport_config.max_concurrent_multipath_paths(2);
+    let client = factory.endpoint_with_config("client", transport_config);
+
+    // A socket that accepts datagrams but never answers: path validation
+    // towards it stays pending forever (no ICMP refusal, no PATH_RESPONSE).
+    let blackhole = std::net::UdpSocket::bind("127.0.0.1:0")?;
+    let blackhole_addr = blackhole.local_addr()?;
+
+    let client_task = async move {
+        let conn = client.connect(server_addr, "localhost")?.await?;
+
+        // Get a pending open: retry until the path id is allocated (right
+        // after the handshake the open may be rejected for missing CIDs).
+        let open = loop {
+            let open = conn.open_path(
+                FourTuple::from_remote(blackhole_addr),
+                PathStatus::Available,
+            );
+            if open.path_id().is_some() {
+                break open;
+            }
+            match open.await {
+                Err(proto::PathError::RemoteCidsExhausted) => {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                Ok(_) => unreachable!("a blackholed path cannot validate"),
+                Err(err) => Err(err)?,
+            }
+        };
+
+        // Close the connection while the path is still validating; the
+        // pending future must resolve with an error instead of hanging.
+        conn.close(0u32.into(), b"bye");
+        let resolved = tokio::time::timeout(Duration::from_secs(5), open)
+            .await
+            .map_err(|_| "OpenPath did not resolve after connection close")?;
+        assert!(resolved.is_err(), "a blackholed path cannot have validated");
+        TestResult::Ok(())
+    }
+    .instrument(info_span!("client"));
+
+    let (server_res, client_res) = tokio::join!(server_task, client_task);
+    server_res?;
+    client_res?;
+    TestResult::Ok(())
+}
+
 /// After `initiate_nat_traversal_round`, the connection driver should be
 /// woken so that the REACH_OUT frame is sent promptly. Without a wake,
 /// the frame sits pending until a timer or application data triggers
