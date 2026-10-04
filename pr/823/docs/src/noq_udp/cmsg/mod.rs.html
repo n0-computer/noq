@@ -79,79 +79,80 @@
 <a href=#79 id=79 data-nosnippet>79</a>///
 <a href=#80 id=80 data-nosnippet>80</a>/// `cmsg` must refer to a native cmsg containing a payload of type `T`
 <a href=#81 id=81 data-nosnippet>81</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">unsafe fn </span>decode&lt;T: Copy, C: CMsgHdr&gt;(cmsg: <span class="kw-2">&amp;</span><span class="kw">impl </span>CMsgHdr) -&gt; T {
-<a href=#82 id=82 data-nosnippet>82</a>    <span class="macro">assert!</span>(align_of::&lt;T&gt;() &lt;= align_of::&lt;C&gt;());
-<a href=#83 id=83 data-nosnippet>83</a>    <span class="macro">debug_assert_eq!</span>(cmsg.len(), C::cmsg_len(size_of::&lt;T&gt;()));
-<a href=#84 id=84 data-nosnippet>84</a>    <span class="kw">unsafe </span>{ ptr::read(cmsg.cmsg_data() <span class="kw">as </span><span class="kw-2">*const </span>T) }
-<a href=#85 id=85 data-nosnippet>85</a>}
-<a href=#86 id=86 data-nosnippet>86</a>
-<a href=#87 id=87 data-nosnippet>87</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>Iter&lt;<span class="lifetime">'a</span>, M: MsgHdr&gt; {
-<a href=#88 id=88 data-nosnippet>88</a>    hdr: <span class="kw-2">&amp;</span><span class="lifetime">'a </span>M,
-<a href=#89 id=89 data-nosnippet>89</a>    cmsg: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="lifetime">'a </span>M::ControlMessage&gt;,
-<a href=#90 id=90 data-nosnippet>90</a>}
-<a href=#91 id=91 data-nosnippet>91</a>
-<a href=#92 id=92 data-nosnippet>92</a><span class="kw">impl</span>&lt;<span class="lifetime">'a</span>, M: MsgHdr&gt; Iter&lt;<span class="lifetime">'a</span>, M&gt; {
-<a href=#93 id=93 data-nosnippet>93</a>    <span class="doccomment">/// # Safety
-<a href=#94 id=94 data-nosnippet>94</a>    ///
-<a href=#95 id=95 data-nosnippet>95</a>    /// `hdr` must hold a pointer to memory outliving `'a` which can be soundly read for the
-<a href=#96 id=96 data-nosnippet>96</a>    /// lifetime of the constructed `Iter` and contains a buffer of native cmsgs, i.e. is aligned
-<a href=#97 id=97 data-nosnippet>97</a>    </span><span class="comment">//  for native `cmsghdr`, is fully initialized, and has correct internal links.
-<a href=#98 id=98 data-nosnippet>98</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">unsafe fn </span>new(hdr: <span class="kw-2">&amp;</span><span class="lifetime">'a </span>M) -&gt; <span class="self">Self </span>{
-<a href=#99 id=99 data-nosnippet>99</a>        <span class="self">Self </span>{
-<a href=#100 id=100 data-nosnippet>100</a>            hdr,
-<a href=#101 id=101 data-nosnippet>101</a>            cmsg: <span class="kw">unsafe </span>{ hdr.cmsg_first_hdr().as_ref() },
-<a href=#102 id=102 data-nosnippet>102</a>        }
-<a href=#103 id=103 data-nosnippet>103</a>    }
-<a href=#104 id=104 data-nosnippet>104</a>}
-<a href=#105 id=105 data-nosnippet>105</a>
-<a href=#106 id=106 data-nosnippet>106</a><span class="kw">impl</span>&lt;<span class="lifetime">'a</span>, M: MsgHdr&gt; Iterator <span class="kw">for </span>Iter&lt;<span class="lifetime">'a</span>, M&gt; {
-<a href=#107 id=107 data-nosnippet>107</a>    <span class="kw">type </span>Item = <span class="kw-2">&amp;</span><span class="lifetime">'a </span>M::ControlMessage;
-<a href=#108 id=108 data-nosnippet>108</a>
-<a href=#109 id=109 data-nosnippet>109</a>    <span class="kw">fn </span>next(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="self">Self</span>::Item&gt; {
-<a href=#110 id=110 data-nosnippet>110</a>        <span class="kw">let </span>current = <span class="self">self</span>.cmsg.take()<span class="question-mark">?</span>;
-<a href=#111 id=111 data-nosnippet>111</a>        <span class="self">self</span>.cmsg = <span class="kw">unsafe </span>{ <span class="self">self</span>.hdr.cmsg_nxt_hdr(current).as_ref() };
-<a href=#112 id=112 data-nosnippet>112</a>
-<a href=#113 id=113 data-nosnippet>113</a>        <span class="attr">#[cfg(apple_fast)]
-<a href=#114 id=114 data-nosnippet>114</a>        </span>{
-<a href=#115 id=115 data-nosnippet>115</a>            <span class="comment">// On MacOS &lt; 14 CMSG_NXTHDR might continuously return a zeroed cmsg. In
-<a href=#116 id=116 data-nosnippet>116</a>            // such case, return `None` instead, thus indicating the end of
-<a href=#117 id=117 data-nosnippet>117</a>            // the cmsghdr chain.
-<a href=#118 id=118 data-nosnippet>118</a>            </span><span class="kw">if </span>current.len() &lt; size_of::&lt;M::ControlMessage&gt;() {
-<a href=#119 id=119 data-nosnippet>119</a>                <span class="kw">return </span><span class="prelude-val">None</span>;
-<a href=#120 id=120 data-nosnippet>120</a>            }
-<a href=#121 id=121 data-nosnippet>121</a>        }
-<a href=#122 id=122 data-nosnippet>122</a>
-<a href=#123 id=123 data-nosnippet>123</a>        <span class="prelude-val">Some</span>(current)
-<a href=#124 id=124 data-nosnippet>124</a>    }
-<a href=#125 id=125 data-nosnippet>125</a>}
-<a href=#126 id=126 data-nosnippet>126</a>
-<a href=#127 id=127 data-nosnippet>127</a><span class="comment">// Helper traits for native types for control messages
-<a href=#128 id=128 data-nosnippet>128</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">trait </span>MsgHdr {
-<a href=#129 id=129 data-nosnippet>129</a>    <span class="kw">type </span>ControlMessage: CMsgHdr;
-<a href=#130 id=130 data-nosnippet>130</a>
-<a href=#131 id=131 data-nosnippet>131</a>    <span class="kw">fn </span>cmsg_first_hdr(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">*mut </span><span class="self">Self</span>::ControlMessage;
-<a href=#132 id=132 data-nosnippet>132</a>
-<a href=#133 id=133 data-nosnippet>133</a>    <span class="kw">fn </span>cmsg_nxt_hdr(<span class="kw-2">&amp;</span><span class="self">self</span>, cmsg: <span class="kw-2">&amp;</span><span class="self">Self</span>::ControlMessage) -&gt; <span class="kw-2">*mut </span><span class="self">Self</span>::ControlMessage;
-<a href=#134 id=134 data-nosnippet>134</a>
-<a href=#135 id=135 data-nosnippet>135</a>    <span class="doccomment">/// Sets the number of control messages added to this `struct msghdr`.
-<a href=#136 id=136 data-nosnippet>136</a>    ///
-<a href=#137 id=137 data-nosnippet>137</a>    /// Note that this is a destructive operation and should only be done as a finalisation
-<a href=#138 id=138 data-nosnippet>138</a>    /// step.
-<a href=#139 id=139 data-nosnippet>139</a>    </span><span class="kw">fn </span>set_control_len(<span class="kw-2">&amp;mut </span><span class="self">self</span>, len: usize);
-<a href=#140 id=140 data-nosnippet>140</a>
-<a href=#141 id=141 data-nosnippet>141</a>    <span class="kw">fn </span>control_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize;
-<a href=#142 id=142 data-nosnippet>142</a>}
-<a href=#143 id=143 data-nosnippet>143</a>
-<a href=#144 id=144 data-nosnippet>144</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">trait </span>CMsgHdr {
-<a href=#145 id=145 data-nosnippet>145</a>    <span class="kw">fn </span>cmsg_len(length: usize) -&gt; usize;
-<a href=#146 id=146 data-nosnippet>146</a>
-<a href=#147 id=147 data-nosnippet>147</a>    <span class="kw">fn </span>cmsg_space(length: usize) -&gt; usize;
-<a href=#148 id=148 data-nosnippet>148</a>
-<a href=#149 id=149 data-nosnippet>149</a>    <span class="kw">fn </span>cmsg_data(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">*mut </span>c_uchar;
-<a href=#150 id=150 data-nosnippet>150</a>
-<a href=#151 id=151 data-nosnippet>151</a>    <span class="kw">fn </span>set(<span class="kw-2">&amp;mut </span><span class="self">self</span>, level: c_int, ty: c_int, len: usize);
-<a href=#152 id=152 data-nosnippet>152</a>
-<a href=#153 id=153 data-nosnippet>153</a>    <span class="kw">fn </span>len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize;
-<a href=#154 id=154 data-nosnippet>154</a>}
-<a href=#155 id=155 data-nosnippet>155</a>
-<a href=#156 id=156 data-nosnippet>156</a><span class="attr">#[cfg(unix)]
-<a href=#157 id=157 data-nosnippet>157</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">const </span>LEN: usize = <span class="number">96</span>;</code></pre></div></section></main></body></html>
+<a href=#82 id=82 data-nosnippet>82</a>    <span class="macro">debug_assert_eq!</span>(cmsg.len(), C::cmsg_len(size_of::&lt;T&gt;()));
+<a href=#83 id=83 data-nosnippet>83</a>    <span class="comment">// The payload is only aligned for `C`, which on musl is less strict than payloads such as
+<a href=#84 id=84 data-nosnippet>84</a>    // `libc::timespec`, so it cannot be read through an aligned `ptr::read`.
+<a href=#85 id=85 data-nosnippet>85</a>    </span><span class="kw">unsafe </span>{ ptr::read_unaligned(cmsg.cmsg_data() <span class="kw">as </span><span class="kw-2">*const </span>T) }
+<a href=#86 id=86 data-nosnippet>86</a>}
+<a href=#87 id=87 data-nosnippet>87</a>
+<a href=#88 id=88 data-nosnippet>88</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>Iter&lt;<span class="lifetime">'a</span>, M: MsgHdr&gt; {
+<a href=#89 id=89 data-nosnippet>89</a>    hdr: <span class="kw-2">&amp;</span><span class="lifetime">'a </span>M,
+<a href=#90 id=90 data-nosnippet>90</a>    cmsg: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="lifetime">'a </span>M::ControlMessage&gt;,
+<a href=#91 id=91 data-nosnippet>91</a>}
+<a href=#92 id=92 data-nosnippet>92</a>
+<a href=#93 id=93 data-nosnippet>93</a><span class="kw">impl</span>&lt;<span class="lifetime">'a</span>, M: MsgHdr&gt; Iter&lt;<span class="lifetime">'a</span>, M&gt; {
+<a href=#94 id=94 data-nosnippet>94</a>    <span class="doccomment">/// # Safety
+<a href=#95 id=95 data-nosnippet>95</a>    ///
+<a href=#96 id=96 data-nosnippet>96</a>    /// `hdr` must hold a pointer to memory outliving `'a` which can be soundly read for the
+<a href=#97 id=97 data-nosnippet>97</a>    /// lifetime of the constructed `Iter` and contains a buffer of native cmsgs, i.e. is aligned
+<a href=#98 id=98 data-nosnippet>98</a>    </span><span class="comment">//  for native `cmsghdr`, is fully initialized, and has correct internal links.
+<a href=#99 id=99 data-nosnippet>99</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">unsafe fn </span>new(hdr: <span class="kw-2">&amp;</span><span class="lifetime">'a </span>M) -&gt; <span class="self">Self </span>{
+<a href=#100 id=100 data-nosnippet>100</a>        <span class="self">Self </span>{
+<a href=#101 id=101 data-nosnippet>101</a>            hdr,
+<a href=#102 id=102 data-nosnippet>102</a>            cmsg: <span class="kw">unsafe </span>{ hdr.cmsg_first_hdr().as_ref() },
+<a href=#103 id=103 data-nosnippet>103</a>        }
+<a href=#104 id=104 data-nosnippet>104</a>    }
+<a href=#105 id=105 data-nosnippet>105</a>}
+<a href=#106 id=106 data-nosnippet>106</a>
+<a href=#107 id=107 data-nosnippet>107</a><span class="kw">impl</span>&lt;<span class="lifetime">'a</span>, M: MsgHdr&gt; Iterator <span class="kw">for </span>Iter&lt;<span class="lifetime">'a</span>, M&gt; {
+<a href=#108 id=108 data-nosnippet>108</a>    <span class="kw">type </span>Item = <span class="kw-2">&amp;</span><span class="lifetime">'a </span>M::ControlMessage;
+<a href=#109 id=109 data-nosnippet>109</a>
+<a href=#110 id=110 data-nosnippet>110</a>    <span class="kw">fn </span>next(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="self">Self</span>::Item&gt; {
+<a href=#111 id=111 data-nosnippet>111</a>        <span class="kw">let </span>current = <span class="self">self</span>.cmsg.take()<span class="question-mark">?</span>;
+<a href=#112 id=112 data-nosnippet>112</a>        <span class="self">self</span>.cmsg = <span class="kw">unsafe </span>{ <span class="self">self</span>.hdr.cmsg_nxt_hdr(current).as_ref() };
+<a href=#113 id=113 data-nosnippet>113</a>
+<a href=#114 id=114 data-nosnippet>114</a>        <span class="attr">#[cfg(apple_fast)]
+<a href=#115 id=115 data-nosnippet>115</a>        </span>{
+<a href=#116 id=116 data-nosnippet>116</a>            <span class="comment">// On MacOS &lt; 14 CMSG_NXTHDR might continuously return a zeroed cmsg. In
+<a href=#117 id=117 data-nosnippet>117</a>            // such case, return `None` instead, thus indicating the end of
+<a href=#118 id=118 data-nosnippet>118</a>            // the cmsghdr chain.
+<a href=#119 id=119 data-nosnippet>119</a>            </span><span class="kw">if </span>current.len() &lt; size_of::&lt;M::ControlMessage&gt;() {
+<a href=#120 id=120 data-nosnippet>120</a>                <span class="kw">return </span><span class="prelude-val">None</span>;
+<a href=#121 id=121 data-nosnippet>121</a>            }
+<a href=#122 id=122 data-nosnippet>122</a>        }
+<a href=#123 id=123 data-nosnippet>123</a>
+<a href=#124 id=124 data-nosnippet>124</a>        <span class="prelude-val">Some</span>(current)
+<a href=#125 id=125 data-nosnippet>125</a>    }
+<a href=#126 id=126 data-nosnippet>126</a>}
+<a href=#127 id=127 data-nosnippet>127</a>
+<a href=#128 id=128 data-nosnippet>128</a><span class="comment">// Helper traits for native types for control messages
+<a href=#129 id=129 data-nosnippet>129</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">trait </span>MsgHdr {
+<a href=#130 id=130 data-nosnippet>130</a>    <span class="kw">type </span>ControlMessage: CMsgHdr;
+<a href=#131 id=131 data-nosnippet>131</a>
+<a href=#132 id=132 data-nosnippet>132</a>    <span class="kw">fn </span>cmsg_first_hdr(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">*mut </span><span class="self">Self</span>::ControlMessage;
+<a href=#133 id=133 data-nosnippet>133</a>
+<a href=#134 id=134 data-nosnippet>134</a>    <span class="kw">fn </span>cmsg_nxt_hdr(<span class="kw-2">&amp;</span><span class="self">self</span>, cmsg: <span class="kw-2">&amp;</span><span class="self">Self</span>::ControlMessage) -&gt; <span class="kw-2">*mut </span><span class="self">Self</span>::ControlMessage;
+<a href=#135 id=135 data-nosnippet>135</a>
+<a href=#136 id=136 data-nosnippet>136</a>    <span class="doccomment">/// Sets the number of control messages added to this `struct msghdr`.
+<a href=#137 id=137 data-nosnippet>137</a>    ///
+<a href=#138 id=138 data-nosnippet>138</a>    /// Note that this is a destructive operation and should only be done as a finalisation
+<a href=#139 id=139 data-nosnippet>139</a>    /// step.
+<a href=#140 id=140 data-nosnippet>140</a>    </span><span class="kw">fn </span>set_control_len(<span class="kw-2">&amp;mut </span><span class="self">self</span>, len: usize);
+<a href=#141 id=141 data-nosnippet>141</a>
+<a href=#142 id=142 data-nosnippet>142</a>    <span class="kw">fn </span>control_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize;
+<a href=#143 id=143 data-nosnippet>143</a>}
+<a href=#144 id=144 data-nosnippet>144</a>
+<a href=#145 id=145 data-nosnippet>145</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">trait </span>CMsgHdr {
+<a href=#146 id=146 data-nosnippet>146</a>    <span class="kw">fn </span>cmsg_len(length: usize) -&gt; usize;
+<a href=#147 id=147 data-nosnippet>147</a>
+<a href=#148 id=148 data-nosnippet>148</a>    <span class="kw">fn </span>cmsg_space(length: usize) -&gt; usize;
+<a href=#149 id=149 data-nosnippet>149</a>
+<a href=#150 id=150 data-nosnippet>150</a>    <span class="kw">fn </span>cmsg_data(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">*mut </span>c_uchar;
+<a href=#151 id=151 data-nosnippet>151</a>
+<a href=#152 id=152 data-nosnippet>152</a>    <span class="kw">fn </span>set(<span class="kw-2">&amp;mut </span><span class="self">self</span>, level: c_int, ty: c_int, len: usize);
+<a href=#153 id=153 data-nosnippet>153</a>
+<a href=#154 id=154 data-nosnippet>154</a>    <span class="kw">fn </span>len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize;
+<a href=#155 id=155 data-nosnippet>155</a>}
+<a href=#156 id=156 data-nosnippet>156</a>
+<a href=#157 id=157 data-nosnippet>157</a><span class="attr">#[cfg(unix)]
+<a href=#158 id=158 data-nosnippet>158</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">const </span>LEN: usize = <span class="number">96</span>;</code></pre></div></section></main></body></html>
