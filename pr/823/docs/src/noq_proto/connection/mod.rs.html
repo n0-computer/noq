@@ -1972,7 +1972,7 @@
 <a href=#1972 id=1972 data-nosnippet>1972</a>
 <a href=#1973 id=1973 data-nosnippet>1973</a>        <span class="kw">if </span>can_send.other &amp;&amp; !need_loss_probe &amp;&amp; !can_send.close {
 <a href=#1974 id=1974 data-nosnippet>1974</a>            <span class="kw">let </span>path = <span class="self">self</span>.path_data(path_id);
-<a href=#1975 id=1975 data-nosnippet>1975</a>            <span class="kw">if </span>path.in_flight.bytes + bytes_to_send &gt;= path.congestion.window() {
+<a href=#1975 id=1975 data-nosnippet>1975</a>            <span class="kw">if </span>path.in_flight.bytes + bytes_to_send &gt; path.congestion.window() {
 <a href=#1976 id=1976 data-nosnippet>1976</a>                <span class="macro">trace!</span>(
 <a href=#1977 id=1977 data-nosnippet>1977</a>                    <span class="question-mark">?</span>space_id,
 <a href=#1978 id=1978 data-nosnippet>1978</a>                    %path_id,
