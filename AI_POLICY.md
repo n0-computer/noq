@@ -18,3 +18,5 @@
 ### Contributor responsibility
 
   You are responsible for everything you submit, regardless of how it was produced. You must be able to explain your motivation for every change in your PR during review. PRs where the author cannot do so may be closed.
+
+[contributing]: https://github.com/n0-computer/noq/blob/main/CONTRIBUTING.md
