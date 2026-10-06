@@ -5212,10 +5212,21 @@ impl Connection {
                             // RETIRE_CONNECTION_ID might not have been previously sent if e.g. a
                             // range of connection IDs larger than the active connection ID limit
                             // was retired all at once via retire_prior_to.
-                            self.spaces[SpaceId::Data]
-                                .pending
-                                .retire_cids
-                                .push((path_id, frame.sequence));
+                            let pending_retired =
+                                &mut self.spaces[SpaceId::Data].pending.retire_cids;
+                            /// Ensure `pending_retired` cannot grow without bound. Limit is
+                            /// somewhat arbitrary but very permissive.
+                            const MAX_PENDING_RETIRED_CIDS: u64 = CidQueue::LEN as u64 * 10;
+                            // We don't bother counting in-flight frames because those are bounded
+                            // by congestion control.
+                            if (pending_retired.len() as u64).saturating_add(1)
+                                > MAX_PENDING_RETIRED_CIDS
+                            {
+                                return Err(TransportError::CONNECTION_ID_LIMIT_ERROR(
+                                    "queued too many retired CIDs",
+                                ));
+                            }
+                            pending_retired.push((path_id, frame.sequence));
                             continue;
                         }
                     };
