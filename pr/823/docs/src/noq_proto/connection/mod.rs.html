@@ -6985,8 +6985,8 @@
 <a href=#6985 id=6985 data-nosnippet>6985</a>                .is_some_and(|pns| pns.pending_path_responses.has_pending_on_path(network_path));
 <a href=#6986 id=6986 data-nosnippet>6986</a>
 <a href=#6987 id=6987 data-nosnippet>6987</a>        <span class="comment">// Stream control frames are checked in PacketSpace::can_send, only check data here.
-<a href=#6988 id=6988 data-nosnippet>6988</a>        </span><span class="kw">let </span>other = <span class="self">self</span>.streams.can_send_stream_data()
-<a href=#6989 id=6989 data-nosnippet>6989</a>            || <span class="self">self</span>.datagrams.outgoing.can_send_1rtt(max_size);
+<a href=#6988 id=6988 data-nosnippet>6988</a>        </span><span class="kw">let </span>other =
+<a href=#6989 id=6989 data-nosnippet>6989</a>            <span class="self">self</span>.streams.can_send_stream_data() || <span class="self">self</span>.datagrams.outgoing.can_send_1rtt(max_size);
 <a href=#6990 id=6990 data-nosnippet>6990</a>
 <a href=#6991 id=6991 data-nosnippet>6991</a>        <span class="comment">// All `false` fields are set in PacketSpace::can_send.
 <a href=#6992 id=6992 data-nosnippet>6992</a>        </span>SendableFrames {
