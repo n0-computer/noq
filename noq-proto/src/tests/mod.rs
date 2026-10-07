@@ -5111,3 +5111,129 @@ fn regression_initial_coalescing_large_cid() {
     pair.time += Duration::from_secs(5);
     pair.drive_client(); // this used to try to build a packet without enough datagram space
 }
+
+/// Snapshot test to prevent accidentally skipping code-paths related to `sent_packets` stats.
+#[test]
+fn sent_packets_stats_snapshot_test() {
+    let _guard = subscribe();
+    let mut pair = Pair::default();
+    let (client_ch, server_ch) = pair.connect();
+    pair.drive();
+
+    let client_stats = pair.client_conn_mut(client_ch).stats();
+    let server_stats = pair.server_conn_mut(server_ch).stats();
+    assert_eq!(client_stats.sent_packets, 13);
+    assert_eq!(server_stats.sent_packets, 10);
+
+    let s = pair.client_streams(client_ch).open(Dir::Uni).unwrap();
+    const MSG: &[u8] = b"Hello, World!";
+    pair.client_send(client_ch, s).write(MSG).unwrap();
+    pair.drive();
+
+    let client_stats2 = pair.client_conn_mut(client_ch).stats();
+    let server_stats2 = pair.server_conn_mut(server_ch).stats();
+    assert_eq!(client_stats2.sent_packets, 14);
+    assert_eq!(server_stats2.sent_packets, 11);
+}
+
+#[cfg(feature = "qlog")]
+#[test]
+fn qlog_packet_lost_trigger() {
+    use std::{
+        io::{self, Write},
+        sync::Mutex,
+    };
+
+    use qlog::{
+        events::{EventData, quic::PacketLostTrigger},
+        reader::{Event as QlogEvent, QlogSeqReader},
+    };
+
+    use crate::{ConnectionId, QlogConfig, QlogFactory, Side};
+
+    /// Captures the qlog trace of every connection into one buffer
+    #[derive(Clone, Default)]
+    struct SharedBuffer(Arc<Mutex<Vec<u8>>>);
+
+    impl QlogFactory for SharedBuffer {
+        fn for_connection(
+            &self,
+            _side: Side,
+            _remote: SocketAddr,
+            _initial_dst_cid: ConnectionId,
+            _now: Instant,
+        ) -> Option<QlogConfig> {
+            Some(QlogConfig::new(Box::new(self.clone())))
+        }
+    }
+
+    impl Write for SharedBuffer {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let _guard = subscribe();
+    let qlog = SharedBuffer::default();
+    let mut transport = TransportConfig::default();
+    transport
+        .deterministic_packet_numbers(true)
+        .qlog_factory(Arc::new(qlog.clone()));
+    let mut config = client_config();
+    config.transport_config(Arc::new(transport));
+    let mut pair = Pair::default();
+    let (client_ch, _) = pair.connect_with(config);
+    pair.drive();
+
+    // Drop a packet, then deliver fewer later packets than the packet threshold, so that only the
+    // time threshold can declare it lost
+    pair.client_conn_mut(client_ch).ping();
+    pair.client.drive(pair.time);
+    assert_eq!(pair.client.outbound.len(), 1);
+    pair.client.outbound.clear();
+    pair.client_conn_mut(client_ch).ping();
+    pair.drive();
+
+    // Drop a packet, then deliver as many later packets as the packet threshold without advancing
+    // time, so that only the packet threshold can declare it lost
+    pair.client_conn_mut(client_ch).ping();
+    pair.client.drive(pair.time);
+    assert_eq!(pair.client.outbound.len(), 1);
+    pair.client.outbound.clear();
+    for _ in 0..3 {
+        pair.client_conn_mut(client_ch).ping();
+        pair.client.drive(pair.time);
+    }
+    assert_eq!(pair.client.outbound.len(), 3);
+    pair.drive();
+
+    assert_eq!(
+        pair.client_conn_mut(client_ch)
+            .path_stats(PathId::ZERO)
+            .unwrap()
+            .lost_packets,
+        2
+    );
+    let triggers = QlogSeqReader::new(Box::new(&qlog.0.lock().unwrap()[..]))
+        .unwrap()
+        .filter_map(|event| match event {
+            QlogEvent::Qlog(event) => match event.data {
+                EventData::QuicPacketLost(lost) => lost.trigger,
+                _ => None,
+            },
+            QlogEvent::Json(_) => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        triggers,
+        [
+            PacketLostTrigger::TimeThreshold,
+            PacketLostTrigger::ReorderingThreshold
+        ]
+    );
+}

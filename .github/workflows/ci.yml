@@ -27,7 +27,7 @@ jobs:
   tests:
     name: CI Test Suite
     if: "github.event_name != 'pull_request' || ! contains(github.event.pull_request.labels.*.name, 'flaky-test')"
-    uses: "./.github/workflows/tests.yaml"
+    uses: "$/.github/workflows/tests.yaml"
 
   test-aws-lc-rs:
     name: Test aws-lc-rs crypto backend
@@ -46,7 +46,7 @@ jobs:
           toolchain: stable
       - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
       # Go is required for FIPS builds
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "stable"
       # Prevent feature unification from selecting *ring* as the crypto provider
@@ -228,7 +228,7 @@ jobs:
           java-version: "17"
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
 
       - name: Setup Android NDK
         uses: arqu/setup-ndk@4f8a02c22e2c17ff9ebba9026e599da847aa8374 # main
@@ -283,7 +283,7 @@ jobs:
           java-version: "17"
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
 
       - name: Setup Android NDK
         uses: arqu/setup-ndk@4f8a02c22e2c17ff9ebba9026e599da847aa8374 # main
@@ -516,7 +516,7 @@ jobs:
       - name: Install sccache
         uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
       # Go is required for FIPS builds
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "stable"
 

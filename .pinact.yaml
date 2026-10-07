@@ -2,7 +2,7 @@
 version: 3
 
 min_age:
-  value: 7 # days, matches the dependabot cooldown
+  value: 6 # days, matches the dependabot cooldown - 1
 
 # No semver tag upstream to verify the version comment against. Forks and
 # tool-named tags; revisit rather than leave indefinitely.
@@ -24,3 +24,9 @@ rules:
       # baseline feature landed upstream.
       - expr: |
           ActionName == "n0-computer/cargo-semver-checks-action"
+  - min_age: 0
+    conditions:
+      # v4.0.2+ stops installing the `tools` SDK package, which Google no
+      # longer serves; every older release fails. Remove after 2026-09-24.
+      - expr: |
+          ActionName == "android-actions/setup-android" && VersionComment == "v4.0.4"

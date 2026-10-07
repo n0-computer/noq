@@ -1871,8 +1871,6 @@ impl Connection {
 
         builder.finish_and_track(now, self, path_id, PadDatagram::ToSize(probe_size));
 
-        self.path_stats.get_mut(path_id).sent_plpmtud_probes += 1;
-
         Some(self.build_transmit(path_id, transmit))
     }
 
@@ -3356,8 +3354,10 @@ impl Connection {
             if packet_too_old || largest_acked_packet_pn >= packet + packet_threshold {
                 // The packet should be declared lost.
                 if Some(packet) == in_flight_mtu_probe {
-                    // Lost MTU probes are not included in `lost_packets`, because they
-                    // should not trigger a congestion control response
+                    // MTU probes are handled separately: they should not trigger
+                    // retransmission or a congestion control response. They are still
+                    // counted in the `lost_packets`/`lost_bytes` stats (in
+                    // `handle_lost_packets`), consistent with `sent_packets`.
                     lost_mtu_probe = in_flight_mtu_probe;
                 } else {
                     lost_packets.push(packet);
@@ -3561,7 +3561,12 @@ impl Connection {
                 .unwrap()
                 .remove_in_flight(&info);
             self.path_data_mut(path_id).mtud.on_probe_lost();
-            self.path_stats.get_mut(path_id).lost_plpmtud_probes += 1;
+            let path_stats = self.path_stats.get_mut(path_id);
+            path_stats.lost_plpmtud_probes += 1;
+            // MTUD probes are also counted in the general lost_packets/lost_bytes
+            // counters, consistent with sent_packets/sent_bytes counting all packets.
+            path_stats.lost_packets += 1;
+            path_stats.lost_bytes += info.size as u64;
         }
     }
 
