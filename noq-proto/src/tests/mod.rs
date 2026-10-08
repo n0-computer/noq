@@ -1739,14 +1739,13 @@ fn close_from_migrated_address() {
 #[test]
 fn connection_close_while_congestion_blocked() {
     let _guard = subscribe();
-    let mut pair = Pair::default();
-    let (client_ch, server_ch) = pair.connect();
+    let mut pair = ConnPair::default();
 
     // Saturate the congestion window with unacknowledged stream data by transmitting from the
     // client without driving the server, so no ACKs come back and in-flight bytes stay pinned at
     // the window
-    let s = pair.client_streams(client_ch).open(Dir::Uni).unwrap();
-    pair.client_send(client_ch, s)
+    let s = pair.streams(Client).open(Dir::Uni).unwrap();
+    pair.send_stream(Client, s)
         .write(&[42; 1024 * 1024])
         .unwrap();
     pair.drive_client();
@@ -1754,11 +1753,7 @@ fn connection_close_while_congestion_blocked() {
     // Close while the window is full and stream data is still pending
     const REASON: &[u8] = b"whee";
     let close_time = pair.time;
-    pair.client.connections.get_mut(&client_ch).unwrap().close(
-        pair.time,
-        VarInt(42),
-        REASON.into(),
-    );
+    pair.close(Client, 42, REASON);
 
     // Step the simulation by hand so we can catch the exact moment the server hears about the
     // close: check for the event after each packet exchange, before the clock jumps ahead
@@ -1766,7 +1761,7 @@ fn connection_close_while_congestion_blocked() {
     loop {
         pair.drive_client();
         pair.drive_server();
-        while let Some(event) = pair.server_conn_mut(server_ch).poll() {
+        while let Some(event) = pair.poll(Server) {
             if let Event::ConnectionLost { reason } = event {
                 result = Some((reason, pair.time));
             }
