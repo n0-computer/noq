@@ -522,7 +522,6 @@ impl StreamsState {
     pub(in crate::connection) fn write_stream_frames<'a, 'b>(
         &mut self,
         builder: &mut PacketBuilder<'a, 'b>,
-        fair: bool,
         stats: &mut FrameStats,
     ) {
         while builder.frame_space_remaining() > frame::Stream::SIZE_BOUND {
@@ -563,11 +562,7 @@ impl StreamsState {
                 // implementing round-robin scheduling, so that the other streams
                 // will have a chance to write data before we touch this stream
                 // again.
-                if fair {
-                    self.pending.push_pending(id, stream.priority);
-                } else {
-                    self.pending.reinsert_pending(id, stream.priority);
-                }
+                self.pending.push_pending(id, stream.priority);
             }
 
             let range = offsets.clone();
@@ -578,13 +573,13 @@ impl StreamsState {
     }
 
     #[cfg(test)]
-    fn write_frames_for_test(&mut self, capacity: usize, fair: bool) -> frame::StreamMetaVec {
+    fn write_frames_for_test(&mut self, capacity: usize) -> frame::StreamMetaVec {
         let buf = &mut Vec::with_capacity(capacity);
         let mut tbuf = crate::connection::TransmitBuf::new(buf, std::num::NonZeroUsize::MIN, 1_200);
         tbuf.start_new_datagram_with_size(capacity);
         let builder = &mut PacketBuilder::simple_data_buf(&mut tbuf);
         let stats = &mut FrameStats::default();
-        self.write_stream_frames(builder, fair, stats);
+        self.write_stream_frames(builder, stats);
         builder.sent_frames().stream_frames.clone()
     }
 
@@ -1396,7 +1391,7 @@ mod tests {
         high.set_priority(1).unwrap();
         high.write(b"high").unwrap();
 
-        let meta = server.write_frames_for_test(40, true);
+        let meta = server.write_frames_for_test(40);
         assert_eq!(meta[0].id, id_high);
         assert_eq!(meta[1].id, id_mid);
         assert_eq!(meta[2].id, id_low);
@@ -1454,7 +1449,7 @@ mod tests {
         };
         high.set_priority(-1).unwrap();
 
-        let meta = server.write_frames_for_test(40, true);
+        let meta = server.write_frames_for_test(40);
         assert_eq!(meta.len(), 1);
         assert_eq!(meta[0].id, id_high);
 
@@ -1462,7 +1457,7 @@ mod tests {
         assert_eq!(server.pending.len(), 2);
 
         // Send the remaining data. The initial mid priority one should go first now
-        let meta = server.write_frames_for_test(1000 - 40, true);
+        let meta = server.write_frames_for_test(1000 - 40);
         assert_eq!(meta.len(), 2);
         assert_eq!(meta[0].id, id_mid);
         assert_eq!(meta[1].id, id_high);
@@ -1473,85 +1468,73 @@ mod tests {
 
     #[test]
     fn same_stream_priority() {
-        for fair in [true, false] {
-            let mut server = make(Side::Server);
-            server.set_params(&TransportParameters {
-                initial_max_streams_bidi: 3u32.into(),
-                initial_max_data: 300u32.into(),
-                initial_max_stream_data_bidi_remote: 300u32.into(),
-                ..TransportParameters::default()
-            });
+        let mut server = make(Side::Server);
+        server.set_params(&TransportParameters {
+            initial_max_streams_bidi: 3u32.into(),
+            initial_max_data: 300u32.into(),
+            initial_max_stream_data_bidi_remote: 300u32.into(),
+            ..TransportParameters::default()
+        });
 
-            let (mut pending, state) = (Retransmits::default(), ConnState::established());
-            let mut streams = Streams {
-                state: &mut server,
-                conn_state: &state,
-            };
+        let (mut pending, state) = (Retransmits::default(), ConnState::established());
+        let mut streams = Streams {
+            state: &mut server,
+            conn_state: &state,
+        };
 
-            // a, b and c all have the same priority
-            let id_a = streams.open(Dir::Bi).unwrap();
-            let id_b = streams.open(Dir::Bi).unwrap();
-            let id_c = streams.open(Dir::Bi).unwrap();
+        // a, b and c all have the same priority
+        let id_a = streams.open(Dir::Bi).unwrap();
+        let id_b = streams.open(Dir::Bi).unwrap();
+        let id_c = streams.open(Dir::Bi).unwrap();
 
-            let mut stream_a = SendStream {
-                id: id_a,
-                state: &mut server,
-                pending: &mut pending,
-                conn_state: &state,
-            };
-            stream_a.write(&[b'a'; 100]).unwrap();
+        let mut stream_a = SendStream {
+            id: id_a,
+            state: &mut server,
+            pending: &mut pending,
+            conn_state: &state,
+        };
+        stream_a.write(&[b'a'; 100]).unwrap();
 
-            let mut stream_b = SendStream {
-                id: id_b,
-                state: &mut server,
-                pending: &mut pending,
-                conn_state: &state,
-            };
-            stream_b.write(&[b'b'; 100]).unwrap();
+        let mut stream_b = SendStream {
+            id: id_b,
+            state: &mut server,
+            pending: &mut pending,
+            conn_state: &state,
+        };
+        stream_b.write(&[b'b'; 100]).unwrap();
 
-            let mut stream_c = SendStream {
-                id: id_c,
-                state: &mut server,
-                pending: &mut pending,
-                conn_state: &state,
-            };
-            stream_c.write(&[b'c'; 100]).unwrap();
+        let mut stream_c = SendStream {
+            id: id_c,
+            state: &mut server,
+            pending: &mut pending,
+            conn_state: &state,
+        };
+        stream_c.write(&[b'c'; 100]).unwrap();
 
-            let mut metas = vec![];
+        let mut metas = vec![];
 
-            // loop until all the streams are written
-            loop {
-                let meta = server.write_frames_for_test(40, fair);
-                if meta.is_empty() {
-                    break;
-                }
-                metas.extend(meta);
+        // loop until all the streams are written
+        loop {
+            let meta = server.write_frames_for_test(40);
+            if meta.is_empty() {
+                break;
             }
-
-            assert!(!server.can_send_stream_data());
-            assert_eq!(server.pending.len(), 0);
-
-            let stream_ids = metas.iter().map(|m| m.id).collect::<Vec<_>>();
-            if fair {
-                // When fairness is enabled, if we run out of buffer space to write out a stream,
-                // the stream is re-queued after all the streams with the same priority.
-                assert_eq!(
-                    stream_ids,
-                    vec![id_a, id_b, id_c, id_a, id_b, id_c, id_a, id_b, id_c]
-                );
-            } else {
-                // When fairness is disabled the stream is re-queued before all the other streams
-                // with the same priority.
-                assert_eq!(
-                    stream_ids,
-                    vec![id_a, id_a, id_a, id_b, id_b, id_b, id_c, id_c, id_c]
-                );
-            }
+            metas.extend(meta);
         }
+
+        assert!(!server.can_send_stream_data());
+        assert_eq!(server.pending.len(), 0);
+
+        let stream_ids = metas.iter().map(|m| m.id).collect::<Vec<_>>();
+        // If we run out of buffer space, the stream is re-queued after its peers.
+        assert_eq!(
+            stream_ids,
+            vec![id_a, id_b, id_c, id_a, id_b, id_c, id_a, id_b, id_c]
+        );
     }
 
     #[test]
-    fn unfair_priority_bump() {
+    fn priority_bump() {
         let mut server = make(Side::Server);
         server.set_params(&TransportParameters {
             initial_max_streams_bidi: 3u32.into(),
@@ -1590,7 +1573,7 @@ mod tests {
         let mut metas = vec![];
 
         // Write the first chunk of stream_a
-        let meta = server.write_frames_for_test(40, false);
+        let meta = server.write_frames_for_test(40);
         assert!(!meta.is_empty());
         metas.extend(meta);
 
@@ -1606,7 +1589,7 @@ mod tests {
 
         // loop until all the streams are written
         loop {
-            let meta = server.write_frames_for_test(40, false);
+            let meta = server.write_frames_for_test(40);
             if meta.is_empty() {
                 break;
             }
@@ -1619,9 +1602,8 @@ mod tests {
         let stream_ids = metas.iter().map(|m| m.id).collect::<Vec<_>>();
         assert_eq!(
             stream_ids,
-            // stream_c bumps stream_b but doesn't bump stream_a which had already been partly
-            // written out
-            vec![id_a, id_a, id_a, id_c, id_c, id_c, id_b, id_b, id_b]
+            // stream_c preempts both lower-priority streams, which then resume round-robin.
+            vec![id_a, id_c, id_c, id_c, id_b, id_a, id_b, id_a, id_b]
         );
     }
 
