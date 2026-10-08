@@ -5,4 +5,5 @@ disallowed-types = [
     { path = "rustc_hash::FxHashSet", reason = "use crate::FxHashSet" },
     { path = "identity_hash::IntMap", reason = "use crate::IntMap" },
     { path = "std::collections::hash_map::Entry", reason = "use crate::hash_map::Entry" },
+    { path = "std::collections::hash_map::OccupiedEntry", reason = "use crate::hash_map::OccupiedEntry" },
 ]

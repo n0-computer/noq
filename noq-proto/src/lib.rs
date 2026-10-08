@@ -143,6 +143,9 @@ pub(crate) type IntMap<K, V> = identity_hash::IntMap<K, V>;
 pub(crate) mod hash_map {
     #[expect(clippy::disallowed_types)]
     pub(crate) type Entry<'a, K, V> = std::collections::hash_map::Entry<'a, K, V>;
+
+    #[expect(clippy::disallowed_types)]
+    pub(crate) type OccupiedEntry<'a, K, V> = std::collections::hash_map::OccupiedEntry<'a, K, V>;
 }
 
 #[cfg(feature = "bench")]
