@@ -4894,7 +4894,7 @@
 <a href=#4894 id=4894 data-nosnippet>4894</a>                        .map(|span| span.record(<span class="string">"path"</span>, tracing::field::display(<span class="kw-2">&amp;</span>ack.path_id)));
 <a href=#4895 id=4895 data-nosnippet>4895</a>                    <span class="self">self</span>.on_path_ack_received(now, packet.header.space().into(), ack)<span class="question-mark">?</span>;
 <a href=#4896 id=4896 data-nosnippet>4896</a>                }
-<a href=#4897 id=4897 data-nosnippet>4897</a>                Frame::Close(reason) =&gt; {
+<a href=#4897 id=4897 data-nosnippet>4897</a>                Frame::Close(reason @ Close::Connection(<span class="kw">_</span>)) =&gt; {
 <a href=#4898 id=4898 data-nosnippet>4898</a>                    <span class="self">self</span>.state
 <a href=#4899 id=4899 data-nosnippet>4899</a>                        .move_to_draining(<span class="prelude-val">Some</span>(reason.into()), <span class="kw-2">&amp;mut </span><span class="self">self</span>.endpoint_events);
 <a href=#4900 id=4900 data-nosnippet>4900</a>                    <span class="kw">return </span><span class="prelude-val">Ok</span>(());
@@ -4967,7 +4967,7 @@
 <a href=#4967 id=4967 data-nosnippet>4967</a>            <span class="kw">let </span>_guard = span.enter();
 <a href=#4968 id=4968 data-nosnippet>4968</a>            <span class="kw">if </span>packet.header.is_0rtt() {
 <a href=#4969 id=4969 data-nosnippet>4969</a>                <span class="kw">match </span>frame {
-<a href=#4970 id=4970 data-nosnippet>4970</a>                    Frame::Crypto(<span class="kw">_</span>) | Frame::Close(Close::Application(<span class="kw">_</span>)) =&gt; {
+<a href=#4970 id=4970 data-nosnippet>4970</a>                    Frame::Crypto(<span class="kw">_</span>) =&gt; {
 <a href=#4971 id=4971 data-nosnippet>4971</a>                        <span class="kw">return </span><span class="prelude-val">Err</span>(TransportError::PROTOCOL_VIOLATION(
 <a href=#4972 id=4972 data-nosnippet>4972</a>                            <span class="string">"illegal frame type in 0-RTT"</span>,
 <a href=#4973 id=4973 data-nosnippet>4973</a>                        ));
