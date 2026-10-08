@@ -100,7 +100,7 @@ pub use streams::StreamsState;
 use streams::StreamsState;
 pub use streams::{
     Chunks, ClosedStream, FinishError, ReadError, ReadableError, RecvStream, SendStream,
-    ShouldTransmit, StreamEvent, Streams, WriteError,
+    ShouldTransmit, StreamAffinity, StreamEvent, Streams, WriteError,
 };
 
 pub(crate) mod timer;
@@ -799,6 +799,14 @@ impl Connection {
     /// There is no guarantee any of these paths are open or usable.
     pub fn paths(&self) -> Vec<PathId> {
         self.paths.keys().copied().collect()
+    }
+
+    /// Returns whether the path has been abandoned.
+    ///
+    /// Remains true after the path is discarded. Returns false for IDs that have not been
+    /// marked abandoned, i.e. this does not imply they exist.
+    pub fn is_path_abandoned(&self, path_id: PathId) -> bool {
+        self.abandoned_paths.contains(&path_id)
     }
 
     /// Gets the local [`PathStatus`] for a known [`PathId`]

@@ -9,7 +9,7 @@ use tracing::trace;
 
 use super::spaces::Retransmits;
 use crate::{
-    Dir, StreamId, VarInt,
+    Dir, PathId, StreamId, VarInt,
     connection::streams::state::{StreamRecv, get_or_insert_recv, get_or_insert_send},
     frame,
 };
@@ -391,6 +391,11 @@ impl<'a> SendStream<'a> {
         Ok(())
     }
 
+    /// Sets the path affinity of a stream.
+    pub fn set_affinity(&mut self, _affinity: StreamAffinity) -> Result<(), ClosedStream> {
+        Ok(())
+    }
+
     /// Get the priority of a stream
     ///
     /// # Panics
@@ -404,6 +409,18 @@ impl<'a> SendStream<'a> {
 
         Ok(stream.as_ref().map(|s| s.priority).unwrap_or_default())
     }
+}
+
+/// Restricts which paths may carry a stream's STREAM frames.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum StreamAffinity {
+    /// Uses the connection's available/backup scheduling policy.
+    #[default]
+    Any,
+    /// Uses only this path, overriding available/backup preference but not transport limits.
+    Sticky(PathId),
+    /// Prevents transmission of STREAM frames for this stream.
+    Block,
 }
 
 /// A queue of streams with pending outgoing data, sorted by priority

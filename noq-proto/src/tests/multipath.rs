@@ -16,8 +16,8 @@ use crate::{
     ServerConfig, Side::*, TransportConfig, cid_queue::CidQueue,
 };
 use crate::{
-    ClosePathError, Dir, Event, PathAbandonReason, PathEvent, StreamEvent, TransportErrorCode,
-    n0_nat_traversal,
+    ClosePathError, Dir, Event, PathAbandonReason, PathEvent, StreamAffinity, StreamEvent,
+    TransportErrorCode, n0_nat_traversal,
 };
 
 use super::util::{
@@ -1290,6 +1290,137 @@ fn path_scheduling_path_status() -> TestResult {
     info!("assert");
     assert!((stats_path0_t1.udp_tx.datagrams - stats_path0_t0.udp_tx.datagrams) == 0);
     assert!((stats_path1_t1.udp_tx.datagrams - stats_path1_t0.udp_tx.datagrams) > 0);
+
+    Ok(())
+}
+
+#[test]
+fn stream_affinity_overrides_backup_status() -> TestResult {
+    let _guard = subscribe();
+    let mut pair = ConnPair::builder().enable_multipath().connect();
+
+    let available = PathId::ZERO;
+    let server_addr = pair.routes.public_server_addr();
+    let backup = pair.open_path(
+        Client,
+        FourTuple::from_remote(server_addr),
+        PathStatus::Backup,
+    )?;
+    pair.drive();
+    assert_matches!(
+        pair.poll(Client),
+        Some(Event::Path(PathEvent::Established { id })) if id == backup
+    );
+
+    let ordinary = pair.streams(Client).open(Dir::Uni).unwrap();
+    let pinned = pair.streams(Client).open(Dir::Uni).unwrap();
+    pair.send_stream(Client, pinned)
+        .set_affinity(StreamAffinity::Sticky(backup))?;
+
+    // Send separately so each path's STREAM counter identifies the stream it carried.
+    for (stream, expected_path, other_path) in
+        [(ordinary, available, backup), (pinned, backup, available)]
+    {
+        let expected_before = pair
+            .path_stats(Client, expected_path)
+            .unwrap()
+            .frame_tx
+            .stream;
+        let other_before = pair.path_stats(Client, other_path).unwrap().frame_tx.stream;
+
+        const MSG: &[u8] = b"stream affinity";
+        pair.send_stream(Client, stream).write(MSG)?;
+        pair.send_stream(Client, stream).finish()?;
+        pair.drive();
+
+        assert_eq!(
+            pair.path_stats(Client, expected_path)
+                .unwrap()
+                .frame_tx
+                .stream,
+            expected_before + 1,
+            "stream {stream} should use path {expected_path}"
+        );
+        assert_eq!(
+            pair.path_stats(Client, other_path).unwrap().frame_tx.stream,
+            other_before,
+            "stream {stream} should not use path {other_path}"
+        );
+        assert_eq!(pair.conn(Client).path_status(backup)?, PathStatus::Backup);
+
+        assert_eq!(pair.streams(Server).accept(Dir::Uni), Some(stream));
+        let mut recv = pair.recv_stream(Server, stream);
+        let mut chunks = recv.read(true)?;
+        assert_matches!(chunks.next(usize::MAX), Ok(Some(chunk)) if chunk.bytes == MSG);
+        assert_matches!(chunks.next(usize::MAX), Ok(None));
+        let _ = chunks.finalize();
+    }
+
+    Ok(())
+}
+
+#[test]
+fn stream_affinity_selects_second_available_path() -> TestResult {
+    let _guard = subscribe();
+    let mut pair = ConnPair::builder().enable_multipath().connect();
+
+    let first = PathId::ZERO;
+    let server_addr = pair.routes.public_server_addr();
+    let second = pair.open_path(
+        Client,
+        FourTuple::from_remote(server_addr),
+        PathStatus::Available,
+    )?;
+    pair.drive();
+    assert!(second > first);
+    assert_matches!(
+        pair.poll(Client),
+        Some(Event::Path(PathEvent::Established { id })) if id == second
+    );
+
+    // First establish the default choice, then override it for another stream.
+    for (affinity, expected_path, other_path) in [
+        (StreamAffinity::Any, first, second),
+        (StreamAffinity::Sticky(second), second, first),
+    ] {
+        let expected_before = pair
+            .path_stats(Client, expected_path)
+            .unwrap()
+            .frame_tx
+            .stream;
+        let other_before = pair.path_stats(Client, other_path).unwrap().frame_tx.stream;
+
+        let stream = pair.streams(Client).open(Dir::Uni).unwrap();
+        pair.send_stream(Client, stream).set_affinity(affinity)?;
+        const MSG: &[u8] = b"choose the second available path";
+        pair.send_stream(Client, stream).write(MSG)?;
+        pair.send_stream(Client, stream).finish()?;
+        pair.drive();
+
+        assert_eq!(
+            pair.path_stats(Client, expected_path)
+                .unwrap()
+                .frame_tx
+                .stream,
+            expected_before + 1,
+            "stream {stream} should use path {expected_path}"
+        );
+        assert_eq!(
+            pair.path_stats(Client, other_path).unwrap().frame_tx.stream,
+            other_before,
+            "stream {stream} should not use path {other_path}"
+        );
+        for path in [first, second] {
+            assert_eq!(pair.conn(Client).path_status(path)?, PathStatus::Available);
+        }
+
+        assert_eq!(pair.streams(Server).accept(Dir::Uni), Some(stream));
+        let mut recv = pair.recv_stream(Server, stream);
+        let mut chunks = recv.read(true)?;
+        assert_matches!(chunks.next(usize::MAX), Ok(Some(chunk)) if chunk.bytes == MSG);
+        assert_matches!(chunks.next(usize::MAX), Ok(None));
+        let _ = chunks.finalize();
+    }
 
     Ok(())
 }
