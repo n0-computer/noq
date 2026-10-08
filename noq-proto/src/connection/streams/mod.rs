@@ -392,7 +392,27 @@ impl<'a> SendStream<'a> {
     }
 
     /// Sets the path affinity of a stream.
-    pub fn set_affinity(&mut self, _affinity: StreamAffinity) -> Result<(), ClosedStream> {
+    ///
+    /// Applies to subsequently packetized STREAM frames, including retransmissions and FINs.
+    /// Does not affect stream control frames or packets already built for transmission.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClosedStream`] if the stream no longer exists.
+    ///
+    /// # Panics
+    ///
+    /// Panics when applied to a receive-only stream.
+    pub fn set_affinity(&mut self, affinity: StreamAffinity) -> Result<(), ClosedStream> {
+        let max_send_data = self.state.max_send_data(self.id);
+        let stream = self
+            .state
+            .send
+            .get_mut(&self.id)
+            .map(get_or_insert_send(max_send_data))
+            .ok_or(ClosedStream { _private: () })?;
+
+        stream.affinity = affinity;
         Ok(())
     }
 
@@ -421,6 +441,16 @@ pub enum StreamAffinity {
     Sticky(PathId),
     /// Prevents transmission of STREAM frames for this stream.
     Block,
+}
+
+impl StreamAffinity {
+    fn allows(self, path: PathId, status_allows_data: bool) -> bool {
+        match self {
+            Self::Any => status_allows_data,
+            Self::Sticky(id) => id == path,
+            Self::Block => false,
+        }
+    }
 }
 
 /// A queue of streams with pending outgoing data, sorted by priority
@@ -456,8 +486,23 @@ impl PendingStreamsQueue {
         });
     }
 
-    fn pop(&mut self) -> Option<PendingStream> {
-        self.streams.pop()
+    fn pop_eligible(
+        &mut self,
+        mut eligible: impl FnMut(StreamId) -> bool,
+    ) -> Option<PendingStream> {
+        let mut skipped = Vec::new();
+        let selected = loop {
+            let Some(pending) = self.streams.pop() else {
+                break None;
+            };
+            if eligible(pending.id) {
+                break Some(pending);
+            }
+            skipped.push(pending);
+        };
+        // Preserve priority and recency for streams skipped by this selection.
+        self.streams.extend(skipped);
+        selected
     }
 
     fn clear(&mut self) {

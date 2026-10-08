@@ -1490,8 +1490,13 @@ impl Connection {
                 // A new datagram needs to be started.
                 transmit.segment_size()
             };
-            let can_send =
-                self.space_can_send(space_id, path_id, max_packet_size, connection_close_pending);
+            let can_send = self.space_can_send(
+                space_id,
+                path_id,
+                max_packet_size,
+                connection_close_pending,
+                scheduling_info,
+            );
             let needs_loss_probe = self.spaces[space_id].for_path(path_id).loss_probes > 0;
             let space_will_send = {
                 if scheduling_info.is_abandoned {
@@ -1512,9 +1517,10 @@ impl Connection {
                     // not abandoned.
                     true
                 } else {
-                    // Anything else we only send if we're the best path for SpaceKind::Data
-                    // frames.
-                    !can_send.is_empty() && scheduling_info.may_send_data()
+                    // Stream affinity can select a backup path without making it eligible
+                    // for unrelated frames.
+                    can_send.stream_data
+                        || (!can_send.is_empty() && scheduling_info.may_send_data())
                 }
             };
 
@@ -1741,7 +1747,7 @@ impl Connection {
             debug_assert!(
                 !(builder.sent_frames().is_ack_only(&self.streams)
                     && !can_send.acks
-                    && (can_send.other || can_send.space_specific)
+                    && (can_send.other || can_send.stream_data || can_send.space_specific)
                     && builder.buf.segment_size()
                         == self.path_data(path_id).current_mtu() as usize
                     && self.datagrams.outgoing.is_empty()),
@@ -1778,9 +1784,20 @@ impl Connection {
                 && let Some(next_space_id) = space_id.next()
                 && max_packet_size > MIN_PACKET_SPACE
                 && self
-                    .space_can_send(space_id, path_id, max_packet_size, connection_close_pending)
+                    .space_can_send(
+                        space_id,
+                        path_id,
+                        max_packet_size,
+                        connection_close_pending,
+                        scheduling_info,
+                    )
                     .is_empty()
-                && self.has_pending_packet(next_space_id, max_packet_size, connection_close_pending)
+                && self.has_pending_packet(
+                    next_space_id,
+                    max_packet_size,
+                    connection_close_pending,
+                    scheduling_info,
+                )
             {
                 // We can append/coalesce the next packet into the current
                 // datagram. Finish the current packet without adding extra padding.
@@ -1918,6 +1935,7 @@ impl Connection {
         current_space_id: SpaceId,
         max_packet_size: usize,
         connection_close_pending: bool,
+        scheduling_info: &PathSchedulingInfo,
     ) -> bool {
         let mut space_id = current_space_id;
         loop {
@@ -1926,6 +1944,7 @@ impl Connection {
                 PathId::ZERO,
                 max_packet_size,
                 connection_close_pending,
+                scheduling_info,
             );
             if !can_send.is_empty() {
                 return true;
@@ -1966,7 +1985,7 @@ impl Connection {
         let bytes_to_send = transmit.segment_size() as u64;
         let need_loss_probe = self.spaces[space_id].for_path(path_id).loss_probes > 0;
 
-        if can_send.other && !need_loss_probe && !can_send.close {
+        if (can_send.other || can_send.stream_data) && !need_loss_probe && !can_send.close {
             let path = self.path_data(path_id);
             if path.in_flight.bytes + bytes_to_send >= path.congestion.window() {
                 trace!(
@@ -2199,6 +2218,7 @@ impl Connection {
         path_id: PathId,
         packet_size: usize,
         connection_close_pending: bool,
+        scheduling_info: &PathSchedulingInfo,
     ) -> SendableFrames {
         let space = &mut self.spaces[space_id];
         let space_has_crypto = self.crypto_state.has_keys(space_id.encryption_level());
@@ -2224,7 +2244,7 @@ impl Connection {
             // (application datagrams).
             let frame_space_1rtt =
                 packet_size.saturating_sub(self.predict_1rtt_overhead(pn, path_id));
-            can_send |= self.can_send_1rtt(path_id, frame_space_1rtt);
+            can_send |= self.can_send_1rtt(path_id, frame_space_1rtt, scheduling_info);
         }
 
         can_send.close = connection_close_pending && space_has_crypto;
@@ -6573,10 +6593,15 @@ impl Connection {
 
         // STREAM
         if !scheduling_info.is_abandoned
-            && scheduling_info.may_send_data()
+            && scheduling_info.can_send_data
             && space_id == SpaceId::Data
         {
-            self.streams.write_stream_frames(builder, stats);
+            self.streams.write_stream_frames(
+                builder,
+                stats,
+                path_id,
+                scheduling_info.status_allows_data,
+            );
         }
     }
 
@@ -6958,7 +6983,12 @@ impl Connection {
     ///
     /// See also [`PacketSpace::can_send`] which keeps track of all other frame types that
     /// may need to be sent.
-    fn can_send_1rtt(&self, path_id: PathId, max_size: usize) -> SendableFrames {
+    fn can_send_1rtt(
+        &self,
+        path_id: PathId,
+        max_size: usize,
+        scheduling_info: &PathSchedulingInfo,
+    ) -> SendableFrames {
         let network_path = self.path_data(path_id).network_path;
         let space_specific = self
             .paths
@@ -6970,18 +7000,22 @@ impl Connection {
                 .is_some_and(|pns| pns.pending_path_responses.has_pending_on_path(network_path));
 
         // Stream control frames are checked in PacketSpace::can_send, only check data here.
-        let other = self.streams.can_send_stream_data()
-            || self
-                .datagrams
-                .outgoing
-                .front()
-                .is_some_and(|x| x.size(true) <= max_size);
+        let stream_data = scheduling_info.can_send_data
+            && self
+                .streams
+                .can_send_stream_data(path_id, scheduling_info.status_allows_data);
+        let other = self
+            .datagrams
+            .outgoing
+            .front()
+            .is_some_and(|x| x.size(true) <= max_size);
 
         // All `false` fields are set in PacketSpace::can_send.
         SendableFrames {
             acks: false,
             close: false,
             space_specific,
+            stream_data,
             other,
         }
     }

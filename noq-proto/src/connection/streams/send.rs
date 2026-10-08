@@ -1,6 +1,7 @@
 use bytes::Bytes;
 use thiserror::Error;
 
+use super::StreamAffinity;
 use crate::{
     VarInt,
     connection::{send_buffer::SendBuffer, streams::BytesOrSlice},
@@ -13,6 +14,7 @@ pub(super) struct Send {
     pub(super) state: SendState,
     pub(super) pending: SendBuffer,
     pub(super) priority: i32,
+    pub(super) affinity: StreamAffinity,
     /// Whether a frame containing a FIN bit must be transmitted.
     ///
     /// Even if we don't have any new data.
@@ -30,6 +32,7 @@ impl Send {
             state: SendState::Ready,
             pending: SendBuffer::new(),
             priority: 0,
+            affinity: StreamAffinity::Any,
             fin_pending: false,
             connection_blocked: false,
             stop_reason: None,

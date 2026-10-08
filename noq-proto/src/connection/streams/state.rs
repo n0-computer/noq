@@ -12,7 +12,7 @@ use super::{
     StreamHalf,
 };
 use crate::{
-    Dir, MAX_STREAM_COUNT, Side, StreamId, TransportError, VarInt,
+    Dir, MAX_STREAM_COUNT, PathId, Side, StreamId, TransportError, VarInt,
     connection::{PacketBuilder, stats::FrameStats},
     frame::{self, FrameStruct},
     transport_parameters::TransportParameters,
@@ -390,14 +390,14 @@ impl StreamsState {
         }
     }
 
-    /// Whether any stream data is queued, regardless of control frames
-    pub(crate) fn can_send_stream_data(&self) -> bool {
+    /// Whether any stream data is queued for this path, regardless of control frames.
+    pub(crate) fn can_send_stream_data(&self, path: PathId, status_allows_data: bool) -> bool {
         // Reset streams may linger in the pending stream list, but will never produce stream frames
         self.pending.iter().any(|stream| {
             self.send
                 .get(&stream.id)
                 .and_then(|s| s.as_ref())
-                .is_some_and(|s| !s.is_reset())
+                .is_some_and(|s| !s.is_reset() && s.affinity.allows(path, status_allows_data))
         })
     }
 
@@ -523,12 +523,19 @@ impl StreamsState {
         &mut self,
         builder: &mut PacketBuilder<'a, 'b>,
         stats: &mut FrameStats,
+        path: PathId,
+        status_allows_data: bool,
     ) {
         while builder.frame_space_remaining() > frame::Stream::SIZE_BOUND {
             // Pop the stream of the highest priority that currently has pending data. If
             // the stream still has some pending data left after writing, it will be
             // reinserted, otherwise not
-            let Some(stream) = self.pending.pop() else {
+            let Some(stream) = self.pending.pop_eligible(|id| {
+                self.send.get(&id).and_then(|s| s.as_ref()).is_none_or(|s| {
+                    // Let the loop remove stale and reset streams from the queue.
+                    s.is_reset() || s.affinity.allows(path, status_allows_data)
+                })
+            }) else {
                 break;
             };
 
@@ -579,7 +586,7 @@ impl StreamsState {
         tbuf.start_new_datagram_with_size(capacity);
         let builder = &mut PacketBuilder::simple_data_buf(&mut tbuf);
         let stats = &mut FrameStats::default();
-        self.write_stream_frames(builder, stats);
+        self.write_stream_frames(builder, stats, PathId::ZERO, true);
         builder.sent_frames().stream_frames.clone()
     }
 
@@ -1396,7 +1403,7 @@ mod tests {
         assert_eq!(meta[1].id, id_mid);
         assert_eq!(meta[2].id, id_low);
 
-        assert!(!server.can_send_stream_data());
+        assert!(!server.can_send_stream_data(PathId::ZERO, true));
         assert_eq!(server.pending.len(), 0);
     }
 
@@ -1462,7 +1469,7 @@ mod tests {
         assert_eq!(meta[0].id, id_mid);
         assert_eq!(meta[1].id, id_high);
 
-        assert!(!server.can_send_stream_data());
+        assert!(!server.can_send_stream_data(PathId::ZERO, true));
         assert_eq!(server.pending.len(), 0);
     }
 
@@ -1522,7 +1529,7 @@ mod tests {
             metas.extend(meta);
         }
 
-        assert!(!server.can_send_stream_data());
+        assert!(!server.can_send_stream_data(PathId::ZERO, true));
         assert_eq!(server.pending.len(), 0);
 
         let stream_ids = metas.iter().map(|m| m.id).collect::<Vec<_>>();
@@ -1596,7 +1603,7 @@ mod tests {
             metas.extend(meta);
         }
 
-        assert!(!server.can_send_stream_data());
+        assert!(!server.can_send_stream_data(PathId::ZERO, true));
         assert_eq!(server.pending.len(), 0);
 
         let stream_ids = metas.iter().map(|m| m.id).collect::<Vec<_>>();
@@ -1660,7 +1667,7 @@ mod tests {
         stream.reset(0u32.into()).unwrap();
 
         assert_eq!(pending.reset_stream, &[(id, 0u32.into())]);
-        assert!(!server.can_send_stream_data());
+        assert!(!server.can_send_stream_data(PathId::ZERO, true));
     }
 
     #[test]
