@@ -1489,6 +1489,70 @@ fn stream_affinity_block_and_resume() -> TestResult {
 }
 
 #[test]
+fn stream_affinity_moves_buffered_data() -> TestResult {
+    let _guard = subscribe();
+    let mut pair = ConnPair::builder().enable_multipath().connect();
+    let first = PathId::ZERO;
+    let server_addr = pair.routes.public_server_addr();
+    let second = pair.open_path(
+        Client,
+        FourTuple::from_remote(server_addr),
+        PathStatus::Backup,
+    )?;
+    pair.drive();
+
+    let affinities = [
+        StreamAffinity::Any,
+        StreamAffinity::Sticky(first),
+        StreamAffinity::Sticky(second),
+        StreamAffinity::Block,
+    ];
+    for old in affinities {
+        for new in affinities {
+            let stream = pair.streams(Client).open(Dir::Uni).unwrap();
+            pair.send_stream(Client, stream).set_affinity(old)?;
+            pair.send_stream(Client, stream).write(b"move me")?;
+            pair.send_stream(Client, stream).finish()?;
+            pair.send_stream(Client, stream).set_affinity(new)?;
+
+            let first_before = pair.path_stats(Client, first).unwrap().frame_tx.stream;
+            let second_before = pair.path_stats(Client, second).unwrap().frame_tx.stream;
+            pair.drive();
+            if new == StreamAffinity::Block {
+                assert_eq!(
+                    pair.path_stats(Client, first).unwrap().frame_tx.stream,
+                    first_before
+                );
+                assert_eq!(
+                    pair.path_stats(Client, second).unwrap().frame_tx.stream,
+                    second_before
+                );
+                pair.send_stream(Client, stream)
+                    .set_affinity(StreamAffinity::Any)?;
+                pair.drive();
+            }
+
+            let use_second = new == StreamAffinity::Sticky(second);
+            assert_eq!(
+                pair.path_stats(Client, first).unwrap().frame_tx.stream,
+                first_before + u64::from(!use_second)
+            );
+            assert_eq!(
+                pair.path_stats(Client, second).unwrap().frame_tx.stream,
+                second_before + u64::from(use_second)
+            );
+            assert_eq!(pair.streams(Server).accept(Dir::Uni), Some(stream));
+            let mut recv = pair.recv_stream(Server, stream);
+            let mut chunks = recv.read(true)?;
+            assert_matches!(chunks.next(usize::MAX), Ok(Some(chunk)) if chunk.bytes == b"move me"[..]);
+            assert_matches!(chunks.next(usize::MAX), Ok(None));
+            let _ = chunks.finalize();
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn stream_affinity_retransmit_on_new_path() -> TestResult {
     let _guard = subscribe();
     let mut pair = ConnPair::builder().enable_multipath().connect();

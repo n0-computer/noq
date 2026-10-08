@@ -6592,10 +6592,7 @@ impl Connection {
         }
 
         // STREAM
-        if !scheduling_info.is_abandoned
-            && scheduling_info.can_send_data
-            && space_id == SpaceId::Data
-        {
+        if scheduling_info.can_send_data && space_id == SpaceId::Data {
             self.streams.write_stream_frames(
                 builder,
                 stats,

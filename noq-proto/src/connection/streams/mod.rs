@@ -1,9 +1,11 @@
 use std::{
     collections::{BinaryHeap, hash_map},
     io,
+    ops::{Deref, DerefMut},
 };
 
 use bytes::Bytes;
+use rustc_hash::FxHashMap;
 use thiserror::Error;
 use tracing::trace;
 
@@ -308,7 +310,9 @@ impl<'a> SendStream<'a> {
         self.state.unacked_data += written.bytes as u64;
         trace!(stream = %self.id, "wrote {} bytes", written.bytes);
         if !was_pending {
-            self.state.pending.push_pending(self.id, stream.priority);
+            self.state
+                .pending
+                .push_pending(self.id, stream.priority, stream.affinity);
         }
         Ok(written)
     }
@@ -339,7 +343,9 @@ impl<'a> SendStream<'a> {
         let was_pending = stream.is_pending();
         stream.finish()?;
         if !was_pending {
-            self.state.pending.push_pending(self.id, stream.priority);
+            self.state
+                .pending
+                .push_pending(self.id, stream.priority, stream.affinity);
         }
 
         Ok(())
@@ -368,6 +374,7 @@ impl<'a> SendStream<'a> {
         // credit based on the final offset communicated in the RESET_STREAM frame we send.
         self.state.unacked_data -= stream.pending.unacked();
         stream.reset();
+        self.state.pending.remove(self.id, stream.affinity);
         self.pending.reset_stream.push((self.id, error_code));
 
         // Don't reopen an already-closed stream we haven't forgotten yet
@@ -395,6 +402,7 @@ impl<'a> SendStream<'a> {
     ///
     /// Applies to subsequently packetized STREAM frames, including retransmissions and FINs.
     /// Does not affect stream control frames or packets already built for transmission.
+    /// Unblocking rejoins the back of the stream's priority group.
     ///
     /// # Errors
     ///
@@ -412,6 +420,31 @@ impl<'a> SendStream<'a> {
             .map(get_or_insert_send(max_send_data))
             .ok_or(ClosedStream { _private: () })?;
 
+        if stream.affinity == affinity {
+            return Ok(());
+        }
+        match (stream.affinity, affinity) {
+            (StreamAffinity::Block, _) => {
+                if !stream.is_reset() && stream.is_pending() {
+                    self.state
+                        .pending
+                        .push_pending(self.id, stream.priority, affinity);
+                }
+            }
+            (_, StreamAffinity::Block) => self.state.pending.remove(self.id, stream.affinity),
+            (StreamAffinity::Any, StreamAffinity::Any) => {}
+            (StreamAffinity::Any, StreamAffinity::Sticky(new)) => {
+                self.state.pending.set_affinity(self.id, None, Some(new));
+            }
+            (StreamAffinity::Sticky(old), StreamAffinity::Any) => {
+                self.state.pending.set_affinity(self.id, Some(old), None);
+            }
+            (StreamAffinity::Sticky(old), StreamAffinity::Sticky(new)) => {
+                self.state
+                    .pending
+                    .set_affinity(self.id, Some(old), Some(new));
+            }
+        }
         stream.affinity = affinity;
         Ok(())
     }
@@ -443,19 +476,10 @@ pub enum StreamAffinity {
     Block,
 }
 
-impl StreamAffinity {
-    fn allows(self, path: PathId, status_allows_data: bool) -> bool {
-        match self {
-            Self::Any => status_allows_data,
-            Self::Sticky(id) => id == path,
-            Self::Block => false,
-        }
-    }
-}
-
-/// A queue of streams with pending outgoing data, sorted by priority
+/// Pending streams partitioned by affinity, with shared priority and fairness ordering.
 struct PendingStreamsQueue {
-    streams: BinaryHeap<PendingStream>,
+    any: BinaryHeap<PendingStream>,
+    sticky_by_path: FxHashMap<PathId, BinaryHeap<PendingStream>>,
     /// A monotonically decreasing counter, used to implement round-robin scheduling for streams of
     /// the same priority. Underflowing is not a practical concern, as it is initialized to
     /// u64::MAX and only decremented by 1 in `push_pending`
@@ -465,57 +489,145 @@ struct PendingStreamsQueue {
 impl PendingStreamsQueue {
     fn new() -> Self {
         Self {
-            streams: BinaryHeap::new(),
+            any: BinaryHeap::new(),
+            sticky_by_path: FxHashMap::default(),
             recency: u64::MAX,
         }
     }
 
     /// Push a pending stream ID with the given priority, queued after any already-queued streams
     /// for the priority
-    fn push_pending(&mut self, id: StreamId, priority: i32) {
+    fn push_pending(&mut self, id: StreamId, priority: i32, affinity: StreamAffinity) {
+        let sticky = match affinity {
+            StreamAffinity::Any => None,
+            StreamAffinity::Sticky(path) => Some(path),
+            StreamAffinity::Block => return,
+        };
         // As the recency counter is monotonically decreasing, we know that using its value to sort
         // this stream will queue it after all other queued streams of the same priority.
         // This is enough to implement round-robin scheduling for streams that are still pending
         // even after being handled, as in that case they are removed from the `BinaryHeap`,
         // handled, and then immediately reinserted.
         self.recency -= 1;
-        self.streams.push(PendingStream {
+        let recency = self.recency;
+        self.queue_mut(sticky).push(PendingStream {
             priority,
-            recency: self.recency,
+            recency,
             id,
         });
     }
 
-    fn pop_eligible(
-        &mut self,
-        mut eligible: impl FnMut(StreamId) -> bool,
-    ) -> Option<PendingStream> {
-        let mut skipped = Vec::new();
-        let selected = loop {
-            let Some(pending) = self.streams.pop() else {
-                break None;
-            };
-            if eligible(pending.id) {
-                break Some(pending);
+    fn pop(&mut self, path: PathId, status_allows_data: bool) -> Option<PendingStream> {
+        let any = status_allows_data.then(|| self.any.peek()).flatten();
+        let sticky = self.sticky_by_path.get(&path).and_then(|q| q.peek());
+        if any > sticky {
+            self.queue_mut(None).pop()
+        } else {
+            sticky?; // skip looking at the sticky map, if none exists.
+            self.queue_mut(Some(path)).pop()
+        }
+    }
+
+    fn set_affinity(&mut self, id: StreamId, old: Option<PathId>, new: Option<PathId>) {
+        let mut moved = Vec::new();
+        self.queue_mut(old).retain(|pending| {
+            if pending.id == id {
+                moved.push(pending.clone());
+                false
+            } else {
+                true
             }
-            skipped.push(pending);
+        });
+        if moved.is_empty() {
+            return;
+        }
+        self.queue_mut(new).extend(moved);
+    }
+
+    fn queue_mut(&mut self, sticky: Option<PathId>) -> PendingQueueMut<'_> {
+        match sticky {
+            None => PendingQueueMut::Any(&mut self.any),
+            Some(path) => {
+                let entry = match self.sticky_by_path.entry(path) {
+                    hash_map::Entry::Occupied(entry) => entry,
+                    hash_map::Entry::Vacant(entry) => entry.insert_entry(BinaryHeap::new()),
+                };
+                PendingQueueMut::Sticky(Some(entry))
+            }
+        }
+    }
+
+    fn remove(&mut self, id: StreamId, affinity: StreamAffinity) {
+        let sticky = match affinity {
+            StreamAffinity::Any => None,
+            StreamAffinity::Sticky(path) => Some(path),
+            StreamAffinity::Block => return,
         };
-        // Preserve priority and recency for streams skipped by this selection.
-        self.streams.extend(skipped);
-        selected
+        // Abandoned-path queues might never be selected again.
+        self.queue_mut(sticky).retain(|pending| pending.id != id);
     }
 
     fn clear(&mut self) {
-        self.streams.clear();
+        self.any.clear();
+        self.sticky_by_path.clear();
     }
 
-    fn iter(&self) -> impl Iterator<Item = &PendingStream> {
-        self.streams.iter()
+    fn iter(&self, path: PathId, status_allows_data: bool) -> impl Iterator<Item = &PendingStream> {
+        status_allows_data
+            .then_some(&self.any)
+            .into_iter()
+            .flat_map(|q| q.iter())
+            .chain(
+                self.sticky_by_path
+                    .get(&path)
+                    .into_iter()
+                    .flat_map(|q| q.iter()),
+            )
     }
 
     #[cfg(test)]
     fn len(&self) -> usize {
-        self.streams.len()
+        self.any.len() + self.sticky_by_path.values().map(|q| q.len()).sum::<usize>()
+    }
+}
+
+enum PendingQueueMut<'a> {
+    Any(&'a mut BinaryHeap<PendingStream>),
+    // The entry is present until Drop takes ownership to remove an empty bucket.
+    Sticky(Option<hash_map::OccupiedEntry<'a, PathId, BinaryHeap<PendingStream>>>),
+}
+
+impl Deref for PendingQueueMut<'_> {
+    type Target = BinaryHeap<PendingStream>;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Any(queue) => queue,
+            Self::Sticky(entry) => entry.as_ref().expect("entry is present until drop").get(),
+        }
+    }
+}
+
+impl DerefMut for PendingQueueMut<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        match self {
+            Self::Any(queue) => queue,
+            Self::Sticky(entry) => entry
+                .as_mut()
+                .expect("entry is present until drop")
+                .get_mut(),
+        }
+    }
+}
+
+impl Drop for PendingQueueMut<'_> {
+    fn drop(&mut self) {
+        if let Self::Sticky(entry) = self {
+            let entry = entry.take().expect("entry is present until drop");
+            if entry.get().is_empty() {
+                entry.remove();
+            }
+        }
     }
 }
 
