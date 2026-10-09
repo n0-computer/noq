@@ -1523,6 +1523,7 @@ impl Connection {
                     // Stream affinity can select a backup path without making it eligible
                     // for unrelated frames.
                     can_send.stream_data
+                        // But non-stream data can't bypass STATUS_BACKUP rules.
                         || (!can_send.is_empty() && scheduling_info.may_send_data())
                 }
             };
