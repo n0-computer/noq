@@ -20,7 +20,6 @@ use crate::{
     Dir, Duration, EndpointConfig, FourTuple, Frame, INITIAL_MTU, Instant, MAX_CID_SIZE,
     MAX_STREAM_COUNT, MIN_INITIAL_SIZE, Side, StreamId, TIMER_GRANULARITY, TokenStore, Transmit,
     TransportError, TransportErrorCode, VarInt,
-    cid_generator::ConnectionIdGenerator,
     cid_queue::CidQueue,
     config::{ServerConfig, TransportConfig},
     congestion::Controller,
@@ -316,7 +315,8 @@ impl Connection {
         remote_cid: ConnectionId,
         network_path: FourTuple,
         crypto: Box<dyn crypto::Session>,
-        cid_gen: &dyn ConnectionIdGenerator,
+        local_cid_len: usize,
+        local_cid_lifetime: Option<Duration>,
         now: Instant,
         version: u32,
         allow_mtud: bool,
@@ -353,8 +353,8 @@ impl Connection {
         let local_cid_state = FxHashMap::from_iter([(
             PathId::ZERO,
             CidState::new(
-                cid_gen.cid_len(),
-                cid_gen.cid_lifetime(),
+                local_cid_len,
+                local_cid_lifetime,
                 now,
                 if pref_addr_cid.is_some() { 2 } else { 1 },
             ),
@@ -1975,7 +1975,7 @@ impl Connection {
 
         if can_send.other && !need_loss_probe && !can_send.close {
             let path = self.path_data(path_id);
-            if path.in_flight.bytes + bytes_to_send >= path.congestion.window() {
+            if path.in_flight.bytes + bytes_to_send > path.congestion.window() {
                 trace!(
                     ?space_id,
                     %path_id,
@@ -2697,6 +2697,7 @@ impl Connection {
         let mut stats = self.path_stats.get(path_id).unwrap_or_default();
         stats.rtt = path.data.rtt.get();
         stats.cwnd = path.data.congestion.window();
+        stats.bandwidth_estimate = path.data.congestion.metrics().bandwidth_estimate;
         stats.current_mtu = path.data.mtud.current_mtu();
         Some(stats)
     }
@@ -4089,7 +4090,8 @@ impl Connection {
 
         crypto_space
             .crypto_stream
-            .insert(crypto.offset, crypto.data.clone(), payload_len);
+            .insert(crypto.offset, crypto.data.clone(), payload_len)
+            .map_err(|_| TransportError::INTERNAL_ERROR("too many gaps in crypto stream buffer"))?;
         while let Some(chunk) = crypto_space.crypto_stream.read(usize::MAX, true) {
             trace!("consumed {} CRYPTO bytes", chunk.bytes.len());
             if self.crypto_state.session.read_handshake(&chunk.bytes)? {
@@ -4895,7 +4897,10 @@ impl Connection {
                         .map(|span| span.record("path", tracing::field::display(&ack.path_id)));
                     self.on_path_ack_received(now, packet.header.space().into(), ack)?;
                 }
-                Frame::Close(reason) => {
+                // Per RFC 9000 §12.4 Table 3, only a CONNECTION_CLOSE frame of type 0x1c may appear
+                // in Initial or Handshake packets. An application close (0x1d) falls through to the
+                // catch-all arm below.
+                Frame::Close(reason @ Close::Connection(_)) => {
                     self.state
                         .move_to_draining(Some(reason.into()), &mut self.endpoint_events);
                     return Ok(());
@@ -4966,9 +4971,12 @@ impl Connection {
             }
 
             let _guard = span.enter();
+            // RFC 9000 §12.5: CRYPTO frames cannot be sent in 0-RTT packets. Both CONNECTION_CLOSE
+            // types are permitted there, as 0-RTT belongs to the application data packet number
+            // space; see §12.4 Table 3.
             if packet.header.is_0rtt() {
                 match frame {
-                    Frame::Crypto(_) | Frame::Close(Close::Application(_)) => {
+                    Frame::Crypto(_) => {
                         return Err(TransportError::PROTOCOL_VIOLATION(
                             "illegal frame type in 0-RTT",
                         ));
@@ -5216,10 +5224,21 @@ impl Connection {
                             // RETIRE_CONNECTION_ID might not have been previously sent if e.g. a
                             // range of connection IDs larger than the active connection ID limit
                             // was retired all at once via retire_prior_to.
-                            self.spaces[SpaceId::Data]
-                                .pending
-                                .retire_cids
-                                .push((path_id, frame.sequence));
+                            let pending_retired =
+                                &mut self.spaces[SpaceId::Data].pending.retire_cids;
+                            /// Ensure `pending_retired` cannot grow without bound. Limit is
+                            /// somewhat arbitrary but very permissive.
+                            const MAX_PENDING_RETIRED_CIDS: u64 = CidQueue::LEN as u64 * 10;
+                            // We don't bother counting in-flight frames because those are bounded
+                            // by congestion control.
+                            if (pending_retired.len() as u64).saturating_add(1)
+                                > MAX_PENDING_RETIRED_CIDS
+                            {
+                                return Err(TransportError::CONNECTION_ID_LIMIT_ERROR(
+                                    "queued too many retired CIDs",
+                                ));
+                            }
+                            pending_retired.push((path_id, frame.sequence));
                             continue;
                         }
                     };
@@ -6984,12 +7003,8 @@ impl Connection {
                 .is_some_and(|pns| pns.pending_path_responses.has_pending_on_path(network_path));
 
         // Stream control frames are checked in PacketSpace::can_send, only check data here.
-        let other = self.streams.can_send_stream_data()
-            || self
-                .datagrams
-                .outgoing
-                .front()
-                .is_some_and(|x| x.size(true) <= max_size);
+        let other =
+            self.streams.can_send_stream_data() || self.datagrams.outgoing.can_send_1rtt(max_size);
 
         // All `false` fields are set in PacketSpace::can_send.
         SendableFrames {
