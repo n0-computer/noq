@@ -3,7 +3,7 @@ use std::{
     collections::{BTreeMap, VecDeque, btree_map},
     convert::TryFrom,
     fmt, io, mem,
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr, SocketAddrV6},
     num::{NonZeroU32, NonZeroUsize},
     sync::Arc,
 };
@@ -171,6 +171,15 @@ pub struct Connection {
     /// deterministically select the next PathId to send on.
     // TODO(flub): well does it really? But deterministic is nice for now.
     paths: BTreeMap<PathId, PathState>,
+    /// Fixed at connection establishment from the initial path's remote family.
+    ///
+    /// This does NOT adapt if `Endpoint::rebind()` later changes the underlying socket's
+    /// address family mid-connection: `noq-proto::Connection` currently has no signal for
+    /// that. The proto-level [`ConnectionEventInner`] only carries datagrams and issued
+    /// connection identifiers, while the `noq` wrapper's own `ConnectionEvent::Rebind`
+    /// never reaches here. Extending that signal is out of scope for this fix and should be
+    /// flagged for maintainers.
+    established_ipv6: bool,
     /// Counter to uniquely identify every [`PathData`] created in this connection.
     ///
     /// Each [`PathData`] gets a [`PathData::generation`] that is unique among all
@@ -324,6 +333,9 @@ impl Connection {
         side_args: SideArgs,
         qlog: QlogSink,
     ) -> Self {
+        let established_ipv6 = network_path.remote.is_ipv6();
+        let network_path =
+            Self::normalize_network_path_local_ip_for_family(network_path, established_ipv6);
         let pref_addr_cid = side_args.pref_addr_cid();
         let path_validated = side_args.path_validated();
         let connection_side = ConnectionSide::from(side_args);
@@ -370,6 +382,7 @@ impl Connection {
             handshake_cid: local_cid,
             remote_handshake_cid: remote_cid,
             local_cid_state,
+            established_ipv6: false,
             paths: BTreeMap::from_iter([(
                 PathId::ZERO,
                 PathState {
@@ -434,6 +447,7 @@ impl Connection {
             n0_nat_traversal: Default::default(),
             qlog,
         };
+        this.set_socket_family(established_ipv6);
         if path_validated {
             this.on_path_validated(PathId::ZERO);
         }
@@ -550,6 +564,7 @@ impl Connection {
         initial_status: PathStatus,
         now: Instant,
     ) -> Result<(PathId, bool), PathError> {
+        let network_path = self.normalize_network_path(network_path)?;
         let existing_open_path = self.paths.iter().find(|(id, path)| {
             network_path.is_probably_same_path(&path.data.network_path)
                 && !self.abandoned_paths.contains(id)
@@ -571,6 +586,7 @@ impl Connection {
         initial_status: PathStatus,
         now: Instant,
     ) -> Result<PathId, PathError> {
+        let network_path = self.normalize_network_path(network_path)?;
         let Some(max_path_id) = self.max_path_id() else {
             return Err(PathError::MultipathNotNegotiated);
         };
@@ -2255,6 +2271,12 @@ impl Connection {
                 first_decode,
                 remaining,
             }) => {
+                // `network_path` comes from the endpoint's UDP receive metadata (`RecvMeta` in the
+                // `noq` crate), so this is a `Connection` entry boundary for OS-observed local
+                // addresses. Normalize `local_ip` before it can update `PathData.network_path`;
+                // `remote` is intentionally preserved because it also drives
+                // `Transmit::destination`.
+                let network_path = self.normalize_network_path_local_ip(network_path);
                 let span = trace_span!("pkt", %path_id);
                 let _guard = span.enter();
 
@@ -2374,7 +2396,7 @@ impl Connection {
 
             if known_path.network_path.local_ip.is_some()
                 && network_path.local_ip.is_some()
-                && known_path.network_path.local_ip != network_path.local_ip
+                && network_path.local_ip != known_path.network_path.local_ip
                 && !local_ip_may_migrate
             {
                 trace!(
@@ -3954,6 +3976,7 @@ impl Connection {
         packet: InitialPacket,
         remaining: Option<BytesMut>,
     ) -> Result<(), ConnectionError> {
+        let network_path = self.normalize_network_path_local_ip(network_path);
         let span = trace_span!("first recv");
         let _guard = span.enter();
         debug_assert!(self.side.is_server());
@@ -5610,10 +5633,8 @@ impl Connection {
             && let Some(new_local_ip) = network_path.local_ip
         {
             let path_data = self.path_data_mut(path_id);
-            if path_data
-                .network_path
-                .local_ip
-                .is_some_and(|ip| ip != new_local_ip)
+            if path_data.network_path.local_ip.is_some()
+                && path_data.network_path.local_ip != network_path.local_ip
             {
                 debug!(
                     %path_id,
@@ -5629,7 +5650,7 @@ impl Connection {
         if self.peer_may_migrate()
             && (migrate_on_any_packet || !is_probing_packet)
             && is_largest_received_pn
-            && network_path.remote != self.path_data(path_id).network_path.remote
+            && self.path_data(path_id).network_path.remote != network_path.remote
         {
             self.migrate(path_id, now, network_path, migration_observed_addr);
             // Break linkability, if possible
@@ -7120,14 +7141,101 @@ impl Connection {
         }
     }
 
-    /// Returns whether this connection has a socket that supports IPv6.
+    /// Returns whether this connection was established on an IPv6-family socket.
+    pub fn is_ipv6(&self) -> bool {
+        self.established_ipv6
+    }
+
+    /// Sets the fixed socket family captured when the connection is established.
     ///
-    /// TODO(matheus23): This is related to noq endpoint state's `ipv6` bool. We should move that
-    /// info here instead of trying to hack around not knowing it exactly.
-    pub(crate) fn is_ipv6(&self) -> bool {
-        self.paths
-            .values()
-            .any(|p| p.data.network_path.remote.is_ipv6())
+    /// This has the same rebind limitation documented on [`Self::established_ipv6`].
+    fn set_socket_family(&mut self, ipv6: bool) {
+        self.established_ipv6 = ipv6;
+    }
+
+    /// Normalizes caller-supplied path addresses at `open_path` entry boundaries.
+    ///
+    /// `open_path` and `open_path_ensure` receive caller-supplied `remote` addresses, which may
+    /// use either plain IPv4 or IPv4-mapped-IPv6 representation. Normalize both `remote` and
+    /// `local_ip` to the connection's established socket family before storing or comparing them
+    /// (#738, #784).
+    fn normalize_network_path(&self, network_path: FourTuple) -> Result<FourTuple, PathError> {
+        let ipv6 = self.is_ipv6();
+        let remote = Self::normalize_remote_to_socket_family(network_path.remote, ipv6)?;
+        let local_ip = network_path
+            .local_ip
+            .map(|ip| Self::normalize_local_ip(ip, ipv6));
+        Ok(FourTuple::new(remote, local_ip))
+    }
+
+    fn normalize_remote_to_socket_family(
+        remote: SocketAddr,
+        ipv6: bool,
+    ) -> Result<SocketAddr, PathError> {
+        if ipv6 {
+            Ok(SocketAddr::V6(Self::ensure_ipv6(remote)))
+        } else {
+            match remote {
+                SocketAddr::V4(_) => Ok(remote),
+                SocketAddr::V6(v6) => v6
+                    .ip()
+                    .to_ipv4_mapped()
+                    .map(|ip| SocketAddr::new(IpAddr::V4(ip), v6.port()))
+                    .ok_or(PathError::InvalidRemoteAddress(remote)),
+            }
+        }
+    }
+
+    fn ensure_ipv6(remote: SocketAddr) -> SocketAddrV6 {
+        match remote {
+            SocketAddr::V6(v6) => v6,
+            SocketAddr::V4(v4) => SocketAddrV6::new(v4.ip().to_ipv6_mapped(), v4.port(), 0, 0),
+        }
+    }
+
+    /// Normalizes OS-supplied local IPs at `Connection` entry boundaries.
+    ///
+    /// `PathData.network_path.local_ip` is now normalized before it enters
+    /// connection-owned state, so plain `.local_ip ==` comparisons are safe inside
+    /// `noq-proto` (#738, #784). This normalization is intentionally based on the
+    /// connection's established socket family: on a dual-stack socket, a plain IPv4 `local_ip` is
+    /// mapped to IPv6; on an IPv4-only socket, a mapped-IPv4 `local_ip` is folded to plain IPv4.
+    ///
+    /// This does change what is handed to the OS. `PathData.network_path.local_ip` becomes
+    /// `Transmit::src_ip`, and the UDP backend sends different control messages for
+    /// `IpAddr::V4` and `IpAddr::V6` (`IP_PKTINFO` vs `IPV6_PKTINFO` on Unix). That is the
+    /// intended behavior for a dual-stack socket: sending IPv4 packet info while the destination
+    /// sockaddr is IPv6-family is a plausible reason the OS would ignore or mishandle source
+    /// selection for #738, though this root-cause hypothesis has not been verified on real
+    /// multi-interface hardware.
+    ///
+    /// `remote` is normalized by [`Self::normalize_network_path`] for caller-supplied
+    /// `open_path`/`open_path_ensure` inputs. It is intentionally preserved here because incoming
+    /// datagrams come from the OS receive metadata, which is already consistent for a single bound
+    /// socket, and because `PathData.network_path.remote` drives `Transmit::destination`.
+    fn normalize_network_path_local_ip(&self, network_path: FourTuple) -> FourTuple {
+        Self::normalize_network_path_local_ip_for_family(network_path, self.is_ipv6())
+    }
+
+    fn normalize_network_path_local_ip_for_family(
+        network_path: FourTuple,
+        ipv6: bool,
+    ) -> FourTuple {
+        let local_ip = network_path
+            .local_ip
+            .map(|ip| Self::normalize_local_ip(ip, ipv6));
+        FourTuple::new(network_path.remote, local_ip)
+    }
+
+    fn normalize_local_ip(ip: IpAddr, ipv6: bool) -> IpAddr {
+        if ipv6 {
+            match ip {
+                IpAddr::V4(v4) => IpAddr::V6(v4.to_ipv6_mapped()),
+                IpAddr::V6(_) => ip,
+            }
+        } else {
+            ip.to_canonical()
+        }
     }
 
     /// Add addresses the local endpoint considers are reachable for nat traversal.

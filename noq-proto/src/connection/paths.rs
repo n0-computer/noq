@@ -892,10 +892,11 @@ impl PathResponses {
 
     pub(crate) fn pop_off_path(&mut self, network_path: FourTuple) -> Option<(u64, FourTuple)> {
         let response = *self.pending.last()?;
-        // We use an exact comparison here, because once we've received for the first time,
-        // we really should either already have a local_ip, or we will never get one
-        // (because our OS doesn't support it). And even if we get it wrong we are only
-        // slightly less efficient and would not include other on-path data in the packet.
+        // We use an exact comparison here. By the time connection-owned path state and
+        // received PATH_CHALLENGE metadata reach this queue, `Connection` has normalized
+        // `remote` and `local_ip` to the established socket family. Exact matching here remains
+        // the right on-path/off-path split because different `local_ip`s can be different
+        // interfaces.
         if response.network_path == network_path {
             // We don't bother searching further because we expect that the on-path response will
             // get drained in the immediate future by a call to `pop_on_path`
@@ -1199,5 +1200,20 @@ mod tests {
 
         // outside range saturates
         assert_eq!(PathId::MAX.saturating_add(1u8), PathId::MAX)
+    }
+
+    /// `PATH_CHALLENGE`s from the same remote must coalesce into one pending response.
+    #[test]
+    fn push_coalesces_same_remote() {
+        let remote = "1.2.3.4:443".parse().unwrap();
+        let path = FourTuple::from_remote(remote);
+        let alternate_local = FourTuple::new(remote, Some("192.0.2.1".parse().unwrap()));
+
+        let mut responses = PathResponses::default();
+        responses.push(1, 0xaaaa, path);
+        responses.push(2, 0xbbbb, alternate_local);
+
+        assert_eq!(responses.pending.len(), 1);
+        assert_eq!(responses.pending[0].token, 0xbbbb);
     }
 }
