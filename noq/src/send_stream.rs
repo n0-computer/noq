@@ -239,8 +239,10 @@ impl SendStream {
         conn.inner.send_stream(self.stream).priority()
     }
 
-    /// Set the incrementality of the send stream.
-    /// Note that `send_fairness(false)` overrides incremental scheduling.
+    /// Set the incrementality of the send stream. Incremental streams at the same level of urgency
+    /// are multiplexed in a round-robin manner. Non-incremental streams are scheduled in full
+    /// before incremental ones. Ties in the non-incremental case are broken by favoring earlier
+    /// stream IDs. Streams are incremental by default to prevent starvation.
     pub fn set_incremental(&self, incremental: bool) -> Result<(), ClosedStream> {
         let mut conn = self.conn.lock_without_waking("SendStream::set_incremental");
         conn.inner

@@ -438,8 +438,6 @@ impl<'a> SendStream<'a> {
             .get(&self.id)
             .ok_or(ClosedStream { _private: () })?;
 
-        // Intentionally deviates from RFC 9218 for backward-compatibility.
-        // The default should be set to false once send_fairness(bool) is deprecated.
         Ok(stream.as_ref().map(|s| s.incremental).unwrap_or(true))
     }
 }
@@ -447,10 +445,6 @@ impl<'a> SendStream<'a> {
 /// A queue of streams with pending outgoing data, sorted by priority
 struct PendingStreamsQueue {
     streams: BinaryHeap<PendingStream>,
-    /// The next stream to write out. This is `Some` when `TransportConfig::send_fairness(false)`
-    /// and writing a stream is interrupted while the stream still has some pending data. See
-    /// `reinsert_pending()`.
-    next: Option<PendingStream>,
     /// A monotonically decreasing counter, used to implement round-robin scheduling for streams of
     /// the same priority. Underflowing is not a practical concern, as it is initialized to
     /// u64::MAX and only decremented by 1 in `push_pending`
@@ -461,30 +455,12 @@ impl PendingStreamsQueue {
     fn new() -> Self {
         Self {
             streams: BinaryHeap::new(),
-            next: None,
             recency: u64::MAX,
         }
     }
 
-    /// Reinsert a stream that was pending and still contains unsent data.
-    fn reinsert_pending(&mut self, id: StreamId, priority: i32) {
-        assert!(self.next.is_none());
-
-        self.next = Some(PendingStream {
-            priority,
-            incremental: false,
-            recency: u64::MAX,
-            id,
-        });
-    }
-
-    /// Push a pending stream ID with the given priority, queued after any already-queued streams
-    /// for the priority
+    /// Push a pending stream ID with the given priority and incremental value
     fn push_pending(&mut self, id: StreamId, priority: i32, incremental: bool) {
-        // Note that in the case where fairness is disabled, if we have a reinserted stream we don't
-        // bump it even if priority > next.priority. In order to minimize fragmentation we
-        // always try to complete a stream once part of it has been written.
-
         // As the recency counter is monotonically decreasing, we know that using its value to sort
         // this stream will queue it after all other queued streams of the same priority.
         // This is enough to implement round-robin scheduling for streams that are still pending
@@ -503,21 +479,20 @@ impl PendingStreamsQueue {
     }
 
     fn pop(&mut self) -> Option<PendingStream> {
-        self.next.take().or_else(|| self.streams.pop())
+        self.streams.pop()
     }
 
     fn clear(&mut self) {
-        self.next = None;
         self.streams.clear();
     }
 
     fn iter(&self) -> impl Iterator<Item = &PendingStream> {
-        self.next.iter().chain(self.streams.iter())
+        self.streams.iter()
     }
 
     #[cfg(test)]
     fn len(&self) -> usize {
-        self.streams.len() + self.next.is_some() as usize
+        self.streams.len()
     }
 }
 
@@ -527,7 +502,6 @@ struct PendingStream {
     /// The priority of the stream
     priority: i32,
     /// Controls whether the stream is fairly multiplexed with others at the same urgency level.
-    // Note that the connection-wide `send_fairness(false)` config overrides the incremental flag
     incremental: bool,
     /// A tie-breaker for streams of the same priority, used to improve fairness by implementing
     /// round-robin scheduling: Larger values are prioritized, so it is initialised to

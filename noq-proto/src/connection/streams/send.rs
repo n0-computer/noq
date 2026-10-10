@@ -31,9 +31,7 @@ impl Send {
             state: SendState::Ready,
             pending: SendBuffer::new(),
             priority: 0,
-            incremental: true, /* intentionally deviates from RFC 9218 for
-                                * backward-compatibility. Should be set to false once
-                                * send_fairness(bool) is deprecated. */
+            incremental: true,
             fin_pending: false,
             connection_blocked: false,
             stop_reason: None,
