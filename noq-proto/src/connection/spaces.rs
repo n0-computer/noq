@@ -141,11 +141,17 @@ impl PacketSpace {
     ///
     /// [`Connection::can_send_1rtt`]: super::Connection::can_send_1rtt
     /// [`Connection::space_can_send`]: super::Connection::space_can_send
-    pub(super) fn can_send(&self, path_id: PathId, streams: &StreamsState) -> SendableFrames {
-        let acks = self
-            .number_spaces
-            .values()
-            .any(|pns| pns.pending_acks.can_send());
+    /// `ack_on_own_path(p)` says whether path `p` can currently carry its own acknowledgements;
+    /// acks for such paths are only sent on that path (see `Connection::ack_carrier_paths`).
+    pub(super) fn can_send(
+        &self,
+        path_id: PathId,
+        streams: &StreamsState,
+        ack_on_own_path: impl Fn(PathId) -> bool,
+    ) -> SendableFrames {
+        let acks = self.number_spaces.iter().any(|(&pid, pns)| {
+            pns.pending_acks.can_send() && (pid == path_id || !ack_on_own_path(pid))
+        });
         let space_specific = self.number_spaces.get(&path_id).is_some_and(|s| {
             s.pending_ping || s.pending_immediate_ack || !s.pending_path_responses.is_empty()
         });
