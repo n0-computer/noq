@@ -558,11 +558,9 @@ impl StreamsState {
 
             if stream.is_pending() {
                 // If the stream still has pending data, reinsert it, possibly with an updated
-                // priority value
-                // Fairness with other streams is achieved by
-                // implementing round-robin scheduling, so that the other streams
-                // will have a chance to write data before we touch this stream
-                // again.
+                // priority value. Fairness with other streams in the incremental case is achieved
+                // with round-robin scheduling, so that the other streams will have a chance to
+                // write data before we touch this stream again.
                 self.pending
                     .push_pending(id, stream.priority, stream.incremental);
             }
@@ -1675,6 +1673,84 @@ mod tests {
                 id_a, id_b, id_a, id_b, id_a, id_b, // incremental, round-robin scheduling
                 id_g, id_g, id_g // incremental, scheduled alone due to lowest priority
             ]
+        );
+    }
+
+    #[test]
+    fn priority_bump() {
+        let mut server = make(Side::Server);
+        server.set_params(&TransportParameters {
+            initial_max_streams_bidi: 3u32.into(),
+            initial_max_data: 300u32.into(),
+            initial_max_stream_data_bidi_remote: 300u32.into(),
+            ..TransportParameters::default()
+        });
+
+        let (mut pending, state) = (Retransmits::default(), ConnState::established());
+        let mut streams = Streams {
+            state: &mut server,
+            conn_state: &state,
+        };
+
+        // a, and b have the same priority, c has higher priority
+        let id_a = streams.open(Dir::Bi).unwrap();
+        let id_b = streams.open(Dir::Bi).unwrap();
+        let id_c = streams.open(Dir::Bi).unwrap();
+
+        let mut stream_a = SendStream {
+            id: id_a,
+            state: &mut server,
+            pending: &mut pending,
+            conn_state: &state,
+        };
+        stream_a.set_incremental(false).unwrap();
+        stream_a.write(&[b'a'; 100]).unwrap();
+
+        let mut stream_b = SendStream {
+            id: id_b,
+            state: &mut server,
+            pending: &mut pending,
+            conn_state: &state,
+        };
+        stream_b.set_incremental(false).unwrap();
+        stream_b.write(&[b'b'; 100]).unwrap();
+
+        let mut metas = vec![];
+
+        // Write the first chunk of stream_a
+        let meta = server.write_frames_for_test(40);
+        assert!(!meta.is_empty());
+        metas.extend(meta);
+
+        // Queue stream_c which has higher priority
+        let mut stream_c = SendStream {
+            id: id_c,
+            state: &mut server,
+            pending: &mut pending,
+            conn_state: &state,
+        };
+        stream_c.set_priority(1).unwrap();
+        stream_c.set_incremental(false).unwrap();
+        stream_c.write(&[b'b'; 100]).unwrap();
+
+        // loop until all the streams are written
+        loop {
+            let meta = server.write_frames_for_test(40);
+            if meta.is_empty() {
+                break;
+            }
+            metas.extend(meta);
+        }
+
+        assert!(!server.can_send_stream_data());
+        assert_eq!(server.pending.len(), 0);
+
+        let stream_ids = metas.iter().map(|m| m.id).collect::<Vec<_>>();
+        assert_eq!(
+            stream_ids,
+            // verify that stream_c bumps stream_a which had already been partly written out
+            // when stream_c completes, resume stream_a since its stream_id is lower
+            vec![id_a, id_c, id_c, id_c, id_a, id_a, id_b, id_b, id_b]
         );
     }
 
