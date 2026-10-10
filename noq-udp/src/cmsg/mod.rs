@@ -42,9 +42,7 @@ impl<'a, M: MsgHdr> Encoder<'a, M> {
     ///
     /// # Panics
     /// - If insufficient buffer space remains.
-    /// - If `T` has stricter alignment requirements than `M::ControlMessage`
     pub(crate) fn push<T: Copy>(&mut self, level: c_int, ty: c_int, value: T) {
-        assert!(align_of::<T>() <= align_of::<M::ControlMessage>());
         let space = M::ControlMessage::cmsg_space(size_of_val(&value));
         assert!(
             self.hdr.control_len() >= self.len + space,
@@ -55,7 +53,8 @@ impl<'a, M: MsgHdr> Encoder<'a, M> {
         let cmsg = self.cmsg.take().expect("no control buffer space remaining");
         cmsg.set(level, ty, M::ControlMessage::cmsg_len(size_of_val(&value)));
         unsafe {
-            ptr::write(cmsg.cmsg_data() as *const T as *mut T, value);
+            // Unaligned: `align_of::<M::ControlMessage>()` is 4 on musl.
+            ptr::write_unaligned(cmsg.cmsg_data() as *const T as *mut T, value);
         }
         self.len += space;
         self.cmsg = unsafe { self.hdr.cmsg_nxt_hdr(cmsg).as_mut() };
@@ -79,9 +78,10 @@ impl<M: MsgHdr> Drop for Encoder<'_, M> {
 ///
 /// `cmsg` must refer to a native cmsg containing a payload of type `T`
 pub(crate) unsafe fn decode<T: Copy, C: CMsgHdr>(cmsg: &impl CMsgHdr) -> T {
-    assert!(align_of::<T>() <= align_of::<C>());
     debug_assert_eq!(cmsg.len(), C::cmsg_len(size_of::<T>()));
-    unsafe { ptr::read(cmsg.cmsg_data() as *const T) }
+    // Unaligned: `align_of::<libc::cmsghdr>()` is 4 on musl, but payloads such as
+    // `libc::timespec` (SCM_TIMESTAMPNS) need 8.
+    unsafe { ptr::read_unaligned(cmsg.cmsg_data() as *const T) }
 }
 
 pub(crate) struct Iter<'a, M: MsgHdr> {
