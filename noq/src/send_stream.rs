@@ -239,6 +239,31 @@ impl SendStream {
         conn.inner.send_stream(self.stream).priority()
     }
 
+    /// Set the incrementality of the send stream. Incremental streams at the same level of urgency
+    /// are multiplexed in a round-robin manner. Non-incremental streams are scheduled
+    /// before incremental ones without interleaving. Ties in the non-incremental case are broken by
+    /// favoring lower stream IDs.
+    ///
+    /// Streams are incremental by default to prevent starvation among equally urgent streams.
+    /// Non-incremental streams can reduce fragmentation and protocol overhead for workloads that
+    /// use many small streams.
+    ///
+    /// Changing the incrementality of a stream with pending data may only take effect after that
+    /// data has been transmitted.
+    pub fn set_incremental(&self, incremental: bool) -> Result<(), ClosedStream> {
+        let mut conn = self.conn.lock_without_waking("SendStream::set_incremental");
+        conn.inner
+            .send_stream(self.stream)
+            .set_incremental(incremental)?;
+        Ok(())
+    }
+
+    /// Get the incrementality of the send stream
+    pub fn incremental(&self) -> Result<bool, ClosedStream> {
+        let mut conn = self.conn.lock_without_waking("SendStream::incremental");
+        conn.inner.send_stream(self.stream).incremental()
+    }
+
     /// Completes when the peer stops the stream or reads the stream to completion
     ///
     /// Yields `Some` with the stop error code if the peer stops the stream. Yields `None` if the
