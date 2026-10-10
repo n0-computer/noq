@@ -8,7 +8,7 @@ use std::{
 use rand::{CryptoRng, RngExt};
 use rustc_hash::{FxHashMap, FxHashSet};
 use sorted_index_buffer::SortedIndexBuffer;
-use tracing::trace;
+use tracing::{debug, trace};
 
 use super::{PathId, paths::PathResponses, paths::PathRetransmits};
 use crate::{
@@ -238,6 +238,11 @@ pub(super) struct PacketNumberSpace {
     /// reported. This is not required by the spec, and in the future might be changed for
     /// simply requiring a first ack'd packet.
     pub(super) open_status: OpenStatus,
+    /// The QUIC-MULTIPATH path status.
+    ///
+    /// This field is unused for the Initial and Handshake spaces, and when multipath is not
+    /// negotiated.
+    pub(super) status: PathStatusState,
 
     /// Highest received packet number, if any
     pub(super) largest_received_packet_number: Option<u64>,
@@ -306,6 +311,7 @@ impl PacketNumberSpace {
         };
         Self {
             open_status: OpenStatus::default(),
+            status: PathStatusState::default(),
             largest_received_packet_number: None,
             next_packet_number: 0,
             largest_acked_packet_pn: None,
@@ -336,6 +342,7 @@ impl PacketNumberSpace {
         };
         Self {
             open_status: OpenStatus::default(),
+            status: PathStatusState::default(),
             largest_received_packet_number: None,
             next_packet_number: 0,
             largest_acked_packet_pn: None,
@@ -356,6 +363,14 @@ impl PacketNumberSpace {
             loss_probes: 0,
             pn_filter,
         }
+    }
+
+    pub(crate) fn remote_status(&self) -> Option<PathStatus> {
+        self.status.remote_status.map(|(_seq, status)| status)
+    }
+
+    pub(crate) fn local_status(&self) -> PathStatus {
+        self.status.local_status
     }
 
     /// Get the next outgoing packet number in this space
@@ -500,6 +515,69 @@ pub(super) enum OpenStatus {
     Pending,
     /// The application has been informed of this path.
     Informed,
+}
+
+/// State for QUIC-MULTIPATH PATH_STATUS_AVAILABLE and PATH_STATUS_BACKUP frames
+#[derive(Debug, Clone, Default)]
+pub(super) struct PathStatusState {
+    /// The local status
+    local_status: PathStatus,
+    /// Local sequence number, for both PATH_STATUS_AVAILABLE and PATH_STATUS_BACKUP
+    ///
+    /// This is the number of the *next* path status frame to be sent.
+    local_seq: VarInt,
+    /// The status set by the remote
+    remote_status: Option<(VarInt, PathStatus)>,
+}
+
+impl PathStatusState {
+    /// To be called on received PATH_STATUS_AVAILABLE/PATH_STATUS_BACKUP frames
+    pub(super) fn remote_update(&mut self, status: PathStatus, seq: VarInt) {
+        if self.remote_status.is_some_and(|(curr, _)| curr >= seq) {
+            return trace!(%seq, "ignoring path status update");
+        }
+
+        let prev = self.remote_status.replace((seq, status)).map(|(_, s)| s);
+        if prev != Some(status) {
+            debug!(?status, ?seq, "remote changed path status");
+        }
+    }
+
+    /// Updates the local status
+    ///
+    /// If the local status changed, the previous value is returned
+    pub(super) fn local_update(&mut self, status: PathStatus) -> Option<PathStatus> {
+        if self.local_status == status {
+            return None;
+        }
+
+        self.local_seq = self.local_seq.saturating_add(1u8);
+        Some(std::mem::replace(&mut self.local_status, status))
+    }
+
+    pub(crate) fn seq(&self) -> VarInt {
+        self.local_seq
+    }
+}
+
+/// The QUIC-MULTIPATH path status
+///
+/// See section "3.3 Path Status Management":
+/// <https://quicwg.org/multipath/draft-ietf-quic-multipath.html#name-path-status-management>
+#[cfg_attr(test, derive(test_strategy::Arbitrary))]
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
+pub enum PathStatus {
+    /// Paths marked with as available will be used when scheduling packets
+    ///
+    /// If multiple paths are available, packets will be scheduled on whichever has
+    /// capacity.
+    #[default]
+    Available,
+    /// Paths marked as backup will only be used if there are no available paths
+    ///
+    /// If the max_idle_timeout is specified the path will be kept alive so that it does not
+    /// expire.
+    Backup,
 }
 
 /// Represents one or more packets subject to retransmission
