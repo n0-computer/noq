@@ -367,6 +367,11 @@ const MAX_STREAM_COUNT: u64 = 1 << 60;
 /// paths exist with the same remote, but different local IP interfaces.
 ///
 /// `FourTuple` implements `From<SocketAddr>`, which expands to [`Self::from_remote`].
+///
+/// `noq-proto::Connection` normalizes caller-supplied `remote` addresses at
+/// `open_path`/`open_path_ensure` and `local_ip` at every entry boundary before storing a
+/// `FourTuple` in connection-owned state, so plain structural comparisons are safe there (#738,
+/// #784).
 #[derive(Hash, Eq, PartialEq, Copy, Clone)]
 pub struct FourTuple {
     /// The remote side of this tuple.
@@ -462,5 +467,56 @@ impl fmt::Debug for FourTuple {
 impl From<SocketAddr> for FourTuple {
     fn from(value: SocketAddr) -> Self {
         Self::from_remote(value)
+    }
+}
+
+#[cfg(test)]
+mod four_tuple_tests {
+    use super::*;
+
+    /// Link-local `FourTuple`s differing only in `scope_id` describe different
+    /// interfaces and must stay distinct.
+    #[test]
+    fn new_preserves_link_local_scope_id() {
+        let iface_a = FourTuple::from_remote("[fe80::1%3]:443".parse().unwrap());
+        let iface_b = FourTuple::from_remote("[fe80::1%5]:443".parse().unwrap());
+        assert_ne!(iface_a, iface_b);
+    }
+
+    /// For a global IPv6 address, `FourTuple::new()` zeroes `scope_id` on construction.
+    #[test]
+    fn new_zeroes_scope_id_for_global_v6() {
+        let a = FourTuple::from_remote("[2001:db8::1%3]:443".parse().unwrap());
+        let b = FourTuple::from_remote("[2001:db8::1%5]:443".parse().unwrap());
+        assert_eq!(a, b);
+    }
+
+    /// Multicast `FourTuple`s differing only in `scope_id` describe different interfaces and must
+    /// stay distinct.
+    #[test]
+    fn new_preserves_multicast_scope_id() {
+        let iface_a = FourTuple::from_remote("[ff02::1%3]:443".parse().unwrap());
+        let iface_b = FourTuple::from_remote("[ff02::1%5]:443".parse().unwrap());
+        assert_ne!(iface_a, iface_b);
+    }
+
+    /// Representation differences are not hidden here. `Connection` normalizes path addresses at
+    /// its entry boundaries before storing them.
+    #[test]
+    fn is_probably_same_path_uses_structural_equality() {
+        let remote = "9.9.9.9:443".parse().unwrap();
+        let mapped = FourTuple::new(remote, Some("::ffff:1.2.3.4".parse().unwrap()));
+        let plain = FourTuple::new(remote, Some("1.2.3.4".parse().unwrap()));
+        assert!(!mapped.is_probably_same_path(&plain));
+        assert!(!plain.is_probably_same_path(&mapped));
+    }
+
+    /// `is_probably_same_path` still distinguishes scoped link-local remotes.
+    #[test]
+    fn is_probably_same_path_distinguishes_link_local_scope_id() {
+        let iface_a = FourTuple::from_remote("[fe80::1%3]:443".parse().unwrap());
+        let iface_b = FourTuple::from_remote("[fe80::1%5]:443".parse().unwrap());
+        assert!(!iface_a.is_probably_same_path(&iface_b));
+        assert!(!iface_b.is_probably_same_path(&iface_a));
     }
 }
