@@ -29,8 +29,8 @@ use rustls::{
 };
 use tracing::{debug, info, info_span, trace};
 
-use crate::crypto::rustls::{QuicClientConfig, QuicServerConfig, configured_provider};
 use crate::connection::timer::Timer;
+use crate::crypto::rustls::{QuicClientConfig, QuicServerConfig, configured_provider};
 use crate::{
     ClientConfig, ClosePathError, ClosedPath, Connection, ConnectionError, ConnectionEvent,
     ConnectionHandle, ConnectionStats, DatagramEvent, Datagrams, Dir, Duration, EcnCodepoint,
