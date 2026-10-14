@@ -1435,12 +1435,12 @@ mod tests {
         }
 
         // Moving a queued stream keeps its turn relative to streams in the destination bucket.
-        queue.set_affinity(ids[0], Some(path));
+        queue.move_pending(ids[0], Some(path));
         for id in &ids[..3] {
             assert_eq!(queue.pop(path, true).unwrap().id, *id);
         }
         assert_eq!(queue.len(), 0);
-        assert!(queue.sticky_by_path.is_empty());
+        assert!(queue.sticky.is_empty());
     }
 
     #[test]

@@ -400,8 +400,8 @@ impl<'a> SendStream<'a> {
 
     /// Sets the path affinity of a stream.
     ///
-    /// Applies to subsequently packetized STREAM frames, including retransmissions and FINs.
-    /// Does not affect stream control frames or packets already built for transmission.
+    /// Applies to pending and future STREAM data, including retransmissions and FINs.
+    /// Does not affect stream control frames.
     /// Unblocking rejoins the back of the stream's priority group.
     ///
     /// # Errors
@@ -411,7 +411,7 @@ impl<'a> SendStream<'a> {
     /// # Panics
     ///
     /// Panics when applied to a receive-only stream.
-    pub fn set_affinity(&mut self, affinity: StreamAffinity) -> Result<(), ClosedStream> {
+    pub fn set_affinity(&mut self, new_affinity: StreamAffinity) -> Result<(), ClosedStream> {
         let max_send_data = self.state.max_send_data(self.id);
         let stream = self
             .state
@@ -420,25 +420,25 @@ impl<'a> SendStream<'a> {
             .map(get_or_insert_send(max_send_data))
             .ok_or(ClosedStream { _private: () })?;
 
-        if stream.affinity == affinity {
+        if stream.affinity == new_affinity {
             return Ok(());
         }
         if stream.affinity == StreamAffinity::Block {
             if !stream.is_reset() && stream.is_pending() {
                 self.state
                     .pending
-                    .push_pending(self.id, stream.priority, affinity);
+                    .push_pending(self.id, stream.priority, new_affinity);
             }
         } else {
-            match affinity {
-                StreamAffinity::Any => self.state.pending.set_affinity(self.id, None),
+            match new_affinity {
+                StreamAffinity::Any => self.state.pending.move_pending(self.id, None),
                 StreamAffinity::Sticky(path) => {
-                    self.state.pending.set_affinity(self.id, Some(path))
+                    self.state.pending.move_pending(self.id, Some(path))
                 }
                 StreamAffinity::Block => self.state.pending.remove(self.id),
             }
         }
-        stream.affinity = affinity;
+        stream.affinity = new_affinity;
         Ok(())
     }
 
@@ -472,7 +472,7 @@ pub enum StreamAffinity {
 /// Pending streams partitioned by affinity, with shared priority and fairness ordering.
 struct PendingStreamsQueue {
     any: BinaryHeap<PendingStream>,
-    sticky_by_path: FxHashMap<PathId, BinaryHeap<PendingStream>>,
+    sticky: FxHashMap<PathId, BinaryHeap<PendingStream>>,
     /// Used as a sort of "reverse index" to find in which queue a stream is currently pending.
     affinities: FxHashMap<StreamId, Option<PathId>>,
     /// A monotonically decreasing counter, used to implement round-robin scheduling for streams of
@@ -485,14 +485,15 @@ impl PendingStreamsQueue {
     fn new() -> Self {
         Self {
             any: BinaryHeap::new(),
-            sticky_by_path: FxHashMap::default(),
+            sticky: FxHashMap::default(),
             affinities: FxHashMap::default(),
             recency: u64::MAX,
         }
     }
 
-    /// Push a pending stream ID with the given priority, queued after any already-queued streams
-    /// for the priority
+    /// Enqueues a stream in its affinity bucket after queued streams of the same priority.
+    ///
+    /// Ignores blocked streams and preserves any existing queued entry and its turn.
     fn push_pending(&mut self, id: StreamId, priority: i32, affinity: StreamAffinity) {
         let sticky = match affinity {
             StreamAffinity::Any => None,
@@ -521,9 +522,12 @@ impl PendingStreamsQueue {
         });
     }
 
-    fn pop(&mut self, path: PathId, status_allows_data: bool) -> Option<PendingStream> {
-        let any = status_allows_data.then(|| self.any.peek()).flatten();
-        let sticky = self.sticky_by_path.get(&path).and_then(|q| q.peek());
+    /// Removes the highest-ranked entry eligible for this path.
+    ///
+    /// Includes the Any queue only when `include_any` is true.
+    fn pop(&mut self, path: PathId, include_any: bool) -> Option<PendingStream> {
+        let any = include_any.then(|| self.any.peek()).flatten();
+        let sticky = self.sticky.get(&path).and_then(|q| q.peek());
         let pending = if any > sticky {
             self.queue_mut(None).pop()
         } else {
@@ -534,7 +538,10 @@ impl PendingStreamsQueue {
         Some(pending)
     }
 
-    fn set_affinity(&mut self, id: StreamId, new_affinity: Option<PathId>) {
+    /// Moves a queued stream to the destination bucket, preserving priority and recency.
+    ///
+    /// Does nothing if the stream is not queued.
+    fn move_pending(&mut self, id: StreamId, new_affinity: Option<PathId>) {
         let Some(affinity) = self.affinities.get_mut(&id) else {
             return;
         };
@@ -555,7 +562,7 @@ impl PendingStreamsQueue {
         match sticky {
             None => PendingQueueMut::Any(&mut self.any),
             Some(path) => {
-                let entry = match self.sticky_by_path.entry(path) {
+                let entry = match self.sticky.entry(path) {
                     hash_map::Entry::Occupied(entry) => entry,
                     hash_map::Entry::Vacant(entry) => entry.insert_entry(BinaryHeap::new()),
                 };
@@ -574,26 +581,21 @@ impl PendingStreamsQueue {
 
     fn clear(&mut self) {
         self.any.clear();
-        self.sticky_by_path.clear();
+        self.sticky.clear();
         self.affinities.clear();
     }
 
-    fn iter(&self, path: PathId, status_allows_data: bool) -> impl Iterator<Item = &PendingStream> {
-        status_allows_data
+    fn iter(&self, path: PathId, include_any: bool) -> impl Iterator<Item = &PendingStream> {
+        include_any
             .then_some(&self.any)
             .into_iter()
             .flat_map(|q| q.iter())
-            .chain(
-                self.sticky_by_path
-                    .get(&path)
-                    .into_iter()
-                    .flat_map(|q| q.iter()),
-            )
+            .chain(self.sticky.get(&path).into_iter().flat_map(|q| q.iter()))
     }
 
     #[cfg(test)]
     fn len(&self) -> usize {
-        self.any.len() + self.sticky_by_path.values().map(|q| q.len()).sum::<usize>()
+        self.any.len() + self.sticky.values().map(|q| q.len()).sum::<usize>()
     }
 }
 
