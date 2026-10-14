@@ -613,7 +613,7 @@ impl StreamsState {
         }
 
         if was_pending {
-            self.pending.remove(id, stream.affinity);
+            self.pending.remove(id);
         }
         entry.remove_entry();
         self.stream_freed(id, StreamHalf::Send);
@@ -1435,7 +1435,7 @@ mod tests {
         }
 
         // Moving a queued stream keeps its turn relative to streams in the destination bucket.
-        queue.set_affinity(ids[0], None, Some(path));
+        queue.set_affinity(ids[0], Some(path));
         for id in &ids[..3] {
             assert_eq!(queue.pop(path, true).unwrap().id, *id);
         }
