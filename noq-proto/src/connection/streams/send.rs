@@ -3,7 +3,7 @@ use bytes::Bytes;
 use thiserror::Error;
 
 use crate::{
-    VarInt,
+    StreamId, VarInt,
     connection::{send_buffer::SendBuffer, streams::BytesOrSlice},
     frame,
 };
@@ -39,7 +39,18 @@ impl Send {
 
     /// Whether the stream has been reset
     pub(super) fn is_reset(&self) -> bool {
-        matches!(self.state, SendState::ResetSent)
+        matches!(self.state, SendState::ResetSent { .. })
+    }
+
+    /// Whether the stream has been reset without any data still to be delivered
+    pub(super) fn is_abandoned(&self) -> bool {
+        matches!(
+            self.state,
+            SendState::ResetSent {
+                reliable_size: 0,
+                ..
+            }
+        )
     }
 
     pub(super) fn finish(&mut self) -> Result<(), FinishError> {
@@ -91,11 +102,103 @@ impl Send {
     }
 
     /// Update stream state due to a reset sent by the local application
-    pub(super) fn reset(&mut self) {
+    pub(super) fn reset(&mut self, error_code: VarInt) {
         use SendState::*;
         if let DataSent { .. } | Ready = self.state {
-            self.state = ResetSent;
+            self.state = ResetSent {
+                error_code,
+                final_size: self.pending.offset(),
+                reliable_size: 0,
+                reset_acked: false,
+            };
+            self.fin_pending = false;
         }
+    }
+
+    /// Update stream state due to a reset sent by the local application which still delivers the
+    /// first `reliable_size` bytes
+    pub(super) fn reset_at(
+        &mut self,
+        error_code: VarInt,
+        reliable_size: u64,
+    ) -> Result<(), ResetStreamAtError> {
+        if let Some(error_code) = self.stop_reason {
+            return Err(ResetStreamAtError::Stopped(error_code));
+        }
+        if self.is_reset() {
+            return Err(ResetStreamAtError::ClosedStream);
+        }
+        if reliable_size > self.pending.offset() {
+            return Err(ResetStreamAtError::InvalidReliableSize);
+        }
+        if reliable_size == 0 {
+            self.reset(error_code);
+            return Ok(());
+        }
+        self.state = SendState::ResetSent {
+            error_code,
+            final_size: self.pending.offset(),
+            reliable_size,
+            reset_acked: false,
+        };
+        self.fin_pending = false;
+        self.pending.truncate(reliable_size);
+        Ok(())
+    }
+
+    /// Stop delivering data on a stream reset with [`Self::reset_at`]
+    ///
+    /// Returns whether a RESET_STREAM frame now needs to be sent.
+    pub(super) fn abandon(&mut self) -> bool {
+        match self.state {
+            SendState::ResetSent {
+                ref mut reliable_size,
+                ref mut reset_acked,
+                ..
+            } if *reliable_size != 0 => {
+                *reliable_size = 0;
+                // The RESET_STREAM frame that is now required hasn't been acknowledged
+                *reset_acked = false;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Handle acknowledgement of a RESET_STREAM or RESET_STREAM_AT frame
+    ///
+    /// Returns whether the peer has received everything it needs, so that the stream can be freed.
+    pub(super) fn reset_acked(&mut self) -> bool {
+        match self.state {
+            SendState::ResetSent {
+                reliable_size,
+                ref mut reset_acked,
+                ..
+            } => {
+                *reset_acked = true;
+                reliable_size == 0 || self.pending.is_fully_acked()
+            }
+            _ => false,
+        }
+    }
+
+    /// Returns the frame that resets this stream, if it was reset
+    pub(super) fn reset_frame(&self, id: StreamId) -> Option<frame::ResetStreamAt> {
+        let SendState::ResetSent {
+            error_code,
+            final_size,
+            reliable_size,
+            ..
+        } = self.state
+        else {
+            return None;
+        };
+        Some(frame::ResetStreamAt {
+            id,
+            error_code,
+            final_offset: VarInt::try_from(final_size).expect("impossibly large offset"),
+            reliable_size: VarInt::try_from(reliable_size).expect("impossibly large offset"),
+        })
     }
 
     /// Handle STOP_SENDING
@@ -121,6 +224,11 @@ impl Send {
                 *finish_acked |= frame.fin;
                 *finish_acked && self.pending.is_fully_acked()
             }
+            SendState::ResetSent {
+                reliable_size,
+                reset_acked,
+                ..
+            } => reliable_size != 0 && reset_acked && self.pending.is_fully_acked(),
             _ => false,
         }
     }
@@ -142,7 +250,14 @@ impl Send {
     }
 
     pub(super) fn is_pending(&self) -> bool {
-        self.pending.has_unsent_data() || self.fin_pending
+        match self.state {
+            SendState::ResetSent {
+                reliable_size: 0, ..
+            } => false,
+            // FIN is never sent after a reset
+            SendState::ResetSent { .. } => self.pending.has_unsent_data(),
+            _ => self.pending.has_unsent_data() || self.fin_pending,
+        }
     }
 
     pub(super) fn is_writable(&self) -> bool {
@@ -298,8 +413,38 @@ pub(super) enum SendState {
     Ready,
     /// Stream was finished; now sending retransmits only
     DataSent { finish_acked: bool },
-    /// Sent RESET
-    ResetSent,
+    /// Sent RESET_STREAM, or RESET_STREAM_AT if `reliable_size` is nonzero
+    ///
+    /// After RESET_STREAM_AT, data up to `reliable_size` is still sent and retransmitted.
+    ResetSent {
+        error_code: VarInt,
+        final_size: u64,
+        reliable_size: u64,
+        /// Whether the most recent reset frame has been acknowledged
+        reset_acked: bool,
+    },
+}
+
+/// Reasons why resetting a stream with [`SendStream::reset_at`] might fail
+///
+/// [`SendStream::reset_at`]: crate::SendStream::reset_at
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum ResetStreamAtError {
+    /// The peer is no longer accepting data on this stream
+    ///
+    /// Use [`SendStream::reset`](crate::SendStream::reset) instead. Carries an
+    /// application-defined error code.
+    #[error("stopped by peer: code {0}")]
+    Stopped(VarInt),
+    /// The stream has not been opened or has already been finished or reset
+    #[error("closed stream")]
+    ClosedStream,
+    /// The reliable size is larger than the amount of data written to the stream
+    #[error("reliable size exceeds data written")]
+    InvalidReliableSize,
+    /// The peer did not advertise support for `RESET_STREAM_AT`
+    #[error("RESET_STREAM_AT not negotiated")]
+    NotNegotiated,
 }
 
 /// Reasons why attempting to finish a stream might fail

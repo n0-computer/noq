@@ -77,6 +77,7 @@ pub struct FrameStats {
     pub add_address: u64,
     pub reach_out: u64,
     pub remove_address: u64,
+    pub reset_stream_at: u64,
 }
 
 impl FrameStats {
@@ -92,6 +93,7 @@ impl FrameStats {
             Ack | AckEcn => inc!(acks),
             PathAck | PathAckEcn => inc!(path_acks),
             ResetStream => inc!(reset_stream),
+            ResetStreamAt => inc!(reset_stream_at),
             StopSending => inc!(stop_sending),
             Crypto => inc!(crypto),
             Datagram(_) => inc!(datagram),
@@ -152,6 +154,7 @@ impl core::fmt::Debug for FrameStats {
             path_response,
             ping,
             reset_stream,
+            reset_stream_at,
             retire_connection_id,
             path_retire_connection_id,
             stream_data_blocked,
@@ -198,6 +201,7 @@ impl core::fmt::Debug for FrameStats {
             .field("PATH_RETIRE_CONNECTION_ID", path_retire_connection_id)
             .field("PING", ping)
             .field("RESET_STREAM", reset_stream)
+            .field("RESET_STREAM_AT", reset_stream_at)
             .field("RETIRE_CONNECTION_ID", retire_connection_id)
             .field("STREAM_DATA_BLOCKED", stream_data_blocked)
             .field("STREAMS_BLOCKED_BIDI", streams_blocked_bidi)

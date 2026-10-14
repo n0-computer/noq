@@ -1016,6 +1016,33 @@ async fn stream_stopped_2() {
 }
 
 #[tokio::test]
+async fn stream_reset_at() {
+    let _guard = subscribe();
+    let endpoint = endpoint();
+
+    let (conn, server_conn) = tokio::try_join!(
+        endpoint
+            .connect(endpoint.local_addr().unwrap(), "localhost")
+            .unwrap(),
+        async { endpoint.accept().await.unwrap().await }
+    )
+    .unwrap();
+    let mut send = conn.open_uni().await.unwrap();
+    send.write_all(b"header, then body").await.unwrap();
+    send.reset_at(42u32.into(), 6).unwrap();
+
+    let mut recv = server_conn.accept_uni().await.unwrap();
+    let mut header = [0u8; 6];
+    recv.read_exact(&mut header).await.unwrap();
+    assert_eq!(&header, b"header");
+    let mut rest = [0u8; 1];
+    assert_eq!(
+        recv.read(&mut rest).await,
+        Err(crate::ReadError::Reset(42u32.into()))
+    );
+}
+
+#[tokio::test]
 async fn test_multipath_negotiated() {
     let _logging = subscribe();
     let factory = EndpointFactory::new();

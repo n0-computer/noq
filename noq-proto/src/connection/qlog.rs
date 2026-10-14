@@ -943,6 +943,17 @@ impl ToQlog for frame::ResetStream {
 }
 
 #[cfg(feature = "qlog")]
+impl ToQlog for frame::ResetStreamAt {
+    fn to_qlog(&self) -> QuicFrame {
+        // TODO: n0-qlog has no RESET_STREAM_AT variant yet
+        QuicFrame::Unknown {
+            frame_type_bytes: Some(frame::FrameType::ResetStreamAt.to_u64()),
+            raw: None,
+        }
+    }
+}
+
+#[cfg(feature = "qlog")]
 impl ToQlog for frame::StopSending {
     fn to_qlog(&self) -> QuicFrame {
         QuicFrame::StopSending {
@@ -1022,6 +1033,7 @@ impl Frame {
                 raw: None,
             },
             Self::ResetStream(f) => f.to_qlog(),
+            Self::ResetStreamAt(f) => f.to_qlog(),
             Self::StopSending(f) => f.to_qlog(),
             Self::Crypto(f) => f.to_qlog(),
             Self::NewToken(f) => f.to_qlog(),

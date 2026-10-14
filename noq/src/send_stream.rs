@@ -7,7 +7,7 @@ use std::{
 
 use bytes::Bytes;
 use pin_project_lite::pin_project;
-use proto::{ClosedStream, ConnectionError, FinishError, StreamId};
+use proto::{ClosedStream, ConnectionError, FinishError, ResetStreamAtError, StreamId};
 use thiserror::Error;
 use tokio::sync::futures::OwnedNotified;
 
@@ -218,6 +218,37 @@ impl SendStream {
         }
         conn.inner.send_stream(self.stream).reset(error_code)?;
         Ok(())
+    }
+
+    /// Close the send stream immediately, still delivering the first `reliable_size` bytes
+    ///
+    /// No new data can be written after calling this method. Data before `reliable_size` is
+    /// still delivered reliably, and the peer only sees the reset after reading it. Data after
+    /// `reliable_size` is dropped like with [`reset()`](Self::reset), and the peer discards it if
+    /// it was already transmitted. Like [`reset()`](Self::reset), this is not reported by
+    /// [`stopped()`](Self::stopped), even once all reliable data has been acknowledged.
+    ///
+    /// Uses the `RESET_STREAM_AT` frame, see
+    /// <https://datatracker.ietf.org/doc/html/draft-ietf-quic-reliable-stream-reset>. Fails
+    /// without affecting the stream if the peer does not support it, or if `reliable_size` is
+    /// larger than the amount of data written. A `reliable_size` of zero is equivalent to
+    /// [`reset()`](Self::reset).
+    ///
+    /// Also fails if [`finish()`](Self::finish) was previously called and the peer has already
+    /// acknowledged all data, if the stream was already reset, or if the peer stopped the stream.
+    pub fn reset_at(
+        &mut self,
+        error_code: VarInt,
+        reliable_size: u64,
+    ) -> Result<(), ResetStreamAtError> {
+        let mut conn = self.conn.lock_and_wake("SendStream::reset_at");
+        if self.is_0rtt && conn.check_0rtt().is_err() {
+            conn.skip_waking();
+            return Ok(());
+        }
+        conn.inner
+            .send_stream(self.stream)
+            .reset_at(error_code, reliable_size)
     }
 
     /// Set the priority of the send stream

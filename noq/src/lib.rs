@@ -66,10 +66,10 @@ pub use proto::{
     ConnectionIdGenerator, ConnectionStats, DecryptedInitial, Dir, EcnCodepoint, EndpointConfig,
     FourTuple, FrameStats, FrameType, IdleTimeout, InvalidCid, MtuDiscoveryConfig,
     NetworkChangeHint, NoneTokenLog, NoneTokenStore, PathError, PathEvent, PathId, PathStats,
-    PathStatus, ServerConfig, SetPathStatusError, Side, StdSystemTime, StreamId, TimeSource,
-    TokenLog, TokenMemoryCache, TokenReuseError, TokenStore, Transmit, TransportConfig,
-    TransportErrorCode, UdpStats, ValidationTokenConfig, VarInt, VarIntBoundsExceeded, congestion,
-    crypto,
+    PathStatus, ResetStreamAtError, ServerConfig, SetPathStatusError, Side, StdSystemTime,
+    StreamId, TimeSource, TokenLog, TokenMemoryCache, TokenReuseError, TokenStore, Transmit,
+    TransportConfig, TransportErrorCode, UdpStats, ValidationTokenConfig, VarInt,
+    VarIntBoundsExceeded, congestion, crypto,
 };
 #[cfg(feature = "qlog")]
 pub use proto::{QlogConfig, QlogFactory, QlogFileFactory};

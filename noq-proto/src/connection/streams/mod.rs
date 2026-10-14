@@ -19,7 +19,7 @@ pub use recv::{Chunks, ReadError, ReadableError};
 mod send;
 pub(crate) use send::{ByteSlice, BytesArray, Written};
 use send::{BytesSource, Send, SendState};
-pub use send::{FinishError, WriteError};
+pub use send::{FinishError, ResetStreamAtError, WriteError};
 
 mod state;
 #[allow(unreachable_pub)] // fuzzing only
@@ -356,7 +356,7 @@ impl<'a> SendStream<'a> {
             .map(get_or_insert_send(max_send_data))
             .ok_or(ClosedStream { _private: () })?;
 
-        if matches!(stream.state, SendState::ResetSent) {
+        if stream.is_reset() {
             // Redundant reset call
             return Err(ClosedStream { _private: () });
         }
@@ -365,10 +365,55 @@ impl<'a> SendStream<'a> {
         // send. We leave flow control alone because the peer's responsible for issuing additional
         // credit based on the final offset communicated in the RESET_STREAM frame we send.
         self.state.unacked_data -= stream.pending.unacked();
-        stream.reset();
+        stream.reset(error_code);
         self.pending.reset_stream.push((self.id, error_code));
 
         // Don't reopen an already-closed stream we haven't forgotten yet
+        Ok(())
+    }
+
+    /// Abandon transmitting data on a stream, except for the first `reliable_size` bytes
+    ///
+    /// Sends a `RESET_STREAM_AT` frame, see
+    /// <https://datatracker.ietf.org/doc/html/draft-ietf-quic-reliable-stream-reset>. Data written
+    /// before `reliable_size` is still delivered reliably to the peer, which only learns about the
+    /// reset after reading that data. Data written after `reliable_size` may or may not be
+    /// transmitted, and is discarded by the peer.
+    ///
+    /// Fails without changing the stream if the peer does not support `RESET_STREAM_AT`, or if
+    /// `reliable_size` is larger than the amount of data written. A `reliable_size` of zero is
+    /// equivalent to [`Self::reset`].
+    ///
+    /// If the peer stops the stream after this call, the remaining data is abandoned as if
+    /// [`Self::reset`] had been called with the same error code.
+    ///
+    /// # Panics
+    /// - when applied to a receive stream
+    pub fn reset_at(
+        &mut self,
+        error_code: VarInt,
+        reliable_size: u64,
+    ) -> Result<(), ResetStreamAtError> {
+        if !self.state.peer_reset_stream_at {
+            return Err(ResetStreamAtError::NotNegotiated);
+        }
+        let max_send_data = self.state.max_send_data(self.id);
+        let stream = self
+            .state
+            .send
+            .get_mut(&self.id)
+            .map(get_or_insert_send(max_send_data))
+            .ok_or(ResetStreamAtError::ClosedStream)?;
+
+        // Restore the portion of the send window consumed by the data that we aren't about to
+        // send, as in `reset`. The rest is restored as it is acknowledged.
+        let unacked = stream.pending.unacked();
+        stream.reset_at(error_code, reliable_size)?;
+        self.state.unacked_data -= match stream.is_abandoned() {
+            true => unacked,
+            false => unacked - stream.pending.unacked(),
+        };
+        self.pending.reset_stream.push((self.id, error_code));
         Ok(())
     }
 
