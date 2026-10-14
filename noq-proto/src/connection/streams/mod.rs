@@ -521,9 +521,9 @@ impl PendingStreamsQueue {
 
     /// Removes the highest-ranked entry eligible for this path.
     ///
-    /// Includes the Any queue only when `include_any` is true.
-    fn pop(&mut self, path: PathId, include_any: bool) -> Option<PendingStream> {
-        let any = include_any.then(|| self.any.peek()).flatten();
+    /// Includes the [`StreamAffinity::Any`] queue only when `include_affinity_any` is true.
+    fn pop(&mut self, path: PathId, include_affinity_any: bool) -> Option<PendingStream> {
+        let any = include_affinity_any.then(|| self.any.peek()).flatten();
         let sticky = self.sticky.get(&path).and_then(|q| q.peek());
         let pending = if any > sticky {
             self.queue_mut(None).pop()
