@@ -13,6 +13,7 @@ pub(super) struct Send {
     pub(super) state: SendState,
     pub(super) pending: SendBuffer,
     pub(super) priority: i32,
+    pub(super) incremental: bool,
     /// Whether a frame containing a FIN bit must be transmitted.
     ///
     /// Even if we don't have any new data.
@@ -24,12 +25,13 @@ pub(super) struct Send {
 }
 
 impl Send {
-    pub(super) fn new(max_data: VarInt) -> Box<Self> {
+    pub(super) fn new(max_data: VarInt, incremental: bool) -> Box<Self> {
         Box::new(Self {
             max_data: max_data.into(),
             state: SendState::Ready,
             pending: SendBuffer::new(),
             priority: 0,
+            incremental,
             fin_pending: false,
             connection_blocked: false,
             stop_reason: None,
