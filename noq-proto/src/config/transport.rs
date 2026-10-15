@@ -73,6 +73,8 @@ pub struct TransportConfig {
     pub(crate) max_remote_nat_traversal_addresses: Option<NonZeroU8>,
     pub(crate) server_handshake_migration: bool,
 
+    pub(crate) reset_stream_at: bool,
+
     #[cfg(feature = "qlog")]
     pub(crate) qlog_factory: Option<Arc<dyn QlogFactory>>,
 }
@@ -482,6 +484,19 @@ impl TransportConfig {
         self
     }
 
+    /// Whether to advertise support for receiving `RESET_STREAM_AT` frames
+    ///
+    /// `RESET_STREAM_AT` resets a stream while still guaranteeing delivery of a prefix of its
+    /// data, see <https://datatracker.ietf.org/doc/html/draft-ietf-quic-reliable-stream-reset>.
+    /// The peer can only use [`SendStream::reset_at`](crate::SendStream::reset_at) if this
+    /// endpoint advertises support, and vice versa.
+    ///
+    /// Defaults to `true`.
+    pub fn reset_stream_at(&mut self, value: bool) -> &mut Self {
+        self.reset_stream_at = value;
+        self
+    }
+
     /// Sets whether the server is allowed to migrate once during the handshake.
     ///
     /// **Enabling this is not RFC9000 compliant.**
@@ -621,6 +636,8 @@ impl Default for TransportConfig {
             max_remote_nat_traversal_addresses: None,
             server_handshake_migration: false,
 
+            reset_stream_at: true,
+
             #[cfg(feature = "qlog")]
             qlog_factory: None,
         }
@@ -664,6 +681,7 @@ impl fmt::Debug for TransportConfig {
             default_path_keep_alive_interval,
             max_remote_nat_traversal_addresses,
             server_handshake_migration,
+            reset_stream_at,
             #[cfg(feature = "qlog")]
             qlog_factory,
         } = self;
@@ -716,7 +734,8 @@ impl fmt::Debug for TransportConfig {
                 "max_remote_nat_traversal_addresses",
                 max_remote_nat_traversal_addresses,
             )
-            .field("server_handshake_migration", server_handshake_migration);
+            .field("server_handshake_migration", server_handshake_migration)
+            .field("reset_stream_at", reset_stream_at);
         #[cfg(feature = "qlog")]
         s.field("qlog_factory", &qlog_factory.is_some());
 

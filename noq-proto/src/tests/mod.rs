@@ -58,6 +58,7 @@ mod multipath;
 mod proptests;
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 mod random_interaction;
+mod reset_stream_at;
 mod token;
 
 #[cfg(all(target_family = "wasm", target_os = "unknown"))]

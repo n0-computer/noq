@@ -30,6 +30,7 @@ fn encode_frame<B: BufMut>(frame: &Frame, buf: &mut B) {
             PathAck::encoder(pa.path_id, pa.delay, &pa.ranges, pa.ecn.as_ref()).encode(buf)
         }
         Frame::ResetStream(rs) => rs.encode(buf),
+        Frame::ResetStreamAt(rs) => rs.encode(buf),
         Frame::StopSending(ss) => ss.encode(buf),
         Frame::Crypto(c) => c.encode(buf),
         Frame::NewToken(nt) => nt.encode(buf),

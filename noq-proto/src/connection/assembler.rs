@@ -222,6 +222,47 @@ impl Assembler {
         self.buffered = 0;
         self.allocated = 0;
     }
+
+    /// Discard buffered data at and beyond offset `end`
+    pub(super) fn truncate(&mut self, end: u64) {
+        let mut chunks = mem::take(&mut self.data).into_vec();
+        chunks.retain_mut(|chunk| {
+            if chunk.offset >= end {
+                return false;
+            }
+            chunk
+                .bytes
+                .truncate((end - chunk.offset).min(chunk.bytes.len() as u64) as usize);
+            true
+        });
+        self.buffered = chunks.iter().map(|chunk| chunk.bytes.len()).sum();
+        self.allocated = chunks.iter().map(|chunk| chunk.allocation_size).sum();
+        // Rebuild the heap, since truncation may change the order of chunks
+        self.data = BinaryHeap::from(chunks);
+    }
+
+    /// Number of bytes before offset `end` that have not yet been read by the application
+    ///
+    /// Includes data that hasn't been received yet.
+    pub(super) fn unread_before(&self, end: u64) -> u64 {
+        match self.state {
+            State::Ordered => end.saturating_sub(self.bytes_read),
+            State::Unordered { ref recvd } => {
+                // Unordered mode discards duplicates, so neither of these double count
+                let received = recvd
+                    .iter_range(0..end)
+                    .map(|range| range.end - range.start)
+                    .sum::<u64>();
+                let buffered = self
+                    .data
+                    .iter()
+                    .filter(|chunk| chunk.offset < end)
+                    .map(|chunk| (chunk.offset + chunk.bytes.len() as u64).min(end) - chunk.offset)
+                    .sum::<u64>();
+                end - (received - buffered)
+            }
+        }
+    }
 }
 
 /// A chunk of data from the receive stream
@@ -664,6 +705,44 @@ mod test {
         );
         x.ensure_ordering(false).unwrap();
         assert_eq!(x.read(1, false), None); // should be None, byte 0 already returned
+    }
+
+    #[test]
+    fn truncate_ordered() {
+        let mut x = Assembler::new();
+        x.insert(0, Bytes::from_static(b"123"), 3);
+        x.insert(3, Bytes::from_static(b"456"), 3);
+        x.insert(8, Bytes::from_static(b"9"), 1);
+        assert_matches!(next(&mut x, 2), Some(ref y) if &y[..] == b"12");
+        assert_eq!(x.unread_before(5), 3);
+        x.truncate(5);
+        assert_eq!(x.unread_before(5), 3);
+        assert_matches!(next(&mut x, 32), Some(ref y) if &y[..] == b"3");
+        assert_matches!(next(&mut x, 32), Some(ref y) if &y[..] == b"45");
+        assert_matches!(next(&mut x, 32), None);
+        assert_eq!(x.unread_before(5), 0);
+    }
+
+    #[test]
+    fn truncate_unordered() {
+        let mut x = Assembler::new();
+        x.ensure_ordering(false).unwrap();
+        x.insert(3, Bytes::from_static(b"45"), 2);
+        x.insert(5, Bytes::from_static(b"6"), 1);
+        x.insert(8, Bytes::from_static(b"9"), 1);
+        assert_eq!(next_unordered(&mut x).offset, 3);
+        // Bytes 0..3 and 5 are unread
+        assert_eq!(x.unread_before(6), 4);
+        x.truncate(6);
+        assert_eq!(x.unread_before(6), 4);
+        x.insert(0, Bytes::from_static(b"123"), 3);
+        assert_eq!(x.unread_before(6), 4);
+        assert_eq!(next_unordered(&mut x).bytes, &b"123"[..]);
+        assert_eq!(x.unread_before(6), 1);
+        assert_eq!(next_unordered(&mut x).bytes, &b"6"[..]);
+        assert_eq!(x.unread_before(6), 0);
+        // Byte 8 was discarded
+        assert_eq!(x.read(usize::MAX, false), None);
     }
 
     fn next_unordered(x: &mut Assembler) -> Chunk {

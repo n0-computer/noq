@@ -127,6 +127,30 @@ impl SendBufferData {
         }
     }
 
+    /// Discard data from the end of the buffer, keeping only data before `end`
+    ///
+    /// `end` is clamped to [`Self::range`].
+    fn truncate(&mut self, end: u64) {
+        let mut keep = (end.clamp(self.offset, self.range().end) - self.offset) as usize;
+        self.len = keep;
+        let mut kept_segments = 0;
+        for segment in self.segments.iter_mut() {
+            if keep == 0 {
+                break;
+            }
+            kept_segments += 1;
+            if segment.len() >= keep {
+                segment.truncate(keep);
+                keep = 0;
+            } else {
+                keep -= segment.len();
+            }
+        }
+        self.segments.truncate(kept_segments);
+        // the rest has to be in the last segment
+        self.last_segment.truncate(keep);
+    }
+
     /// Iterator over all segments in order
     ///
     /// Concatenates `segments` and `last_segment` so they can be handled uniformly
@@ -320,6 +344,18 @@ impl SendBuffer {
         self.retransmits.insert(range);
     }
 
+    /// Discard data at and beyond `end`, so it is never (re)transmitted
+    ///
+    /// Data up to [`Self::fully_acked_offset`] has already been discarded, so the buffer is never
+    /// truncated below that. Afterwards, [`Self::offset`] is the new end of the buffer.
+    pub(super) fn truncate(&mut self, end: u64) {
+        let end = end.max(self.fully_acked_offset());
+        self.data.truncate(end);
+        self.unsent = self.unsent.min(end);
+        self.acks.remove(end..u64::MAX);
+        self.retransmits.remove(end..u64::MAX);
+    }
+
     pub(super) fn retransmit_all_for_0rtt(&mut self) {
         // check that we still got all data - we didn't get any acks.
         debug_assert_eq!(self.fully_acked_offset(), 0);
@@ -358,6 +394,46 @@ impl SendBuffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec;
+
+    #[test]
+    fn truncate() {
+        let mut buf = SendBuffer::new();
+        let small = b"Hello, world!";
+        let large = vec![0xab; MAX_COMBINE + 1];
+        // one combined segment, one large segment, and the last segment
+        buf.write(Bytes::from_static(small));
+        buf.write(Bytes::from(large.clone()));
+        buf.write(Bytes::from_static(small));
+        let total = (2 * small.len() + large.len()) as u64;
+        assert_eq!(buf.offset(), total);
+
+        // Send everything, lose some of it and ack the start
+        assert_eq!(buf.poll_transmit(usize::MAX).0, 0..total);
+        buf.retransmit(4..total);
+        buf.ack(0..2);
+
+        // Truncate in the middle of the large segment
+        let end = small.len() as u64 + 10;
+        buf.truncate(end);
+        assert_eq!(buf.offset(), end);
+        assert_eq!(buf.unacked(), end - 2);
+        let mut data = Vec::new();
+        buf.get_into(2..end, &mut data);
+        let mut expected = small[2..].to_vec();
+        expected.extend_from_slice(&large[..10]);
+        assert_eq!(data, expected);
+
+        // Only the lost data below the truncation point is retransmitted
+        assert_eq!(buf.poll_transmit(usize::MAX).0, 4..end);
+        assert!(!buf.has_unsent_data());
+
+        // Can't truncate below what has already been fully acknowledged
+        buf.truncate(0);
+        assert_eq!(buf.offset(), 2);
+        assert!(buf.is_fully_acked());
+        assert!(!buf.has_unsent_data());
+    }
 
     #[test]
     fn fragment_with_length() {

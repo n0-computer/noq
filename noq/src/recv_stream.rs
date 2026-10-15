@@ -334,6 +334,9 @@ impl RecvStream {
     /// [`finish()`](crate::SendStream::finish)ed by the peer and all data has been received, after
     /// which it is no longer meaningful for the stream to be reset.
     ///
+    /// If the peer reset the stream with [`reset_at()`](crate::SendStream::reset_at), the reset is
+    /// only reported once the data the peer still delivers has been read.
+    ///
     /// This operation is cancel-safe.
     pub async fn received_reset(&mut self) -> Result<Option<VarInt>, ResetError> {
         poll_fn(|cx| {
@@ -510,6 +513,9 @@ impl UnorderedRecvStream {
     /// when the stream was previously [`stop()`](Self::stop)ed, or when the stream was
     /// [`finish()`](crate::SendStream::finish)ed by the peer and all data has been received, after
     /// which it is no longer meaningful for the stream to be reset.
+    ///
+    /// If the peer reset the stream with [`reset_at()`](crate::SendStream::reset_at), the reset is
+    /// only reported once the data the peer still delivers has been read.
     ///
     /// This operation is cancel-safe.
     pub async fn received_reset(&mut self) -> Result<Option<VarInt>, ResetError> {

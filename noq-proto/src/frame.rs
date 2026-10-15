@@ -135,6 +135,9 @@ pub enum FrameType {
     ReachOutAtIpv6,
     #[assoc(to_u64 = 0x3d7f94)]
     RemoveAddress,
+    // Reliable stream reset
+    #[assoc(to_u64 = 0x24)]
+    ResetStreamAt,
 }
 
 /// Encounter a frame ID that was not valid.
@@ -207,6 +210,7 @@ pub(super) enum EncodableFrame<'a> {
     PathsBlocked(PathsBlocked),
     PathCidsBlocked(PathCidsBlocked),
     ResetStream(ResetStream),
+    ResetStreamAt(ResetStreamAt),
     StopSending(StopSending),
     NewConnectionId(NewConnectionId),
     RetireConnectionId(RetireConnectionId),
@@ -242,6 +246,7 @@ impl<'a> EncodableFrame<'a> {
             | EncodableFrame::PathsBlocked(_)
             | EncodableFrame::PathCidsBlocked(_)
             | EncodableFrame::ResetStream(_)
+            | EncodableFrame::ResetStreamAt(_)
             | EncodableFrame::StopSending(_)
             | EncodableFrame::NewConnectionId(_)
             | EncodableFrame::RetireConnectionId(_)
@@ -434,6 +439,7 @@ pub(crate) enum Frame {
     Ack(Ack),
     PathAck(PathAck),
     ResetStream(ResetStream),
+    ResetStreamAt(ResetStreamAt),
     StopSending(StopSending),
     Crypto(Crypto),
     NewToken(NewToken),
@@ -473,6 +479,7 @@ impl Frame {
         match &self {
             Padding => FrameType::Padding,
             ResetStream(_) => FrameType::ResetStream,
+            ResetStreamAt(_) => FrameType::ResetStreamAt,
             Close(self::Close::Connection(_)) => FrameType::ConnectionClose,
             Close(self::Close::Application(_)) => FrameType::ConnectionClose,
             MaxData(_) => FrameType::MaxData,
@@ -1541,6 +1548,18 @@ impl Iter {
                 error_code: self.bytes.get()?,
                 final_offset: self.bytes.get()?,
             }),
+            FrameType::ResetStreamAt => {
+                let frame = ResetStreamAt {
+                    id: self.bytes.get()?,
+                    error_code: self.bytes.get()?,
+                    final_offset: self.bytes.get()?,
+                    reliable_size: self.bytes.get()?,
+                };
+                if frame.reliable_size > frame.final_offset {
+                    return Err(IterErr::Malformed);
+                }
+                Frame::ResetStreamAt(frame)
+            }
             FrameType::ConnectionClose => Frame::Close(Close::Connection(ConnectionClose {
                 error_code: self.bytes.get()?,
                 frame_type: self.bytes.get()?,
@@ -1844,6 +1863,64 @@ impl Encodable for ResetStream {
         out.write(self.id); // <= 8 bytes
         out.write(self.error_code); // <= 8 bytes
         out.write(self.final_offset); // <= 8 bytes
+    }
+}
+
+/// RESET_STREAM_AT frame
+///
+/// Like [`ResetStream`], but the receiver is still owed the first `reliable_size` bytes of the
+/// stream. See <https://datatracker.ietf.org/doc/html/draft-ietf-quic-reliable-stream-reset>.
+#[allow(unreachable_pub)] // fuzzing only
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[derive(Debug, Copy, Clone, derive_more::Display)]
+#[display("RESET_STREAM_AT id: {id} reliable_size: {reliable_size}")]
+pub struct ResetStreamAt {
+    pub(crate) id: StreamId,
+    pub(crate) error_code: VarInt,
+    pub(crate) final_offset: VarInt,
+    pub(crate) reliable_size: VarInt,
+}
+
+impl ResetStreamAt {
+    const fn get_type(&self) -> FrameType {
+        FrameType::ResetStreamAt
+    }
+}
+
+impl FrameStruct for ResetStreamAt {
+    const SIZE_BOUND: usize = 1 + 8 + 8 + 8 + 8;
+}
+
+impl Encodable for ResetStreamAt {
+    fn encode<W: BufMut>(&self, out: &mut W) {
+        out.write(FrameType::ResetStreamAt); // 1 byte
+        out.write(self.id); // <= 8 bytes
+        out.write(self.error_code); // <= 8 bytes
+        out.write(self.final_offset); // <= 8 bytes
+        out.write(self.reliable_size); // <= 8 bytes
+    }
+}
+
+#[cfg(test)]
+impl proptest::arbitrary::Arbitrary for ResetStreamAt {
+    type Parameters = ();
+    type Strategy = proptest::strategy::BoxedStrategy<Self>;
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        use proptest::prelude::*;
+        (
+            any::<StreamId>(),
+            any::<VarInt>(),
+            varint_u64(),
+            varint_u64(),
+        )
+            .prop_map(|(id, error_code, a, b)| Self {
+                id,
+                error_code,
+                final_offset: VarInt::from_u64(a.max(b)).unwrap(),
+                reliable_size: VarInt::from_u64(a.min(b)).unwrap(),
+            })
+            .boxed()
     }
 }
 
