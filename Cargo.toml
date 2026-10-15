@@ -42,7 +42,7 @@ rand = "0.10"
 rcgen = "0.14"
 ring = "0.17"
 rustc-hash = "2"
-rustls = { version = "0.23.33", default-features = false, features = ["std"] }
+rustls = { version = "0.23.46", default-features = false, features = ["std"] }
 rustls-pki-types = "1.7"
 rustls-platform-verifier = "0.7"
 serde = { version = "1.0", features = ["derive"] }
