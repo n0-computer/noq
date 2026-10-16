@@ -517,12 +517,12 @@ impl PendingStreamsQueue {
         // even after being handled, as in that case they are removed from the `BinaryHeap`,
         // handled, and then immediately reinserted.
         self.recency -= 1;
-        let recency = self.recency;
-        self.queue_mut(sticky).push(PendingStream {
+        let pending = PendingStream {
             priority,
-            recency,
+            recency: self.recency,
             id,
-        });
+        };
+        self.queue_mut(sticky).push(pending);
     }
 
     /// Removes the highest-ranked entry eligible for this path.
@@ -541,7 +541,7 @@ impl PendingStreamsQueue {
         Some(pending)
     }
 
-    /// Moves a queued stream to the destination bucket, preserving priority and recency.
+    /// Moves a queued stream to the destination queue, preserving priority and recency.
     ///
     /// Does nothing if the stream is not queued.
     fn move_pending(&mut self, id: StreamId, new_affinity: Option<PathId>) {
@@ -607,6 +607,9 @@ impl PendingStreamsQueue {
     }
 }
 
+/// Helper enum for a mutable reference to a specific queue in the [`PendingStreamsQueue`].
+///
+/// This helper ensures proper cleanup of empty sticky queues in its drop implementation.
 enum PendingQueueMut<'a> {
     Any(&'a mut BinaryHeap<PendingStream>),
     // The entry is present until Drop takes ownership to remove an empty bucket.

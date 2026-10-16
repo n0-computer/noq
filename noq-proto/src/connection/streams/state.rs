@@ -525,13 +525,13 @@ impl StreamsState {
         builder: &mut PacketBuilder<'a, 'b>,
         stats: &mut FrameStats,
         path: PathId,
-        status_allows_data: bool,
+        include_affinity_any: bool,
     ) {
         while builder.frame_space_remaining() > frame::Stream::SIZE_BOUND {
             // Pop the stream of the highest priority that currently has pending data. If
             // the stream still has some pending data left after writing, it will be
             // reinserted, otherwise not
-            let Some(pending) = self.pending.pop(path, status_allows_data) else {
+            let Some(pending) = self.pending.pop(path, include_affinity_any) else {
                 break;
             };
 
