@@ -2,7 +2,10 @@ use identity_hash::{IdentityHashable, IntMap};
 
 use crate::{
     Instant,
-    connection::qlog::{QlogSink, QlogSinkWithTime},
+    connection::{
+        paths::PathIdKey,
+        qlog::{QlogSink, QlogSinkWithTime},
+    },
 };
 
 use super::PathId;
@@ -81,18 +84,6 @@ impl PathTimer {
         Self::MaxAckDelay,
         Self::PathDrained,
     ];
-}
-
-/// Newtype around [`PathId`] that implements [`IdentityHashable`].
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Default)]
-struct PathIdKey(PathId);
-
-impl IdentityHashable for PathIdKey {}
-
-impl std::hash::Hash for PathIdKey {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        state.write_u32(self.0.0);
-    }
 }
 
 /// Keeps track of the nearest timeout for each `Timer`

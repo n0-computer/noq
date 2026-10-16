@@ -5,14 +5,17 @@ use std::{
 };
 
 use bytes::Bytes;
-use rustc_hash::FxHashMap;
+use identity_hash::IntMap;
 use thiserror::Error;
 use tracing::trace;
 
 use super::spaces::Retransmits;
 use crate::{
-    Dir, PathId, StreamId, VarInt,
-    connection::streams::state::{StreamRecv, get_or_insert_recv, get_or_insert_send},
+    Dir, PathId, StreamId, StreamIdKey, VarInt,
+    connection::{
+        paths::PathIdKey,
+        streams::state::{StreamRecv, get_or_insert_recv, get_or_insert_send},
+    },
     frame,
 };
 
@@ -472,9 +475,9 @@ pub enum StreamAffinity {
 /// Pending streams partitioned by affinity, with shared priority and fairness ordering.
 struct PendingStreamsQueue {
     any: BinaryHeap<PendingStream>,
-    sticky: FxHashMap<PathId, BinaryHeap<PendingStream>>,
+    sticky: IntMap<PathIdKey, BinaryHeap<PendingStream>>,
     /// Used as a sort of "reverse index" to find in which queue a stream is currently pending.
-    affinities: FxHashMap<StreamId, Option<PathId>>,
+    affinities: IntMap<StreamIdKey, Option<PathId>>,
     /// A monotonically decreasing counter, used to implement round-robin scheduling for streams of
     /// the same priority. Underflowing is not a practical concern, as it is initialized to
     /// u64::MAX and only decremented by 1 in `push_pending`
@@ -485,8 +488,8 @@ impl PendingStreamsQueue {
     fn new() -> Self {
         Self {
             any: BinaryHeap::new(),
-            sticky: FxHashMap::default(),
-            affinities: FxHashMap::default(),
+            sticky: IntMap::default(),
+            affinities: IntMap::default(),
             recency: u64::MAX,
         }
     }
@@ -502,7 +505,7 @@ impl PendingStreamsQueue {
         };
         // Empty writes and late ACKs can leave an entry queued without pending work.
         // Re-enqueueing that stream keeps its existing turn rather than duplicating it.
-        match self.affinities.entry(id) {
+        match self.affinities.entry(StreamIdKey(id)) {
             hash_map::Entry::Occupied(_) => return,
             hash_map::Entry::Vacant(entry) => {
                 entry.insert(sticky);
@@ -527,14 +530,14 @@ impl PendingStreamsQueue {
     /// Includes the [`StreamAffinity::Any`] queue only when `include_affinity_any` is true.
     fn pop(&mut self, path: PathId, include_affinity_any: bool) -> Option<PendingStream> {
         let any = include_affinity_any.then(|| self.any.peek()).flatten();
-        let sticky = self.sticky.get(&path).and_then(|q| q.peek());
+        let sticky = self.sticky.get(&PathIdKey(path)).and_then(|q| q.peek());
         let pending = if any > sticky {
             self.queue_mut(None).pop()
         } else {
             sticky?; // skip looking at the sticky map, if none exists.
             self.queue_mut(Some(path)).pop()
         }?;
-        self.affinities.remove(&pending.id);
+        self.affinities.remove(&StreamIdKey(pending.id));
         Some(pending)
     }
 
@@ -542,7 +545,7 @@ impl PendingStreamsQueue {
     ///
     /// Does nothing if the stream is not queued.
     fn move_pending(&mut self, id: StreamId, new_affinity: Option<PathId>) {
-        let Some(affinity) = self.affinities.get_mut(&id) else {
+        let Some(affinity) = self.affinities.get_mut(&StreamIdKey(id)) else {
             return;
         };
         let old_affinity = std::mem::replace(affinity, new_affinity);
@@ -562,7 +565,7 @@ impl PendingStreamsQueue {
         match sticky {
             None => PendingQueueMut::Any(&mut self.any),
             Some(path) => {
-                let entry = match self.sticky.entry(path) {
+                let entry = match self.sticky.entry(PathIdKey(path)) {
                     hash_map::Entry::Occupied(entry) => entry,
                     hash_map::Entry::Vacant(entry) => entry.insert_entry(BinaryHeap::new()),
                 };
@@ -572,7 +575,7 @@ impl PendingStreamsQueue {
     }
 
     fn remove(&mut self, id: StreamId) {
-        let Some(sticky) = self.affinities.remove(&id) else {
+        let Some(sticky) = self.affinities.remove(&StreamIdKey(id)) else {
             return;
         };
         // Abandoned-path queues might never be selected again.
@@ -590,7 +593,12 @@ impl PendingStreamsQueue {
             .then_some(&self.any)
             .into_iter()
             .flat_map(|q| q.iter())
-            .chain(self.sticky.get(&path).into_iter().flat_map(|q| q.iter()))
+            .chain(
+                self.sticky
+                    .get(&PathIdKey(path))
+                    .into_iter()
+                    .flat_map(|q| q.iter()),
+            )
     }
 
     #[cfg(test)]
@@ -602,7 +610,7 @@ impl PendingStreamsQueue {
 enum PendingQueueMut<'a> {
     Any(&'a mut BinaryHeap<PendingStream>),
     // The entry is present until Drop takes ownership to remove an empty bucket.
-    Sticky(Option<hash_map::OccupiedEntry<'a, PathId, BinaryHeap<PendingStream>>>),
+    Sticky(Option<hash_map::OccupiedEntry<'a, PathIdKey, BinaryHeap<PendingStream>>>),
 }
 
 impl Deref for PendingQueueMut<'_> {
