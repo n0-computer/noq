@@ -1,6 +1,6 @@
 use std::{cmp, net::SocketAddr};
 
-use identity_hash::IntMap;
+use identity_hash::{IdentityHashable, IntMap};
 use thiserror::Error;
 use tracing::{debug, trace};
 
@@ -95,6 +95,18 @@ impl std::fmt::Display for PathId {
 impl<T: Into<u32>> From<T> for PathId {
     fn from(source: T) -> Self {
         Self(source.into())
+    }
+}
+
+/// Newtype around [`PathId`] that implements [`IdentityHashable`].
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Default)]
+pub(crate) struct PathIdKey(pub(crate) PathId);
+
+impl IdentityHashable for PathIdKey {}
+
+impl std::hash::Hash for PathIdKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        state.write_u32(self.0.0);
     }
 }
 

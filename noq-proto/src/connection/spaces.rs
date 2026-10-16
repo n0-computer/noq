@@ -154,6 +154,7 @@ impl PacketSpace {
             acks,
             close: false,
             space_specific,
+            stream_data: false,
             other,
         }
     }
@@ -1023,6 +1024,8 @@ pub(super) struct SendableFrames {
     /// These are ack-eliciting. Some frames are scheduled per path, e.g. PING,
     /// IMMEDIATE_ACK, PATH_CHALLENGE or PATH_RESPONSE.
     pub(super) space_specific: bool,
+    /// Whether there are STREAM frames eligible for this path under their stream affinity.
+    pub(super) stream_data: bool,
     /// Whether there are any other frames to send, these are ack-eliciting.
     pub(super) other: bool,
 }
@@ -1034,6 +1037,7 @@ impl SendableFrames {
             acks: false,
             close: false,
             space_specific: false,
+            stream_data: false,
             other: false,
         }
     }
@@ -1044,13 +1048,14 @@ impl SendableFrames {
             acks: _,
             close,
             space_specific,
+            stream_data,
             other,
         } = *self;
         if close {
             // No ack-eliciting frames are included with a CONNECTION_CLOSE, only acks.
             return false;
         }
-        space_specific || other
+        space_specific || stream_data || other
     }
 
     /// Whether no data is sendable.
@@ -1059,9 +1064,10 @@ impl SendableFrames {
             acks,
             close,
             space_specific,
+            stream_data,
             other,
         } = *self;
-        !acks && !close && !space_specific && !other
+        !acks && !close && !space_specific && !stream_data && !other
     }
 }
 
@@ -1071,12 +1077,14 @@ impl ::std::ops::BitOrAssign for SendableFrames {
             acks,
             close,
             space_specific,
+            stream_data,
             other,
         } = rhs;
 
         self.acks |= acks;
         self.close |= close;
         self.space_specific |= space_specific;
+        self.stream_data |= stream_data;
         self.other |= other;
     }
 }

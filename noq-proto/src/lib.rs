@@ -33,6 +33,7 @@ mod tests;
 pub mod transport_parameters;
 mod varint;
 
+use identity_hash::IdentityHashable;
 pub use varint::{VarInt, VarIntBoundsExceeded};
 
 #[cfg(feature = "bloom")]
@@ -46,7 +47,7 @@ pub use crate::connection::{
     ConnectionStats, Datagrams, Event, FinishError, FrameStats, MultipathNotNegotiated,
     NetworkChangeHint, PathAbandonReason, PathError, PathEvent, PathId, PathStats, PathStatus,
     ReadError, ReadableError, RecvStream, RttEstimator, SendDatagramError, SendStream,
-    SetPathStatusError, ShouldTransmit, StreamEvent, Streams, UdpStats, WriteError,
+    SetPathStatusError, ShouldTransmit, StreamAffinity, StreamEvent, Streams, UdpStats, WriteError,
 };
 #[cfg(test)]
 use test_strategy::Arbitrary;
@@ -324,6 +325,18 @@ impl Encodable for StreamId {
 impl<'arbitrary> arbitrary::Arbitrary<'arbitrary> for StreamId {
     fn arbitrary(u: &mut arbitrary::Unstructured<'arbitrary>) -> arbitrary::Result<Self> {
         Ok(VarInt::arbitrary(u)?.into())
+    }
+}
+
+/// Newtype around [`StreamId`] that implements [`IdentityHashable`].
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+struct StreamIdKey(StreamId);
+
+impl IdentityHashable for StreamIdKey {}
+
+impl std::hash::Hash for StreamIdKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        state.write_u64(self.0.0);
     }
 }
 
