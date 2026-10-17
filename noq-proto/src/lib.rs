@@ -39,6 +39,8 @@ mod cid_queue;
 pub mod coding;
 mod constant_time;
 mod range_set;
+#[cfg(test)]
+mod test_util;
 #[cfg(all(test, feature = "rustls", any(feature = "aws-lc-rs", feature = "ring")))]
 mod tests;
 pub mod transport_parameters;

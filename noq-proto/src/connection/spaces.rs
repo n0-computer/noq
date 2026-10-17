@@ -1407,11 +1407,10 @@ const MAX_ACK_BLOCKS: usize = 64;
 mod test {
     use alloc::vec;
 
-    use rand::Rng;
     use rand::seq::SliceRandom;
 
     use crate::token::ResetToken;
-    use crate::{ConnectionIdGenerator, RandomConnectionIdGenerator};
+    use crate::{ConnectionIdGenerator, RESET_TOKEN_SIZE, RandomConnectionIdGenerator};
 
     use super::*;
 
@@ -1609,36 +1608,25 @@ mod test {
 
     #[test]
     fn pending_new_cids() {
-        #[cfg(all(feature = "aws-lc-rs", not(feature = "ring")))]
-        use aws_lc_rs::hmac;
-        #[cfg(feature = "ring")]
-        use ring::hmac;
-
         let mut cid_generator = RandomConnectionIdGenerator::new(8);
-        let mut reset_key = [0; 64];
-        rand::rng().fill_bytes(&mut reset_key);
-        let hmac = hmac::Key::new(hmac::HMAC_SHA256, &reset_key);
 
-        let cid_a = cid_generator.generate_cid();
         let a = IssuedCid {
             path_id: PathId::ZERO,
             sequence: 1,
-            id: cid_a,
-            reset_token: ResetToken::new(&hmac, cid_a),
+            id: cid_generator.generate_cid(),
+            reset_token: ResetToken::from(rand::rng().random::<[u8; RESET_TOKEN_SIZE]>()),
         };
-        let cid_b = cid_generator.generate_cid();
         let b = IssuedCid {
             path_id: PathId::ZERO,
             sequence: 2,
-            id: cid_b,
-            reset_token: ResetToken::new(&hmac, cid_b),
+            id: cid_generator.generate_cid(),
+            reset_token: ResetToken::from(rand::rng().random::<[u8; RESET_TOKEN_SIZE]>()),
         };
-        let cid_c = cid_generator.generate_cid();
         let c = IssuedCid {
             path_id: PathId(1),
             sequence: 1,
-            id: cid_c,
-            reset_token: ResetToken::new(&hmac, cid_c),
+            id: cid_generator.generate_cid(),
+            reset_token: ResetToken::from(rand::rng().random::<[u8; RESET_TOKEN_SIZE]>()),
         };
 
         let mut pending_cids = PendingNewCids::default();

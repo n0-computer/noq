@@ -334,7 +334,7 @@ impl TransportConfig {
     ///
     /// By default, packet numbers are occasionally skipped to ensure peers aren't ACKing packets
     /// before they see them.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "rustls", any(feature = "aws-lc-rs", feature = "ring")))]
     pub(crate) fn deterministic_packet_numbers(&mut self, enabled: bool) -> &mut Self {
         self.deterministic_packet_numbers = enabled;
         self
@@ -351,7 +351,7 @@ impl TransportConfig {
     /// applies.
     ///
     /// Defaults to `None`, i.e. the random production behavior.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "rustls", any(feature = "aws-lc-rs", feature = "ring")))]
     pub(crate) fn initial_key_phase_size(&mut self, packets: Option<u64>) -> &mut Self {
         self.initial_key_phase_size = packets;
         self

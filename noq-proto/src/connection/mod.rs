@@ -471,7 +471,7 @@ impl Connection {
     ///
     /// `None` covers the timer never having been armed, having fired, and having been
     /// cancelled.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "rustls", any(feature = "aws-lc-rs", feature = "ring")))]
     pub(crate) fn timer_pending(&self, timer: Timer) -> Option<Instant> {
         self.timers.get(timer)
     }
@@ -6813,7 +6813,7 @@ impl Connection {
     }
 
     /// Decodes a packet, returning its decrypted payload, so it can be inspected in tests
-    #[cfg(test)]
+    #[cfg(all(test, feature = "rustls", any(feature = "aws-lc-rs", feature = "ring")))]
     pub(crate) fn decode_packet(&self, event: &ConnectionEvent) -> Option<Vec<u8>> {
         let ConnectionEventInner::Datagram(DatagramConnectionEvent {
             path_id,
@@ -6842,21 +6842,21 @@ impl Connection {
     }
 
     /// How many 1-RTT packets may still be sent before the keys are updated
-    #[cfg(test)]
+    #[cfg(all(test, feature = "rustls", any(feature = "aws-lc-rs", feature = "ring")))]
     pub(crate) fn key_phase_size(&self) -> u64 {
         self.crypto_state.key_phase_size
     }
 
     /// The number of bytes of packets containing retransmittable frames that have not been
     /// acknowledged or declared lost.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "rustls", any(feature = "aws-lc-rs", feature = "ring")))]
     pub(crate) fn bytes_in_flight(&self) -> u64 {
         // TODO(@divma): consider including for multipath?
         self.path_data(PathId::ZERO).in_flight.bytes
     }
 
     /// Number of bytes worth of non-ack-only packets that may be sent
-    #[cfg(test)]
+    #[cfg(all(test, feature = "rustls", any(feature = "aws-lc-rs", feature = "ring")))]
     pub(crate) fn congestion_window(&self) -> u64 {
         let path = self.path_data(PathId::ZERO);
         path.congestion
@@ -6865,7 +6865,7 @@ impl Connection {
     }
 
     /// Whether no timers but keepalive, idle, rtt, pushnewcid, and key discard are running
-    #[cfg(test)]
+    #[cfg(all(test, feature = "rustls", any(feature = "aws-lc-rs", feature = "ring")))]
     pub(crate) fn is_idle(&self) -> bool {
         let current_timers = self.timers.values();
         current_timers
@@ -6889,18 +6889,18 @@ impl Connection {
     }
 
     /// Whether explicit congestion notification is in use on outgoing packets.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "rustls", any(feature = "aws-lc-rs", feature = "ring")))]
     pub(crate) fn using_ecn(&self) -> bool {
         self.path_data(PathId::ZERO).sending_ecn
     }
 
     /// The number of received bytes in the current path
-    #[cfg(test)]
+    #[cfg(all(test, feature = "rustls", any(feature = "aws-lc-rs", feature = "ring")))]
     pub(crate) fn total_recvd(&self) -> u64 {
         self.path_data(PathId::ZERO).total_recvd
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "rustls", any(feature = "aws-lc-rs", feature = "ring")))]
     pub(crate) fn active_local_cid_seq(&self) -> (u64, u64) {
         self.local_cid_state
             .get(&PathId::ZERO)
@@ -6908,7 +6908,7 @@ impl Connection {
             .active_seq()
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "rustls", any(feature = "aws-lc-rs", feature = "ring")))]
     #[track_caller]
     pub(crate) fn active_local_path_cid_seq(&self, path_id: u32) -> (u64, u64) {
         self.local_cid_state
@@ -6919,7 +6919,7 @@ impl Connection {
 
     /// Instruct the peer to replace previously issued CIDs by sending a NEW_CONNECTION_ID frame
     /// with updated `retire_prior_to` field set to `v`
-    #[cfg(test)]
+    #[cfg(all(test, feature = "rustls", any(feature = "aws-lc-rs", feature = "ring")))]
     pub(crate) fn rotate_local_cid(&mut self, v: u64, now: Instant) {
         let n = self
             .local_cid_state
@@ -6932,19 +6932,19 @@ impl Connection {
     }
 
     /// Check the current active remote CID sequence for `PathId::ZERO`
-    #[cfg(test)]
+    #[cfg(all(test, feature = "rustls", any(feature = "aws-lc-rs", feature = "ring")))]
     pub(crate) fn active_remote_cid_seq(&self) -> u64 {
         self.remote_cids.get(&PathId::ZERO).unwrap().active_seq()
     }
 
     /// Returns the detected maximum udp payload size for the current path
-    #[cfg(test)]
+    #[cfg(all(test, feature = "rustls", any(feature = "aws-lc-rs", feature = "ring")))]
     pub(crate) fn path_mtu(&self, path_id: PathId) -> u16 {
         self.path_data(path_id).current_mtu()
     }
 
     /// Triggers path validation on all paths
-    #[cfg(test)]
+    #[cfg(all(test, feature = "rustls", any(feature = "aws-lc-rs", feature = "ring")))]
     pub(crate) fn trigger_path_validation(&mut self) {
         for path in self.paths.values_mut() {
             path.data.pending_challenge = true;

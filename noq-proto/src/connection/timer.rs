@@ -405,7 +405,7 @@ impl TimerTable {
         self.path_timers.clear();
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "rustls", any(feature = "aws-lc-rs", feature = "ring")))]
     pub(super) fn values(&self) -> Vec<(Timer, Instant)> {
         let mut values = Vec::new();
 

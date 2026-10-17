@@ -16,12 +16,11 @@ use crate::{
 };
 use crate::{
     ClosePathError, Dir, Event, PathAbandonReason, PathEvent, StreamEvent, TransportErrorCode,
-    n0_nat_traversal,
+    n0_nat_traversal, test_util::subscribe,
 };
 
 use super::util::{
-    ConnPair, ManyToManyRouting, Pair, SimpleFirewallRouting, client_config, min_opt,
-    server_config, subscribe,
+    ConnPair, ManyToManyRouting, Pair, SimpleFirewallRouting, client_config, min_opt, server_config,
 };
 
 const MAX_PATHS: u32 = 3;
