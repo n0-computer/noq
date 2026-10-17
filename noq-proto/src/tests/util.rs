@@ -12,7 +12,6 @@ use core::{
     str,
 };
 use std::{
-    collections::{HashMap, HashSet},
     io::{self, Write},
     net::ToSocketAddrs,
     print,
@@ -34,7 +33,7 @@ use crate::connection::timer::Timer;
 use crate::{
     ClientConfig, ClosePathError, ClosedPath, Connection, ConnectionError, ConnectionEvent,
     ConnectionHandle, ConnectionStats, DatagramEvent, Datagrams, Dir, Duration, EcnCodepoint,
-    Endpoint, EndpointConfig, EndpointEvent, Event, FourTuple, Incoming, Instant,
+    Endpoint, EndpointConfig, EndpointEvent, Event, FourTuple, HashMap, HashSet, Incoming, Instant,
     MultipathNotNegotiated, NetworkChangeHint, PathAbandonReason, PathError, PathId, PathStats,
     PathStatus, RecvStream, SendStream, ServerConfig, SetPathStatusError, Side, StreamId, Streams,
     SystemTime, TokenLog, TokenReuseError, Transmit, TransportConfig, VarInt,

@@ -1,10 +1,10 @@
 #[cfg(test)]
 use alloc::vec::Vec;
 
-use identity_hash::{IdentityHashable, IntMap};
+use identity_hash::IdentityHashable;
 
 use crate::{
-    Instant,
+    Instant, IntMap,
     connection::qlog::{QlogSink, QlogSinkWithTime},
 };
 

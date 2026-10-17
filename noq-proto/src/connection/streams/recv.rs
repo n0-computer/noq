@@ -1,6 +1,5 @@
 use alloc::boxed::Box;
 use core::mem;
-use std::collections::hash_map::Entry;
 
 use thiserror::Error;
 use tracing::debug;
@@ -9,7 +8,7 @@ use super::state::get_or_insert_recv;
 use super::{ClosedStream, Retransmits, ShouldTransmit, StreamId, StreamsState};
 use crate::connection::assembler::{Assembler, Chunk, IllegalOrderedRead};
 use crate::connection::streams::state::StreamRecv;
-use crate::{TransportError, VarInt, frame};
+use crate::{TransportError, VarInt, frame, hash_map::Entry};
 
 #[derive(Debug, Default)]
 pub(super) struct Recv {

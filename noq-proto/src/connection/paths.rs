@@ -1,7 +1,6 @@
 use alloc::{boxed::Box, vec::Vec};
 use core::{cmp, net::SocketAddr};
 
-use identity_hash::IntMap;
 use thiserror::Error;
 use tracing::{debug, trace};
 
@@ -12,7 +11,7 @@ use super::{
     spaces::{PacketNumberSpace, SentPacket},
 };
 use crate::{
-    ConnectionId, Duration, FourTuple, Instant, TIMER_GRANULARITY, TransportConfig,
+    ConnectionId, Duration, FourTuple, Instant, IntMap, TIMER_GRANULARITY, TransportConfig,
     TransportErrorCode, VarInt,
     coding::{self, Decodable, Encodable},
     congestion,

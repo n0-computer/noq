@@ -9,13 +9,13 @@ use core::{
 };
 
 use rand::{CryptoRng, RngExt};
-use rustc_hash::{FxHashMap, FxHashSet};
 use sorted_index_buffer::SortedIndexBuffer;
 use tracing::trace;
 
 use super::{PathId, paths::PathResponses, paths::PathRetransmits};
 use crate::{
-    Dir, Duration, FourTuple, Instant, StreamId, TransportError, TransportErrorCode, VarInt,
+    Dir, Duration, FourTuple, FxHashMap, FxHashSet, Instant, StreamId, TransportError,
+    TransportErrorCode, VarInt,
     cid_queue::CidQueue,
     connection::StreamsState,
     frame::{self, AddAddress, RemoveAddress},

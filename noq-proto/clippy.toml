@@ -1,0 +1,8 @@
+disallowed-types = [
+    { path = "std::collections::HashMap", reason = "use crate::HashMap" },
+    { path = "std::collections::HashSet", reason = "use crate::HashSet" },
+    { path = "rustc_hash::FxHashMap", reason = "use crate::FxHashMap" },
+    { path = "rustc_hash::FxHashSet", reason = "use crate::FxHashSet" },
+    { path = "identity_hash::IntMap", reason = "use crate::IntMap" },
+    { path = "std::collections::hash_map::Entry", reason = "use crate::hash_map::Entry" },
+]

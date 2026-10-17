@@ -3,13 +3,13 @@ use core::{
     hash::{BuildHasher, Hasher},
     mem::{size_of, take},
 };
-use std::{collections::HashSet, sync::Mutex};
+use std::sync::Mutex;
 
 use fastbloom::BloomFilter;
 use rustc_hash::FxBuildHasher;
 use tracing::{trace, warn};
 
-use crate::{Duration, SystemTime, TokenLog, TokenReuseError, UNIX_EPOCH};
+use crate::{Duration, HashSet, SystemTime, TokenLog, TokenReuseError, UNIX_EPOCH};
 
 /// Bloom filter-based [`TokenLog`]
 ///

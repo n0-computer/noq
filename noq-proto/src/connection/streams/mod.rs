@@ -1,5 +1,5 @@
 use alloc::collections::BinaryHeap;
-use std::{collections::hash_map, io};
+use std::io;
 
 use bytes::Bytes;
 use thiserror::Error;
@@ -9,7 +9,7 @@ use super::spaces::Retransmits;
 use crate::{
     Dir, StreamId, VarInt,
     connection::streams::state::{StreamRecv, get_or_insert_recv, get_or_insert_send},
-    frame,
+    frame, hash_map,
 };
 
 mod recv;
