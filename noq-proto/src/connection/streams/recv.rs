@@ -19,6 +19,10 @@ pub(super) struct Recv {
     sent_max_stream_data: u64,
     pub(super) end: u64,
     pub(super) stopped: bool,
+    /// Connection-level flow control credit issued for data the application will never read
+    ///
+    /// Credit for data that is read is issued by [`Chunks::finalize`] instead.
+    unread_credit: u64,
 }
 
 impl Recv {
@@ -29,6 +33,7 @@ impl Recv {
             sent_max_stream_data: initial_max_data,
             end: 0,
             stopped: false,
+            unread_credit: 0,
         })
     }
 
@@ -39,6 +44,7 @@ impl Recv {
         self.sent_max_stream_data = initial_max_data;
         self.end = 0;
         self.stopped = false;
+        self.unread_credit = 0;
     }
 
     /// Process a STREAM frame
@@ -96,7 +102,7 @@ impl Recv {
         self.stopped = true;
         self.assembler.clear();
         // Issue flow control credit for unread data
-        let read_credits = self.end - self.assembler.bytes_read();
+        let read_credits = self.take_unread_credit();
         // This may send a spurious STOP_SENDING if we've already received all data, but it's a bit
         // fiddly to distinguish that from the case where we've received a FIN but are missing some
         // data that the peer might still be trying to retransmit, in which case a STOP_SENDING is
@@ -200,6 +206,24 @@ impl Recv {
         // reset streams.
         self.assembler.clear();
         Ok(true)
+    }
+
+    /// Returns connection-level flow control credit owed for data that won't be read
+    ///
+    /// Data on stopped and reset streams is discarded rather than read by the application, so the
+    /// credit it consumed must be returned some other way. This tracks what has already been
+    /// returned, so each byte of the stream is credited exactly once whatever order stopping,
+    /// resetting and receiving data happen in.
+    pub(super) fn take_unread_credit(&mut self) -> u64 {
+        let bytes_read = self.assembler.bytes_read();
+        let total = match self.state {
+            _ if self.stopped => self.end.max(self.final_offset().unwrap_or(0)),
+            RecvState::ResetRecvd { size, .. } => size,
+            RecvState::Recv { .. } => bytes_read,
+        };
+        let owed = total.saturating_sub(bytes_read + self.unread_credit);
+        self.unread_credit += owed;
+        owed
     }
 
     pub(super) fn reset_code(&self) -> Option<VarInt> {
