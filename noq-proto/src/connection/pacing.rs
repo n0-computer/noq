@@ -1,7 +1,7 @@
 //! Pacing of packet transmissions.
 
 use crate::congestion::ControllerMetrics;
-use crate::{Duration, Instant};
+use crate::{Duration, Instant, math};
 
 use tracing::warn;
 
@@ -130,7 +130,7 @@ impl Pacer {
         }
 
         let elapsed_rtts = time_elapsed.as_secs_f64() / smoothed_rtt.as_secs_f64();
-        let new_tokens = (window as f64 * 1.25 * elapsed_rtts).round() as u64;
+        let new_tokens = math::round(window as f64 * 1.25 * elapsed_rtts) as u64;
         self.tokens = self.tokens.saturating_add(new_tokens).min(self.capacity);
 
         // In the unlikely event that we're getting polled faster than tokens are generated, ensure
@@ -258,7 +258,7 @@ fn rate_limited_window(
 
     // the pacer refills tokens at x1.25 speed, so we shrink the window to cancel out the speedup
     // (otherwise the actual sending rate could be higher than `max_bytes_per_second`)
-    let adjusted_rate_window = (rate_window / 1.25).round();
+    let adjusted_rate_window = math::round(rate_window / 1.25);
 
     Ord::min(window, Ord::max(adjusted_rate_window as u64, 1))
 }

@@ -9,7 +9,7 @@ use fastbloom::BloomFilter;
 use rustc_hash::FxBuildHasher;
 use tracing::{trace, warn};
 
-use crate::{Duration, SystemTime, TokenLog, TokenReuseError, UNIX_EPOCH};
+use crate::{Duration, SystemTime, TokenLog, TokenReuseError, UNIX_EPOCH, math};
 
 /// Bloom filter-based [`TokenLog`]
 ///
@@ -244,7 +244,7 @@ fn optimal_k_num(num_bytes: usize, expected_hits: u64) -> u32 {
     //
     // we also impose a minimum return value of 1, to avoid making the bloom filter entirely
     // useless in the case that the user provided an absurdly high ratio of hits / bytes.
-    (((num_bits as f64 / expected_hits as f64) * LN_2).round() as u32).max(1)
+    (math::round((num_bits as f64 / expected_hits as f64) * LN_2) as u32).max(1)
 }
 
 // remember to change the doc comment for `impl Default for BloomTokenLog` if these ever change

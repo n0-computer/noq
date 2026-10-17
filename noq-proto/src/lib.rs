@@ -128,6 +128,22 @@ pub(crate) use std::time::{Instant, SystemTime, UNIX_EPOCH};
 #[cfg(all(target_family = "wasm", target_os = "unknown"))]
 pub(crate) use web_time::{Instant, SystemTime, UNIX_EPOCH};
 
+// Deal with float math
+pub(crate) mod math {
+    #[expect(clippy::disallowed_methods)]
+    pub(crate) fn round(x: f64) -> f64 {
+        x.round()
+    }
+    #[expect(clippy::disallowed_methods)]
+    pub(crate) fn cbrt(x: f64) -> f64 {
+        x.cbrt()
+    }
+    #[expect(clippy::disallowed_methods)]
+    pub(crate) fn powi(x: f64, n: i32) -> f64 {
+        x.powi(n)
+    }
+}
+
 #[cfg(feature = "bench")]
 pub mod bench_exports {
     //! Exports for benchmarks
