@@ -1046,11 +1046,25 @@ impl Connection {
         max_datagrams: NonZeroUsize,
         buf: &mut Vec<u8>,
     ) -> Option<Transmit> {
-        let max_datagrams = match self.config.enable_segmentation_offload {
-            false => NonZeroUsize::MIN,
-            true => max_datagrams,
-        };
+        self.poll_transmit_routed(now, buf, &mut |_| Some(max_datagrams))
+    }
 
+    /// Like [`poll_transmit`], but asks `route` about every destination first.
+    ///
+    /// `route` returns the maximum number of datagrams a transmit to that network path may
+    /// hold, or `None` if the path cannot be sent to right now. Paths and off-path probes
+    /// with a `None` destination are skipped as if they had nothing to send, and skipped
+    /// paths count as application-limited. This lets a caller with several sockets use each
+    /// socket's own segmentation limit, and keep sending on the ready sockets while another
+    /// is blocked, instead of stalling the connection.
+    ///
+    /// [`poll_transmit`]: Connection::poll_transmit
+    pub fn poll_transmit_routed(
+        &mut self,
+        now: Instant,
+        buf: &mut Vec<u8>,
+        route: &mut dyn FnMut(FourTuple) -> Option<NonZeroUsize>,
+    ) -> Option<Transmit> {
         // Each call to poll_transmit can only send datagrams to one destination, because
         // all datagrams in a GSO batch are for the same destination.  Therefore only
         // datagrams for one destination address are produced for each poll_transmit call.
@@ -1095,7 +1109,7 @@ impl Connection {
         let mut next_path_id = self.paths.first_entry().map(|e| *e.key());
         while let Some(path_id) = next_path_id {
             if !connection_close_pending
-                && let Some(transmit) = self.poll_transmit_off_path(now, buf, path_id)
+                && let Some(transmit) = self.poll_transmit_off_path(now, buf, path_id, route)
             {
                 #[cfg(test)]
                 {
@@ -1104,6 +1118,17 @@ impl Connection {
                 return Some(transmit);
             }
 
+            let Some(max_datagrams) = route(self.path_data(path_id).network_path) else {
+                // The caller cannot send on this path right now. The congestion window is
+                // not used up, so it must not grow (RFC 9002, section 7.8).
+                self.path_data_mut(path_id).app_limited = true;
+                next_path_id = self.paths.keys().find(|i| **i > path_id).copied();
+                continue;
+            };
+            let max_datagrams = match self.config.enable_segmentation_offload {
+                false => NonZeroUsize::MIN,
+                true => max_datagrams,
+            };
             let info = self.scheduling_info(path_id);
             if let Some(transmit) = self.poll_transmit_on_path(
                 now,
@@ -1140,7 +1165,9 @@ impl Connection {
             // Try MTU probing now
             let mut next_path_id = self.paths.first_entry().map(|e| *e.key());
             while let Some(path_id) = next_path_id {
-                if let Some(transmit) = self.poll_transmit_mtu_probe(now, buf, path_id) {
+                if route(self.path_data(path_id).network_path).is_some()
+                    && let Some(transmit) = self.poll_transmit_mtu_probe(now, buf, path_id)
+                {
                     #[cfg(test)]
                     {
                         self.partial_stats.transmits_tx += 1;
@@ -1284,14 +1311,15 @@ impl Connection {
         now: Instant,
         buf: &mut Vec<u8>,
         path_id: PathId,
+        route: &mut dyn FnMut(FourTuple) -> Option<NonZeroUsize>,
     ) -> Option<Transmit> {
-        if let Some(challenge) = self.send_prev_path_challenge(now, buf, path_id) {
+        if let Some(challenge) = self.send_prev_path_challenge(now, buf, path_id, route) {
             return Some(challenge);
         }
-        if let Some(response) = self.send_off_path_path_response(now, buf, path_id) {
+        if let Some(response) = self.send_off_path_path_response(now, buf, path_id, route) {
             return Some(response);
         }
-        if let Some(challenge) = self.send_nat_traversal_path_challenge(now, buf, path_id) {
+        if let Some(challenge) = self.send_nat_traversal_path_challenge(now, buf, path_id, route) {
             return Some(challenge);
         }
         None
@@ -2013,14 +2041,15 @@ impl Connection {
         now: Instant,
         buf: &mut Vec<u8>,
         path_id: PathId,
+        route: &mut dyn FnMut(FourTuple) -> Option<NonZeroUsize>,
     ) -> Option<Transmit> {
         let (prev_cid, prev_path) = self.paths.get_mut(&path_id)?.prev.as_mut()?;
-        if !prev_path.pending_challenge {
+        let network_path = prev_path.network_path;
+        if !prev_path.pending_challenge || route(network_path).is_none() {
             return None;
         };
         prev_path.pending_challenge = false;
         let token = self.rng.random();
-        let network_path = prev_path.network_path;
         prev_path.record_path_challenge_sent(now, token, network_path);
 
         debug_assert_eq!(
@@ -2073,6 +2102,7 @@ impl Connection {
         now: Instant,
         buf: &mut Vec<u8>,
         path_id: PathId,
+        route: &mut dyn FnMut(FourTuple) -> Option<NonZeroUsize>,
     ) -> Option<Transmit> {
         let network_path = self
             .paths
@@ -2080,6 +2110,8 @@ impl Connection {
             .map(|state| state.data.network_path)?;
         let cid_queue = self.remote_cids.get_mut(&path_id)?;
         let pns = self.spaces[SpaceKind::Data].for_path(path_id);
+        let destination = pns.pending_path_responses.peek_off_path(network_path)?;
+        route(destination)?;
         let (token, network_path) = pns.pending_path_responses.pop_off_path(network_path)?;
 
         // TODO: make off-path probes unlinkable.
@@ -2142,8 +2174,11 @@ impl Connection {
         now: Instant,
         buf: &mut Vec<u8>,
         path_id: PathId,
+        route: &mut dyn FnMut(FourTuple) -> Option<NonZeroUsize>,
     ) -> Option<Transmit> {
         let remote = self.n0_nat_traversal.next_probe_addr()?;
+        // The probe is sent without a source address, see the transmit below.
+        route(FourTuple::new(remote.into(), None))?;
 
         if !self.paths.get(&path_id)?.data.validated {
             // Path is not usable for probing

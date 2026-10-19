@@ -14,7 +14,10 @@ use tokio::{
     time::{Sleep, sleep_until},
 };
 
-use super::{AsyncTimer, AsyncUdpSocket, Runtime, UdpSenderHelper, UdpSenderHelperSocket};
+use super::{
+    AsyncTimer, AsyncUdpSocket, AsyncUdpSocketNext, Runtime, UdpReceiver, UdpSenderHelper,
+    UdpSenderHelperSocket,
+};
 
 /// A noq runtime for Tokio
 #[derive(Debug)]
@@ -30,10 +33,15 @@ impl Runtime for TokioRuntime {
     }
 
     fn wrap_udp_socket(&self, sock: std::net::UdpSocket) -> io::Result<Box<dyn AsyncUdpSocket>> {
-        Ok(Box::new(UdpSocket {
-            inner: Arc::new(udp::UdpSocketState::new((&sock).into())?),
-            io: Arc::new(tokio::net::UdpSocket::from_std(sock)?),
-        }))
+        Ok(Box::new(UdpSocket::new(sock)?))
+    }
+
+    fn wrap_udp_socket_next(
+        &self,
+        sock: std::net::UdpSocket,
+    ) -> io::Result<Box<dyn AsyncUdpSocketNext>> {
+        // Clones share the socket, so senders and the receiver need no second file descriptor.
+        Ok(Box::new(UdpSocket::new(sock)?))
     }
 
     fn now(&self) -> Instant {
@@ -54,6 +62,15 @@ impl AsyncTimer for Sleep {
 struct UdpSocket {
     io: Arc<tokio::net::UdpSocket>,
     inner: Arc<udp::UdpSocketState>,
+}
+
+impl UdpSocket {
+    fn new(sock: std::net::UdpSocket) -> io::Result<Self> {
+        Ok(Self {
+            inner: Arc::new(udp::UdpSocketState::new((&sock).into())?),
+            io: Arc::new(tokio::net::UdpSocket::from_std(sock)?),
+        })
+    }
 }
 
 impl UdpSenderHelperSocket for UdpSocket {
@@ -109,5 +126,38 @@ impl AsyncUdpSocket for UdpSocket {
 
     fn max_receive_segments(&self) -> NonZeroUsize {
         self.inner.gro_segments()
+    }
+}
+
+impl AsyncUdpSocketNext for UdpSocket {
+    fn create_sender(&self) -> Pin<Box<dyn super::UdpSender>> {
+        AsyncUdpSocket::create_sender(self)
+    }
+
+    fn create_receiver(&self) -> Option<Box<dyn UdpReceiver>> {
+        Some(Box::new(self.clone()))
+    }
+
+    fn local_addr(&self) -> io::Result<std::net::SocketAddr> {
+        AsyncUdpSocket::local_addr(self)
+    }
+
+    fn may_fragment(&self) -> bool {
+        AsyncUdpSocket::may_fragment(self)
+    }
+}
+
+impl UdpReceiver for UdpSocket {
+    fn poll_recv(
+        &mut self,
+        cx: &mut Context<'_>,
+        bufs: &mut [io::IoSliceMut<'_>],
+        meta: &mut [udp::RecvMeta],
+    ) -> Poll<io::Result<usize>> {
+        AsyncUdpSocket::poll_recv(self, cx, bufs, meta)
+    }
+
+    fn max_receive_segments(&self) -> NonZeroUsize {
+        AsyncUdpSocket::max_receive_segments(self)
     }
 }

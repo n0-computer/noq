@@ -26,8 +26,10 @@ use crate::{
     mutex::{Mutex, MutexGuard},
     path::{OpenPath, PathRef, PathRefOwner},
     recv_stream::RecvStream,
-    runtime::{AsyncTimer, Runtime, UdpSender},
+    routing::SocketId,
+    runtime::{AsyncTimer, Runtime},
     send_stream::SendStream,
+    sender::ConnectionSender,
     udp_transmit,
 };
 use proto::{
@@ -50,7 +52,7 @@ impl Connecting {
         conn: proto::Connection,
         endpoint_events: mpsc::UnboundedSender<(ConnectionHandle, EndpointEvent)>,
         conn_events: mpsc::UnboundedReceiver<ConnectionEvent>,
-        sender: Pin<Box<dyn UdpSender>>,
+        sender: ConnectionSender,
         runtime: Arc<dyn Runtime>,
     ) -> Self {
         let (on_handshake_data_send, on_handshake_data_recv) = oneshot::channel();
@@ -1575,11 +1577,14 @@ pub(crate) struct State {
     /// from both maps.
     pub(crate) final_path_stats: FxHashMap<PathId, PathStats>,
     pub(crate) path_events: tokio::sync::broadcast::Sender<PathEvent>,
-    sender: Pin<Box<dyn UdpSender>>,
+    sender: ConnectionSender,
     pub(crate) runtime: Arc<dyn Runtime>,
     send_buffer: Vec<u8>,
-    /// We buffer a transmit when the underlying I/O would block
-    buffered_transmit: Option<proto::Transmit>,
+    /// Transmits whose socket returned `Pending`, at most one per socket
+    ///
+    /// While a socket has a blocked transmit, paths on it are skipped, so paths on other
+    /// sockets keep sending. Retried first on each drive.
+    blocked_transmits: Vec<BlockedTransmit>,
     /// Our last external address reported by the peer. When multipath is enabled, this will be the
     /// last report across all paths.
     pub(crate) observed_external_addr: watch::Sender<Option<SocketAddr>>,
@@ -1596,7 +1601,7 @@ impl State {
         conn_events: mpsc::UnboundedReceiver<ConnectionEvent>,
         on_handshake_data: oneshot::Sender<()>,
         on_connected: oneshot::Sender<bool>,
-        sender: Pin<Box<dyn UdpSender>>,
+        sender: ConnectionSender,
         runtime: Arc<dyn Runtime>,
     ) -> Self {
         Self {
@@ -1619,7 +1624,7 @@ impl State {
             sender,
             runtime,
             send_buffer: Vec::new(),
-            buffered_transmit: None,
+            blocked_transmits: Vec::new(),
             path_events: tokio::sync::broadcast::channel(32).0,
             observed_external_addr: watch::Sender::new(None),
             nat_traversal_updates: tokio::sync::broadcast::channel(32).0,
@@ -1633,42 +1638,55 @@ impl State {
         let now = self.runtime.now();
         let mut transmits = 0;
 
-        let max_datagrams = self
-            .sender
-            .max_transmit_segments()
-            .min(MAX_TRANSMIT_SEGMENTS);
+        // Retry blocked transmits first, so each socket keeps its order.
+        let mut i = 0;
+        while let Some(blocked) = self.blocked_transmits.get(i) {
+            let transmit = udp_transmit(&blocked.transmit, &blocked.buf[..blocked.transmit.size]);
+            match self.sender.poll_send_on(blocked.socket, &transmit, cx) {
+                Poll::Pending => i += 1,
+                Poll::Ready(result) => {
+                    self.blocked_transmits.remove(i);
+                    result?;
+                }
+            }
+        }
 
         loop {
-            // Retry the last transmit, or get a new one.
-            let t = match self.buffered_transmit.take() {
-                Some(t) => t,
-                None => {
-                    self.send_buffer.clear();
-                    match self
-                        .inner
-                        .poll_transmit(now, max_datagrams, &mut self.send_buffer)
-                    {
-                        Some(t) => {
-                            transmits += match t.segment_size {
-                                None => 1,
-                                Some(s) => t.size.div_ceil(s), // round up
-                            };
-                            t
+            self.send_buffer.clear();
+            let (sender, blocked) = (&mut self.sender, &self.blocked_transmits);
+            let Some(t) =
+                self.inner
+                    .poll_transmit_routed(now, &mut self.send_buffer, &mut |path| {
+                        let (socket, max_segments) =
+                            sender.route(path.remote(), path.local_ip())?;
+                        if blocked.iter().any(|b| b.socket == socket) {
+                            return None;
                         }
-                        None => break,
-                    }
-                }
+                        Some(max_segments.min(MAX_TRANSMIT_SEGMENTS))
+                    })
+            else {
+                break;
+            };
+            transmits += match t.segment_size {
+                None => 1,
+                Some(s) => t.size.div_ceil(s), // round up
             };
 
+            // Routing is deterministic, so this is the socket checked for the path above.
+            let Some((socket, _)) = self.sender.route(t.destination, t.src_ip) else {
+                continue;
+            };
             let len = t.size;
             match self
                 .sender
-                .as_mut()
-                .poll_send(&udp_transmit(&t, &self.send_buffer[..len]), cx)
+                .poll_send_on(socket, &udp_transmit(&t, &self.send_buffer[..len]), cx)
             {
                 Poll::Pending => {
-                    self.buffered_transmit = Some(t);
-                    return Ok(false);
+                    self.blocked_transmits.push(BlockedTransmit {
+                        socket,
+                        transmit: t,
+                        buf: std::mem::take(&mut self.send_buffer),
+                    });
                 }
                 Poll::Ready(Err(e)) => return Err(e),
                 Poll::Ready(Ok(())) => {}
@@ -1704,6 +1722,9 @@ impl State {
                 Poll::Ready(Some(ConnectionEvent::Rebind(sender))) => {
                     self.sender = sender;
                     self.inner.handle_network_change(None, self.runtime.now());
+                }
+                Poll::Ready(Some(ConnectionEvent::RoutesChanged(routes))) => {
+                    self.sender.set_routes(routes);
                 }
                 Poll::Ready(Some(ConnectionEvent::LocalAddressChanged(hint))) => {
                     self.inner
@@ -2040,6 +2061,14 @@ pub enum SendDatagramError {
 /// This limits the amount of CPU resources consumed by datagram generation,
 /// and allows other tasks (like receiving ACKs) to run in between.
 const MAX_TRANSMIT_DATAGRAMS: usize = 20;
+
+/// A transmit that waits because its socket returned `Pending`
+#[derive(Debug)]
+struct BlockedTransmit {
+    socket: SocketId,
+    transmit: proto::Transmit,
+    buf: Vec<u8>,
+}
 
 /// The maximum amount of datagrams that are sent in a single transmit
 ///
