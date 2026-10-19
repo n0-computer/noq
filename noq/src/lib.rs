@@ -39,7 +39,6 @@
 //! encryption alone.
 #![warn(missing_docs)]
 
-use std::pin::Pin;
 use std::sync::Arc;
 
 mod connection;
@@ -49,8 +48,10 @@ mod incoming;
 mod mutex;
 mod path;
 mod recv_stream;
+mod routing;
 mod runtime;
 mod send_stream;
+mod sender;
 mod work_limiter;
 
 #[cfg(not(wasm_browser))]
@@ -58,6 +59,7 @@ pub(crate) use std::time::{Duration, Instant};
 #[cfg(wasm_browser)]
 pub(crate) use web_time::{Duration, Instant};
 
+pub use ipnet;
 #[cfg(feature = "bloom")]
 pub use proto::BloomTokenLog;
 pub use proto::{
@@ -88,13 +90,16 @@ pub use crate::path::{AddressDiscovery, OpenPath, Path, WeakPathHandle};
 pub use crate::recv_stream::{
     ReadError, ReadExactError, ReadToEndError, RecvStream, ResetError, UnorderedRecvStream,
 };
+pub use crate::routing::SocketRoute;
 #[cfg(feature = "runtime-smol")]
 pub use crate::runtime::SmolRuntime;
 #[cfg(feature = "runtime-tokio")]
 pub use crate::runtime::TokioRuntime;
 #[cfg(any(feature = "runtime-tokio", feature = "runtime-smol"))]
 pub use crate::runtime::default_runtime;
-pub use crate::runtime::{AsyncTimer, AsyncUdpSocket, Runtime, UdpSender};
+pub use crate::runtime::{
+    AsyncTimer, AsyncUdpSocket, AsyncUdpSocketNext, Runtime, UdpReceiver, UdpSender,
+};
 pub use crate::send_stream::{SendStream, Stopped, StoppedError, WriteError};
 
 #[cfg(test)]
@@ -107,7 +112,9 @@ enum ConnectionEvent {
         reason: bytes::Bytes,
     },
     Proto(proto::ConnectionEvent),
-    Rebind(Pin<Box<dyn UdpSender>>),
+    Rebind(sender::ConnectionSender),
+    /// The route table of an endpoint with multiple sockets changed
+    RoutesChanged(Arc<routing::RouteTable>),
     LocalAddressChanged(Option<Arc<dyn NetworkChangeHint + Sync + Send>>),
 }
 

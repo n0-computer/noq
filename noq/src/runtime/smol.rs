@@ -11,7 +11,10 @@ use async_io::Async;
 use async_io::Timer;
 
 use super::AsyncTimer;
-use super::{AsyncUdpSocket, Runtime, UdpSender, UdpSenderHelper, UdpSenderHelperSocket};
+use super::{
+    AsyncUdpSocket, AsyncUdpSocketNext, Runtime, UdpReceiver, UdpSender, UdpSenderHelper,
+    UdpSenderHelperSocket,
+};
 
 /// A noq runtime for smol
 #[derive(Debug)]
@@ -27,6 +30,14 @@ impl Runtime for SmolRuntime {
     }
 
     fn wrap_udp_socket(&self, sock: std::net::UdpSocket) -> io::Result<Box<dyn AsyncUdpSocket>> {
+        Ok(Box::new(UdpSocket::new(sock)?))
+    }
+
+    fn wrap_udp_socket_next(
+        &self,
+        sock: std::net::UdpSocket,
+    ) -> io::Result<Box<dyn AsyncUdpSocketNext>> {
+        // Clones share the socket, so senders and the receiver need no second file descriptor.
         Ok(Box::new(UdpSocket::new(sock)?))
     }
 }
@@ -102,5 +113,38 @@ impl AsyncUdpSocket for UdpSocket {
 
     fn max_receive_segments(&self) -> NonZeroUsize {
         self.inner.gro_segments()
+    }
+}
+
+impl AsyncUdpSocketNext for UdpSocket {
+    fn create_sender(&self) -> Pin<Box<dyn UdpSender>> {
+        AsyncUdpSocket::create_sender(self)
+    }
+
+    fn create_receiver(&self) -> Option<Box<dyn UdpReceiver>> {
+        Some(Box::new(self.clone()))
+    }
+
+    fn local_addr(&self) -> io::Result<std::net::SocketAddr> {
+        AsyncUdpSocket::local_addr(self)
+    }
+
+    fn may_fragment(&self) -> bool {
+        AsyncUdpSocket::may_fragment(self)
+    }
+}
+
+impl UdpReceiver for UdpSocket {
+    fn poll_recv(
+        &mut self,
+        cx: &mut Context<'_>,
+        bufs: &mut [io::IoSliceMut<'_>],
+        meta: &mut [udp::RecvMeta],
+    ) -> Poll<io::Result<usize>> {
+        AsyncUdpSocket::poll_recv(self, cx, bufs, meta)
+    }
+
+    fn max_receive_segments(&self) -> NonZeroUsize {
+        AsyncUdpSocket::max_receive_segments(self)
     }
 }

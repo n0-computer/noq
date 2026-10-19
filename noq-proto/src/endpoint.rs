@@ -80,6 +80,13 @@ impl Endpoint {
         }
     }
 
+    /// Replace whether path MTU detection is allowed, affecting new connections only
+    ///
+    /// See [`Endpoint::new`].
+    pub fn set_allow_mtud(&mut self, allow_mtud: bool) {
+        self.allow_mtud = allow_mtud;
+    }
+
     /// Replace the server configuration, affecting new incoming connections only
     pub fn set_server_config(&mut self, server_config: Option<Arc<ServerConfig>>) {
         self.server_config = server_config;
