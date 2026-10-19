@@ -5,7 +5,7 @@ use alloc::{
 };
 use core::{
     cmp, mem,
-    ops::{Bound, Index, IndexMut},
+    ops::{Bound, Index, IndexMut, Range},
 };
 
 use rand::{CryptoRng, RngExt};
@@ -16,6 +16,7 @@ use tracing::trace;
 use super::{PathId, paths::PathResponses, paths::PathRetransmits};
 use crate::{
     Dir, Duration, FourTuple, Instant, StreamId, TransportError, TransportErrorCode, VarInt,
+    cid_queue::CidQueue,
     connection::StreamsState,
     frame::{self, AddAddress, RemoveAddress},
     packet::SpaceId,
@@ -606,6 +607,28 @@ pub struct Retransmits {
 }
 
 impl Retransmits {
+    /// Queue connection IDs retired on `path_id` for retransmission, bounding how many can be
+    /// queued at once.
+    pub(super) fn retire_cids(
+        &mut self,
+        path_id: PathId,
+        seqs: Range<u64>,
+    ) -> Result<(), TransportError> {
+        /// Ensure `retire_cids` cannot grow without bound. Limit is somewhat arbitrary but very
+        /// permissive.
+        const MAX_PENDING_RETIRED_CIDS: u64 = CidQueue::LEN as u64 * 10;
+        // We don't bother counting in-flight frames because those are bounded by congestion
+        // control.
+        let num = seqs.end.saturating_sub(seqs.start);
+        if (self.retire_cids.len() as u64).saturating_add(num) > MAX_PENDING_RETIRED_CIDS {
+            return Err(TransportError::CONNECTION_ID_LIMIT_ERROR(
+                "queued too many retired CIDs",
+            ));
+        }
+        self.retire_cids.extend(seqs.map(|seq| (path_id, seq)));
+        Ok(())
+    }
+
     pub(super) fn is_empty(&self, streams: &StreamsState) -> bool {
         let Self {
             max_data,

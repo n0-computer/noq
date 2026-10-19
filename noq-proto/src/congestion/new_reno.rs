@@ -121,6 +121,7 @@ impl Controller for NewReno {
             ssthresh: Some(self.ssthresh),
             pacing_rate: None,
             send_quantum: None,
+            bandwidth_estimate: None,
         }
     }
 

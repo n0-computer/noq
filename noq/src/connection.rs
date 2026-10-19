@@ -346,6 +346,10 @@ impl Connection {
     }
 
     /// Accept the next incoming uni-directional stream
+    ///
+    /// # Cancel safety
+    ///
+    /// This method is cancellation safe. If this does not resolve, no streams were consumed.
     pub fn accept_uni(&self) -> AcceptUni<'_> {
         AcceptUni {
             conn: &self.0,
@@ -364,6 +368,10 @@ impl Connection {
     /// [`open_bi()`]: crate::Connection::open_bi
     /// [`SendStream`]: crate::SendStream
     /// [`RecvStream`]: crate::RecvStream
+    ///
+    /// # Cancel safety
+    ///
+    /// This method is cancellation safe. If this does not resolve, no streams were consumed.
     pub fn accept_bi(&self) -> AcceptBi<'_> {
         AcceptBi {
             conn: &self.0,
@@ -372,6 +380,10 @@ impl Connection {
     }
 
     /// Receive an application datagram
+    ///
+    /// # Cancel safety
+    ///
+    /// This method is cancellation safe. If this does not resolve, no datagrams were consumed.
     pub fn read_datagram(&self) -> ReadDatagram<'_> {
         ReadDatagram {
             conn: &self.0,

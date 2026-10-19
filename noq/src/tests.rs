@@ -34,8 +34,8 @@ use rustls::{
     pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
 };
 use tokio::runtime::{Builder, Runtime};
+use tracing::instrument::Instrument as _;
 use tracing::{error_span, info, info_span};
-use tracing_futures::Instrument as _;
 use tracing_subscriber::EnvFilter;
 
 use super::{ClientConfig, Endpoint, EndpointConfig, RecvStream, SendStream, TransportConfig};

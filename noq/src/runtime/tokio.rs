@@ -63,8 +63,10 @@ impl UdpSenderHelperSocket for UdpSocket {
 
     fn try_send(&self, transmit: &udp::Transmit<'_>) -> io::Result<()> {
         self.io.try_io(Interest::WRITABLE, || {
-            self.inner.send((&self.io).into(), transmit)
-        })
+            self.inner.try_send((&self.io).into(), transmit)
+        })?;
+
+        Ok(())
     }
 }
 
@@ -84,10 +86,15 @@ impl AsyncUdpSocket for UdpSocket {
     ) -> Poll<io::Result<usize>> {
         loop {
             ready!(self.io.poll_recv_ready(cx))?;
-            if let Ok(res) = self.io.try_io(Interest::READABLE, || {
+            match self.io.try_io(Interest::READABLE, || {
                 self.inner.recv((&self.io).into(), bufs, meta)
             }) {
-                return Poll::Ready(Ok(res));
+                Ok(res) => return Poll::Ready(Ok(res)),
+                // `try_io` clears readiness only for `WouldBlock`. Looping on any other
+                // error would spin: readiness stays asserted, so `poll_recv_ready`
+                // completes at once and the recv fails again, without ever yielding.
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
+                Err(e) => return Poll::Ready(Err(e)),
             }
         }
     }
