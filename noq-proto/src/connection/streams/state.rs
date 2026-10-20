@@ -388,10 +388,10 @@ impl StreamsState {
     }
 
     /// Whether any stream data is queued for this path, regardless of control frames.
-    pub(crate) fn can_send_stream_data(&self, path: PathId, status_allows_data: bool) -> bool {
+    pub(crate) fn can_send_stream_data(&self, path: PathId, include_affinity_any: bool) -> bool {
         // Empty writes and late ACKs can leave entries without pending work; loss recovery
         // can requeue reset streams.
-        self.pending.iter(path, status_allows_data).any(|stream| {
+        self.pending.iter(path, include_affinity_any).any(|stream| {
             self.send
                 .get(&stream.id)
                 .and_then(|s| s.as_ref())

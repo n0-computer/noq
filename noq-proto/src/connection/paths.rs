@@ -99,7 +99,8 @@ impl<T: Into<u32>> From<T> for PathId {
     }
 }
 
-/// Newtype around [`PathId`] that implements [`IdentityHashable`].
+/// An internal map key that uses identity hashing for [`PathId`].
+/// Keeps [`IdentityHashable`] out of the public [`PathId`] API.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Default)]
 pub(crate) struct PathIdKey(pub(crate) PathId);
 

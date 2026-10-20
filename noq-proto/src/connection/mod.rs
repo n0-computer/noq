@@ -1505,8 +1505,8 @@ impl Connection {
                 if scheduling_info.is_abandoned {
                     // If this path is abandoned then we might still have to send
                     // PATH_ABANDON itself on it if there was no better space
-                    // available. Otherwise we want to send the PATH_ABANDON as permitted by
-                    // may_send_data however.
+                    // available. Otherwise PATH_ABANDON follows the normal data-sending
+                    // eligibility and status preference.
                     scheduling_info.may_self_abandon
                         && self.spaces[space_id]
                             .pending
@@ -1524,7 +1524,9 @@ impl Connection {
                     // for unrelated frames.
                     can_send.stream_data
                         // But non-stream data can't bypass STATUS_BACKUP rules.
-                        || (!can_send.is_empty() && scheduling_info.may_send_data())
+                        || (!can_send.is_empty()
+                            && scheduling_info.can_send_data
+                            && scheduling_info.status_allows_data)
                 }
             };
 
@@ -6129,7 +6131,8 @@ impl Connection {
         // HANDSHAKE_DONE
         if !is_0rtt
             && !scheduling_info.is_abandoned
-            && scheduling_info.may_send_data()
+            && scheduling_info.can_send_data
+            && scheduling_info.status_allows_data
             && mem::replace(&mut space.pending.handshake_done, false)
         {
             builder.write_frame(frame::HandshakeDone, stats);
@@ -6155,7 +6158,10 @@ impl Connection {
         }
 
         // ACK
-        if !scheduling_info.is_abandoned && scheduling_info.may_send_data() {
+        if !scheduling_info.is_abandoned
+            && scheduling_info.can_send_data
+            && scheduling_info.status_allows_data
+        {
             for path_id in space
                 .number_spaces
                 .iter_mut()
@@ -6179,7 +6185,8 @@ impl Connection {
 
         // ACK_FREQUENCY
         if !scheduling_info.is_abandoned
-            && scheduling_info.may_send_data()
+            && scheduling_info.can_send_data
+            && scheduling_info.status_allows_data
             && mem::replace(&mut space.pending.ack_frequency, false)
         {
             let sequence_number = self.ack_frequency.next_sequence_number();
@@ -6278,7 +6285,8 @@ impl Connection {
         // ADD_ADDRESS
         while space_id == SpaceId::Data
             && !scheduling_info.is_abandoned
-            && scheduling_info.may_send_data()
+            && scheduling_info.can_send_data
+            && scheduling_info.status_allows_data
             && frame::AddAddress::SIZE_BOUND <= builder.frame_space_remaining()
         {
             if let Some(added_address) = space.pending.add_address.pop_last() {
@@ -6291,7 +6299,8 @@ impl Connection {
         // REMOVE_ADDRESS
         while space_id == SpaceId::Data
             && !scheduling_info.is_abandoned
-            && scheduling_info.may_send_data()
+            && scheduling_info.can_send_data
+            && scheduling_info.status_allows_data
             && frame::RemoveAddress::SIZE_BOUND <= builder.frame_space_remaining()
         {
             if let Some(removed_address) = space.pending.remove_address.pop_last() {
@@ -6303,7 +6312,8 @@ impl Connection {
 
         // REACH_OUT
         while !scheduling_info.is_abandoned
-            && scheduling_info.may_send_data()
+            && scheduling_info.can_send_data
+            && scheduling_info.status_allows_data
             && let Some(reach_out) = space
                 .pending
                 .reach_out
@@ -6330,7 +6340,8 @@ impl Connection {
             self.remote_cids.remove(&path_id);
         }
         while space_id == SpaceId::Data
-            && scheduling_info.may_send_data()
+            && scheduling_info.can_send_data
+            && scheduling_info.status_allows_data
             && frame::PathAbandon::SIZE_BOUND <= builder.frame_space_remaining()
             && let Some((abandoned_path_id, error_code)) = space.pending.path_abandon.pop_first()
         {
@@ -6362,7 +6373,8 @@ impl Connection {
         // CRYPTO
         while !is_0rtt
             && !scheduling_info.is_abandoned
-            && scheduling_info.may_send_data()
+            && scheduling_info.can_send_data
+            && scheduling_info.status_allows_data
             && builder.frame_space_remaining() > frame::Crypto::SIZE_BOUND
         {
             let Some(mut frame) = space.pending.crypto.pop_front() else {
@@ -6398,7 +6410,8 @@ impl Connection {
         // PATH_STATUS_AVAILABLE & PATH_STATUS_BACKUP
         while space_id == SpaceId::Data
             && !scheduling_info.is_abandoned
-            && scheduling_info.may_send_data()
+            && scheduling_info.can_send_data
+            && scheduling_info.status_allows_data
             && frame::PathStatusAvailable::SIZE_BOUND <= builder.frame_space_remaining()
         {
             let Some(path_id) = space.pending.path_status.pop_first() else {
@@ -6431,7 +6444,8 @@ impl Connection {
         // MAX_PATH_ID
         if space_id == SpaceId::Data
             && !scheduling_info.is_abandoned
-            && scheduling_info.may_send_data()
+            && scheduling_info.can_send_data
+            && scheduling_info.status_allows_data
             && space.pending.max_path_id
             && frame::MaxPathId::SIZE_BOUND <= builder.frame_space_remaining()
         {
@@ -6443,7 +6457,8 @@ impl Connection {
         // PATHS_BLOCKED
         if space_id == SpaceId::Data
             && !scheduling_info.is_abandoned
-            && scheduling_info.may_send_data()
+            && scheduling_info.can_send_data
+            && scheduling_info.status_allows_data
             && frame::PathsBlocked::SIZE_BOUND <= builder.frame_space_remaining()
             && let Some(remote_max_path_id) = space.pending.paths_blocked.take()
         {
@@ -6454,7 +6469,8 @@ impl Connection {
         // PATH_CIDS_BLOCKED
         while space_id == SpaceId::Data
             && !scheduling_info.is_abandoned
-            && scheduling_info.may_send_data()
+            && scheduling_info.can_send_data
+            && scheduling_info.status_allows_data
             && frame::PathCidsBlocked::SIZE_BOUND <= builder.frame_space_remaining()
         {
             let Some((path_id, next_seq)) = space.pending.path_cids_blocked.pop_first() else {
@@ -6467,7 +6483,8 @@ impl Connection {
         // RESET_STREAM, STOP_SENDING, MAX_DATA, MAX_STREAM_DATA, MAX_STREAMS
         if space_id == SpaceId::Data
             && !scheduling_info.is_abandoned
-            && scheduling_info.may_send_data()
+            && scheduling_info.can_send_data
+            && scheduling_info.status_allows_data
         {
             self.streams
                 .write_control_frames(builder, &mut space.pending, stats);
@@ -6483,7 +6500,8 @@ impl Connection {
         let new_cid_size_bound =
             frame::NewConnectionId::size_bound(is_multipath_negotiated, cid_len);
         while !scheduling_info.is_abandoned
-            && scheduling_info.may_send_data()
+            && scheduling_info.can_send_data
+            && scheduling_info.status_allows_data
             && builder.frame_space_remaining() > new_cid_size_bound
         {
             let Some(issued) = space.pending.new_cids.pop() else {
@@ -6519,7 +6537,8 @@ impl Connection {
         // RETIRE_CONNECTION_ID
         let retire_cid_bound = frame::RetireConnectionId::size_bound(is_multipath_negotiated);
         while !scheduling_info.is_abandoned
-            && scheduling_info.may_send_data()
+            && scheduling_info.can_send_data
+            && scheduling_info.status_allows_data
             && builder.frame_space_remaining() > retire_cid_bound
         {
             let (path_id, sequence) = match space.pending.retire_cids.pop() {
@@ -6534,7 +6553,8 @@ impl Connection {
         // DATAGRAM
         let mut sent_datagrams = false;
         while !scheduling_info.is_abandoned
-            && scheduling_info.may_send_data()
+            && scheduling_info.can_send_data
+            && scheduling_info.status_allows_data
             && builder.frame_space_remaining() > Datagram::SIZE_BOUND
             && space_id == SpaceId::Data
         {
@@ -6553,7 +6573,10 @@ impl Connection {
         let path = &mut self.paths.get_mut(&path_id).expect("known path").data;
 
         // NEW_TOKEN
-        if !scheduling_info.is_abandoned && scheduling_info.may_send_data() {
+        if !scheduling_info.is_abandoned
+            && scheduling_info.can_send_data
+            && scheduling_info.status_allows_data
+        {
             while let Some(network_path) = space.pending.new_tokens.pop() {
                 debug_assert_eq!(space_id, SpaceId::Data);
                 let ConnectionSide::Server { server_config } = &self.side else {
@@ -7362,16 +7385,9 @@ struct PathSchedulingInfo {
     /// Whether the path may send a CONNECTION_CLOSE frame.
     ///
     /// This essentially marks this path as the best validated space ID with a fallback
-    /// to unvalidated spaces if there are no validated spaces. Like for
-    /// [`Self::may_send_data`] other paths could be equally good.
+    /// to unvalidated spaces if there are no validated spaces. Other paths could be equally good.
     may_send_close: bool,
     may_self_abandon: bool,
-}
-
-impl PathSchedulingInfo {
-    fn may_send_data(&self) -> bool {
-        self.can_send_data && self.status_allows_data
-    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]

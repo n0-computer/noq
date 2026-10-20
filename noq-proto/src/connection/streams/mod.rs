@@ -585,8 +585,12 @@ impl PendingStreamsQueue {
         self.affinities.clear();
     }
 
-    fn iter(&self, path: PathId, include_any: bool) -> impl Iterator<Item = &PendingStream> {
-        include_any
+    fn iter(
+        &self,
+        path: PathId,
+        include_affinity_any: bool,
+    ) -> impl Iterator<Item = &PendingStream> {
+        include_affinity_any
             .then_some(&self.any)
             .into_iter()
             .flat_map(|q| q.iter())
