@@ -1,0 +1,5 @@
+disallowed-methods = [
+    { path = "f64::round", reason = "use crate::math::round" },
+    { path = "f64::cbrt", reason = "use crate::math::cbrt" },
+    { path = "f64::powi", reason = "use crate::math::powi" },
+]
