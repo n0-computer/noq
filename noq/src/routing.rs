@@ -5,10 +5,7 @@ use std::{
     net::{IpAddr, SocketAddr},
     num::NonZeroUsize,
     pin::Pin,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::Arc,
     task::{Context, Poll},
 };
 
@@ -30,7 +27,8 @@ use crate::runtime::{AsyncUdpSocketNext, UdpSender};
 ///    the transmit has one.
 ///
 /// Routes are ordered by prefix length, longest first, and then by the order they were added
-/// in. The transmit is dropped if no route matches.
+/// in. An IPv4 prefix counts as its IPv4-mapped IPv6 prefix, so `10.0.0.0/8` is a /104. The
+/// transmit is dropped if no route matches.
 ///
 /// IPv4 ranges also match IPv4-mapped addresses. IPv6 ranges match IPv4-mapped addresses only
 /// inside `::ffff:0:0/96`, so a dual-stack socket that should carry IPv4 lists that range too.
@@ -70,45 +68,35 @@ impl SocketRoute {
         self
     }
 
-    /// The destinations of this route
+    /// Returns the destinations of this route
     pub fn destinations(&self) -> IpNet {
         self.destinations
     }
 
-    /// The source address of this route
+    /// Returns the source address of this route
     pub fn source(&self) -> Option<IpAddr> {
         self.source
     }
 
-    /// Whether this is the default route of its address family
+    /// Returns whether this is the default route of its address family
     pub fn is_default(&self) -> bool {
         self.is_default
     }
-
-    /// Whether this route carries IPv4, including IPv4-mapped IPv6
-    fn is_ipv4(&self) -> bool {
-        match self.destinations {
-            IpNet::V4(_) => true,
-            IpNet::V6(net) => net.prefix_len() >= 96 && net.network().to_ipv4_mapped().is_some(),
-        }
-    }
 }
 
-/// Identifies one socket of an endpoint
+/// Identifies one socket of an endpoint, by its index in the route table
 ///
-/// Ids are never reused. A connection caches one sender per id, so a new socket always gets a
-/// new sender.
+/// Tables only gain sockets, so an id stays valid for the lifetime of the endpoint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct SocketId(u64);
+pub(crate) struct SocketId(usize);
 
 impl SocketId {
-    /// The id of the socket of a single-socket endpoint, never returned by `new`
+    /// The id of the socket of a single-socket endpoint
     pub(crate) const SINGLE: Self = Self(0);
 
-    /// Creates a new id, different from every id created before
-    fn new() -> Self {
-        static NEXT: AtomicU64 = AtomicU64::new(1);
-        Self(NEXT.fetch_add(1, Ordering::Relaxed))
+    /// The index of the socket in the route table
+    pub(crate) fn index(self) -> usize {
+        self.0
     }
 }
 
@@ -120,14 +108,25 @@ impl SocketId {
 pub(crate) struct RouteTable {
     /// Sorted by prefix length, longest first, then by insertion order
     routes: Vec<RouteEntry>,
-    /// In insertion order
+    /// Indexed by [`SocketId`]
     sockets: Vec<RoutedSocket>,
 }
 
-/// One route of a socket
+/// One route of a socket, prepared for matching
+///
+/// Addresses are kept as the bits of an IPv6 address, with IPv4 as IPv4-mapped IPv6. Thus a
+/// match is a mask and a compare, for both address families.
 #[derive(Debug, Clone, Copy)]
 struct RouteEntry {
-    route: SocketRoute,
+    /// The network of the destinations
+    network: u128,
+    /// The prefix mask of the destinations
+    mask: u128,
+    /// Whether the destinations are IPv4, including IPv4-mapped IPv6
+    is_ipv4: bool,
+    /// The source address, as the bits of an IPv6 address
+    source: Option<u128>,
+    is_default: bool,
     /// The scope id of the socket's local address, or 0
     scope_id: u32,
     socket: SocketId,
@@ -136,7 +135,6 @@ struct RouteEntry {
 /// A socket of the table, for creating its senders
 #[derive(Debug, Clone)]
 struct RoutedSocket {
-    id: SocketId,
     socket: Arc<dyn AsyncUdpSocketNext>,
     local_addr: SocketAddr,
 }
@@ -144,60 +142,75 @@ struct RoutedSocket {
 impl RouteTable {
     /// Returns a copy of this table with `socket` and its routes added
     ///
-    /// Returns the id of the new socket.
+    /// The new socket gets the next [`SocketId`], its index.
     pub(crate) fn with_socket(
         &self,
         socket: Arc<dyn AsyncUdpSocketNext>,
         local_addr: SocketAddr,
         routes: Vec<SocketRoute>,
-    ) -> (Self, SocketId) {
-        let id = SocketId::new();
+    ) -> Self {
+        let id = SocketId(self.sockets.len());
         let scope_id = match local_addr {
             SocketAddr::V6(addr) => addr.scope_id(),
             SocketAddr::V4(_) => 0,
         };
         let mut table = self.clone();
+        table.routes.extend(
+            routes
+                .iter()
+                .map(|route| RouteEntry::new(route, scope_id, id)),
+        );
+        // Stable sort keeps the insertion order for equal prefix lengths. The prefix length
+        // of an IPv4 route counts as IPv4-mapped, so `::ffff:0:0/96` and `0.0.0.0/0` tie.
         table
             .routes
-            .extend(routes.into_iter().map(|route| RouteEntry {
-                route,
-                scope_id,
-                socket: id,
-            }));
-        // Stable sort keeps the insertion order for equal prefix lengths.
+            .sort_by_key(|entry| std::cmp::Reverse(entry.mask.count_ones()));
+        table.sockets.push(RoutedSocket { socket, local_addr });
         table
-            .routes
-            .sort_by_key(|entry| std::cmp::Reverse(entry.route.destinations.prefix_len()));
-        table.sockets.push(RoutedSocket {
-            id,
-            socket,
-            local_addr,
-        });
-        (table, id)
     }
 
     /// Returns the socket for a transmit to `destination` from `src_ip`
+    ///
+    /// Called for every path on each transmit, so this is one pass over the routes with a mask
+    /// and a compare each.
     pub(crate) fn route(
         &self,
         destination: SocketAddr,
         src_ip: Option<IpAddr>,
     ) -> Option<SocketId> {
-        self.routes
-            .iter()
-            .find(|entry| entry.is_valid_send_addr(destination, src_ip))
-            .or_else(|| {
-                self.routes
-                    .iter()
-                    .find(|entry| entry.is_valid_default_addr(destination, src_ip))
-            })
-            .map(|entry| entry.socket)
+        let dst = ip_bits(destination.ip());
+        let dst_is_ipv4 = is_ipv4_mapped(dst);
+        let src = src_ip.map(ip_bits);
+        // A link-local destination is reachable through a socket bound on its interface.
+        let link_local_scope = match destination {
+            SocketAddr::V6(addr) if is_unicast_link_local(dst) => addr.scope_id(),
+            _ => 0,
+        };
+        let default_is_ipv4 = src.map_or(dst_is_ipv4, is_ipv4_mapped);
+        let mut default = None;
+        for entry in &self.routes {
+            let matches = match (src, entry.source) {
+                (Some(src), Some(source)) => source == src && entry.is_ipv4 == dst_is_ipv4,
+                _ => {
+                    entry.contains(dst)
+                        || (link_local_scope != 0 && link_local_scope == entry.scope_id)
+                }
+            };
+            if matches {
+                return Some(entry.socket);
+            }
+            if default.is_none() && entry.is_default && entry.is_ipv4 == default_is_ipv4 {
+                default = Some(entry.socket);
+            }
+        }
+        default
     }
 
     /// Creates a new sender for `id`, or `None` if the socket is not in this table
     ///
     /// Senders of IPv4 sockets map the endpoint's IPv4-mapped addresses back to IPv4.
     pub(crate) fn create_sender(&self, id: SocketId) -> Option<Pin<Box<dyn UdpSender>>> {
-        let socket = self.sockets.iter().find(|socket| socket.id == id)?;
+        let socket = self.sockets.get(id.index())?;
         let sender = socket.socket.create_sender();
         Some(match socket.local_addr {
             SocketAddr::V4(_) => Box::pin(Ipv4Sender(sender)),
@@ -225,48 +238,49 @@ impl RouteTable {
 }
 
 impl RouteEntry {
-    /// Whether this route matches the destination, or the source if there is one
-    fn is_valid_send_addr(&self, dst: SocketAddr, src: Option<IpAddr>) -> bool {
-        if let (Some(src), Some(source)) = (src, self.route.source) {
-            return source.to_canonical() == src.to_canonical()
-                && self.route.is_ipv4() == dst.ip().to_canonical().is_ipv4();
-        }
-        if route_contains(&self.route.destinations, dst.ip()) {
-            return true;
-        }
-        // A link-local destination is reachable through a socket bound on its interface.
-        match dst {
-            SocketAddr::V6(dst) => {
-                self.scope_id != 0
-                    && dst.ip().is_unicast_link_local()
-                    && dst.scope_id() == self.scope_id
-            }
-            SocketAddr::V4(_) => false,
+    fn new(route: &SocketRoute, scope_id: u32, socket: SocketId) -> Self {
+        let (network, prefix_len) = match route.destinations {
+            IpNet::V4(net) => (
+                u128::from(net.network().to_ipv6_mapped()),
+                96 + u32::from(net.prefix_len()),
+            ),
+            IpNet::V6(net) => (u128::from(net.network()), u32::from(net.prefix_len())),
+        };
+        Self {
+            network,
+            mask: u128::MAX.checked_shl(128 - prefix_len).unwrap_or(0),
+            // An IPv6 range shorter than /96 does not carry IPv4: only a dual-stack socket
+            // can send IPv4, and such a socket lists `::ffff:0:0/96`.
+            is_ipv4: prefix_len >= 96 && is_ipv4_mapped(network),
+            source: route.source.map(ip_bits),
+            is_default: route.is_default,
+            scope_id,
+            socket,
         }
     }
 
-    /// Whether this is a default route for the source's family, or the destination's
-    fn is_valid_default_addr(&self, dst: SocketAddr, src: Option<IpAddr>) -> bool {
-        let ip = src.unwrap_or_else(|| dst.ip()).to_canonical();
-        self.route.is_default && self.route.is_ipv4() == ip.is_ipv4()
+    /// Whether the destinations contain `ip`, given as [`ip_bits`]
+    fn contains(&self, ip: u128) -> bool {
+        self.is_ipv4 == is_ipv4_mapped(ip) && ip & self.mask == self.network
     }
 }
 
-/// Returns whether `ip` is in `range`, treating IPv4-mapped addresses as IPv4
-///
-/// An IPv4-mapped address matches IPv4 ranges, and IPv6 ranges only if they lie within
-/// `::ffff:0:0/96`. A plain `::/0` socket is therefore never asked to send IPv4, which only a
-/// dual-stack socket can do, and such a socket lists that range.
-fn route_contains(range: &IpNet, ip: IpAddr) -> bool {
-    match (range, ip) {
-        (IpNet::V4(range), IpAddr::V6(ip)) => {
-            ip.to_ipv4_mapped().is_some_and(|ip| range.contains(&ip))
-        }
-        (IpNet::V6(range), IpAddr::V6(ip)) if ip.to_ipv4_mapped().is_some() => {
-            range.prefix_len() >= 96 && range.contains(&ip)
-        }
-        (range, ip) => range.contains(&ip),
+/// The bits of `ip` as an IPv6 address, with IPv4 as IPv4-mapped IPv6
+fn ip_bits(ip: IpAddr) -> u128 {
+    match ip {
+        IpAddr::V4(ip) => u128::from(ip.to_ipv6_mapped()),
+        IpAddr::V6(ip) => u128::from(ip),
     }
+}
+
+/// Whether `bits` are an IPv4-mapped IPv6 address, in `::ffff:0:0/96`
+fn is_ipv4_mapped(bits: u128) -> bool {
+    bits >> 32 == 0xffff
+}
+
+/// Whether `bits` are an IPv6 unicast link-local address, in `fe80::/10`
+fn is_unicast_link_local(bits: u128) -> bool {
+    bits >> 118 == 0xfe80 >> 6
 }
 
 /// Sends on an IPv4 socket, mapping IPv4-mapped addresses back to IPv4
@@ -326,9 +340,8 @@ mod tests {
         let mut ids = Vec::new();
         for (addr, routes) in sockets {
             let addr: SocketAddr = addr.parse().unwrap();
-            let (next, id) = table.with_socket(Arc::new(NullSocket(addr)), addr, routes.to_vec());
-            table = next;
-            ids.push(id);
+            ids.push(SocketId(ids.len()));
+            table = table.with_socket(Arc::new(NullSocket(addr)), addr, routes.to_vec());
         }
         (table, ids)
     }
@@ -337,27 +350,54 @@ mod tests {
         SocketRoute::new(net.parse().unwrap())
     }
 
+    /// Whether a route for `net` contains `ip`
+    fn contains(net: &str, ip: &str) -> bool {
+        let entry = RouteEntry::new(&route(net), 0, SocketId(0));
+        entry.contains(ip_bits(ip.parse().unwrap()))
+    }
+
     #[test]
-    fn route_contains_maps_ipv4() {
-        let v4: IpNet = "10.0.0.0/8".parse().unwrap();
-        let v6: IpNet = "fd15:70a:510b:1::/64".parse().unwrap();
-        assert!(route_contains(&v4, "10.1.2.3".parse().unwrap()));
-        assert!(route_contains(&v4, "::ffff:10.1.2.3".parse().unwrap()));
-        assert!(!route_contains(&v4, "11.1.2.3".parse().unwrap()));
-        assert!(!route_contains(&v4, "fd15:70a:510b:1::1".parse().unwrap()));
-        assert!(route_contains(&v6, "fd15:70a:510b:1::1".parse().unwrap()));
-        assert!(!route_contains(&v6, "fd15:70a:510b:2::1".parse().unwrap()));
-        assert!(!route_contains(&v6, "10.1.2.3".parse().unwrap()));
+    fn contains_maps_ipv4() {
+        assert!(contains("10.0.0.0/8", "10.1.2.3"));
+        assert!(contains("10.0.0.0/8", "::ffff:10.1.2.3"));
+        assert!(!contains("10.0.0.0/8", "11.1.2.3"));
+        assert!(!contains("10.0.0.0/8", "fd15:70a:510b:1::1"));
+        assert!(contains("0.0.0.0/0", "192.0.2.1"));
+        assert!(!contains("0.0.0.0/0", "2001:db8::1"));
+        assert!(contains("fd15:70a:510b:1::/64", "fd15:70a:510b:1::1"));
+        assert!(!contains("fd15:70a:510b:1::/64", "fd15:70a:510b:2::1"));
+        assert!(!contains("fd15:70a:510b:1::/64", "10.1.2.3"));
         // Only a dual-stack range covers IPv4-mapped addresses.
-        let all_v6: IpNet = "::/0".parse().unwrap();
-        let dual_stack: IpNet = "::ffff:0:0/96".parse().unwrap();
-        assert!(!route_contains(&all_v6, "::ffff:10.1.2.3".parse().unwrap()));
-        assert!(route_contains(
-            &dual_stack,
-            "::ffff:10.1.2.3".parse().unwrap()
-        ));
-        assert!(route_contains(&all_v6, "2001:db8::1".parse().unwrap()));
-        assert!(!route_contains(&dual_stack, "2001:db8::1".parse().unwrap()));
+        assert!(!contains("::/0", "::ffff:10.1.2.3"));
+        assert!(!contains("::/0", "10.1.2.3"));
+        assert!(contains("::ffff:0:0/96", "::ffff:10.1.2.3"));
+        assert!(contains("::ffff:0:0/96", "10.1.2.3"));
+        assert!(contains("::/0", "2001:db8::1"));
+        assert!(!contains("::ffff:0:0/96", "2001:db8::1"));
+        assert!(contains("::1/128", "::1"));
+        assert!(!contains("::1/128", "::2"));
+    }
+
+    #[test]
+    fn link_local_bits() {
+        let bits = |ip: &str| ip_bits(ip.parse().unwrap());
+        assert!(is_unicast_link_local(bits("fe80::1")));
+        assert!(is_unicast_link_local(bits("febf:ffff::1")));
+        assert!(!is_unicast_link_local(bits("fec0::1")));
+        assert!(!is_unicast_link_local(bits("fe7f::1")));
+        assert!(!is_unicast_link_local(bits("169.254.0.1")));
+    }
+
+    /// IPv4 prefix lengths count as IPv4-mapped, so a longer IPv4 route beats `::ffff:0:0/96`
+    #[test]
+    fn ipv4_prefix_counts_as_mapped() {
+        let (table, ids) = table(&[
+            ("[::]:1", &[route("::ffff:0:0/96")]),
+            ("0.0.0.0:2", &[route("10.0.0.0/8")]),
+        ]);
+        let select = |dst: &str| table.route(dst.parse().unwrap(), None);
+        assert_eq!(select("[::ffff:10.1.2.3]:1"), Some(ids[1]));
+        assert_eq!(select("[::ffff:192.0.2.1]:1"), Some(ids[0]));
     }
 
     #[test]
@@ -434,13 +474,5 @@ mod tests {
         assert_eq!(select("[::ffff:8.8.8.8]:1"), Some(ids[1]));
         // No IPv6 default route.
         assert_eq!(select("[2001:db8::1]:1"), None);
-    }
-
-    #[test]
-    fn socket_ids_are_unique() {
-        let ids: Vec<_> = (0..100).map(|_| SocketId::new()).collect();
-        let unique: std::collections::HashSet<_> = ids.iter().collect();
-        assert_eq!(unique.len(), ids.len());
-        assert!(!ids.contains(&SocketId::SINGLE));
     }
 }
