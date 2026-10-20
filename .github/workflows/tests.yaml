@@ -131,6 +131,14 @@ jobs:
           MSG_FORMAT: ${{ inputs.flaky && 'libtest-json' || 'human' }}
           OUT_NAME: ${{ matrix.name }}_${{ matrix.features }}_${{ matrix.rust }}
 
+      # With `--workspace`, other members turn on the default features of noq-proto.
+      - name: run noq-proto tests without default features
+        if: ${{ (! inputs.flaky) && matrix.features == 'none' }}
+        run: |
+          cargo nextest run --locked -p noq-proto --no-default-features --lib --profile ci
+        env:
+          RUST_LOG: ${{ runner.debug && 'TRACE' || 'DEBUG'}}
+
       - name: upload results
         if: ${{ failure() && inputs.flaky }}
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0

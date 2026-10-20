@@ -1885,14 +1885,8 @@ pub(crate) struct NewConnectionId {
 
 #[cfg(test)]
 fn connection_id_and_reset_token() -> impl Strategy<Value = (ConnectionId, ResetToken)> {
-    (any::<ConnectionId>(), any::<[u8; 64]>()).prop_map(|(id, reset_key)| {
-        #[cfg(all(feature = "aws-lc-rs", not(feature = "ring")))]
-        use aws_lc_rs::hmac;
-        #[cfg(feature = "ring")]
-        use ring::hmac;
-        let key = hmac::Key::new(hmac::HMAC_SHA256, &reset_key);
-        (id, ResetToken::new(&key, id))
-    })
+    (any::<ConnectionId>(), any::<[u8; RESET_TOKEN_SIZE]>())
+        .prop_map(|(id, reset_token)| (id, ResetToken::from(reset_token)))
 }
 
 #[cfg(test)]

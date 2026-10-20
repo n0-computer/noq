@@ -212,7 +212,7 @@ impl CidState {
         (min, max)
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "rustls", any(feature = "aws-lc-rs", feature = "ring")))]
     pub(crate) fn assign_retire_seq(&mut self, v: u64) -> u64 {
         // Cannot retire more CIDs than what have been issued
         debug_assert!(v <= *self.active_seq.iter().max().unwrap() + 1);
