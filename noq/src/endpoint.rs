@@ -757,7 +757,7 @@ impl State {
             unreachable!("only endpoints with multiple sockets add sockets");
         };
         debug!(%local_addr, ?routes, "adding socket");
-        *table = Arc::new(table.with_socket(socket.clone(), local_addr, routes).0);
+        *table = Arc::new(table.with_socket(socket.clone(), local_addr, routes));
         self.inner.set_allow_mtud(!table.may_fragment());
         self.sender.set_routes(table.clone());
         for sender in self.recv_state.connections.senders.values() {
@@ -796,12 +796,13 @@ impl State {
         };
         let runtime = &*self.runtime;
         let (recv_state, inner, sender) = (&mut self.recv_state, &mut self.inner, &mut self.sender);
+        let ipv6 = self.ipv6;
         let get_time = || runtime.now();
         buffer.limiter.start_cycle(get_time);
         let mut poll = |socket: &mut dyn AsyncUdpSocket, received_connection_packet: &mut bool| {
             buffer.poll_recv(cx, socket, runtime, &mut |metas, datagrams| {
                 *received_connection_packet |=
-                    recv_state.handle_batch(inner, sender, now, metas, datagrams);
+                    recv_state.handle_received(inner, sender, ipv6, now, metas, datagrams);
                 true
             })
         };
@@ -1104,17 +1105,22 @@ impl RecvState {
 
     /// Hands a batch of received datagrams to the endpoint
     ///
+    /// With `ipv6`, the endpoint keeps addresses as IPv6, so IPv4 sources become IPv4-mapped.
     /// Returns whether a datagram was routed to an existing connection.
-    fn handle_batch(
+    fn handle_received(
         &mut self,
         endpoint: &mut proto::Endpoint,
         sender: &mut ConnectionSender,
+        ipv6: bool,
         now: Instant,
-        metas: &[RecvMeta],
+        metas: &mut [RecvMeta],
         datagrams: &mut BytesMut,
     ) -> bool {
         let mut received_connection_packet = false;
         for meta in metas {
+            if ipv6 {
+                meta.addr = SocketAddr::V6(ensure_ipv6(meta.addr));
+            }
             let mut data = datagrams.split_to(meta.len);
             while !data.is_empty() {
                 let buf = data.split_to(meta.stride.min(data.len()));
@@ -1338,14 +1344,10 @@ impl Future for ReceiverDriver {
                         return false;
                     }
                     let state = &mut *guard;
-                    // The endpoint keeps addresses as IPv6.
-                    for meta in metas.iter_mut() {
-                        meta.addr = SocketAddr::V6(ensure_ipv6(meta.addr));
-                    }
                     let (inner, sender) = (&mut state.inner, &mut state.sender);
                     state
                         .recv_state
-                        .handle_batch(inner, sender, now, metas, datagrams);
+                        .handle_received(inner, sender, state.ipv6, now, metas, datagrams);
                     let has_incoming = !state.recv_state.incoming.is_empty();
                     drop(guard);
                     if has_incoming {
