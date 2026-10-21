@@ -65,12 +65,13 @@ pub use proto::{
     ClosedStream, ConfigError, ConnectError, ConnectionClose, ConnectionError, ConnectionId,
     ConnectionIdGenerator, ConnectionStats, DecryptedInitial, Dir, EcnCodepoint, EndpointConfig,
     FourTuple, FrameStats, FrameType, IdleTimeout, InvalidCid, MtuDiscoveryConfig,
-    NetworkChangeHint, NoneTokenLog, NoneTokenStore, PathError, PathEvent, PathId, PathStats,
-    PathStatus, ServerConfig, SetPathStatusError, Side, StdSystemTime, StreamId, TimeSource,
-    TokenLog, TokenMemoryCache, TokenReuseError, TokenStore, Transmit, TransportConfig,
-    TransportErrorCode, UdpStats, ValidationTokenConfig, VarInt, VarIntBoundsExceeded, congestion,
-    crypto,
+    NetworkChangeHint, PathError, PathEvent, PathId, PathStats, PathStatus, ServerConfig,
+    SetPathStatusError, Side, StdSystemTime, StreamId, TimeSource, TokenLog, TokenMemoryCache,
+    TokenReuseError, TokenStore, Transmit, TransportConfig, TransportErrorCode, UdpStats,
+    ValidationTokenConfig, VarInt, VarIntBoundsExceeded, congestion, crypto,
 };
+#[allow(deprecated)]
+pub use proto::{NoneTokenLog, NoneTokenStore};
 #[cfg(feature = "qlog")]
 pub use proto::{QlogConfig, QlogFactory, QlogFileFactory};
 #[cfg(feature = "rustls")]
