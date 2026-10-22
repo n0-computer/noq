@@ -117,10 +117,10 @@ jobs:
         with:
           persist-credentials: false
       - name: test on Illumos
-        # pinned: v1 tag moves and builder v2.0.3+ ships a VM with broken DNS
-        uses: vmactions/omnios-vm@4f4fcbf0847b079a6e0eafe6ff06b3d15510f0b0 # v1.1.5
+        # v1.3.x supports ubuntu-26.04 runners (older releases fail installing qemu-kvm)
+        uses: vmactions/omnios-vm@9576f0b6d15e7696548409baa533bc0a339caf42 # v1.3.7
         with:
-          usesh: true
+          release: r151058
           mem: 4096
           copyback: false
           prepare: |
