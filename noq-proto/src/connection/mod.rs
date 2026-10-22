@@ -6585,8 +6585,7 @@ impl Connection {
             && scheduling_info.may_send_data
             && space_id == SpaceId::Data
         {
-            self.streams
-                .write_stream_frames(builder, self.config.send_fairness, stats);
+            self.streams.write_stream_frames(builder, stats);
         }
     }
 
