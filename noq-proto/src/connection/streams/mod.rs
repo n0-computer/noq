@@ -585,23 +585,6 @@ impl PendingStreamsQueue {
         self.affinities.clear();
     }
 
-    fn iter(
-        &self,
-        path: PathId,
-        include_affinity_any: bool,
-    ) -> impl Iterator<Item = &PendingStream> {
-        include_affinity_any
-            .then_some(&self.any)
-            .into_iter()
-            .flat_map(|q| q.iter())
-            .chain(
-                self.sticky
-                    .get(&PathIdKey(path))
-                    .into_iter()
-                    .flat_map(|q| q.iter()),
-            )
-    }
-
     #[cfg(test)]
     fn len(&self) -> usize {
         self.any.len() + self.sticky.values().map(|q| q.len()).sum::<usize>()

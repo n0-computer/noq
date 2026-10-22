@@ -9,7 +9,7 @@ use super::{
 };
 use crate::{
     Dir, FxHashMap, MAX_STREAM_COUNT, PathId, Side, StreamId, TransportError, VarInt,
-    connection::{PacketBuilder, stats::FrameStats},
+    connection::{PacketBuilder, paths::PathIdKey, stats::FrameStats},
     frame::{self, FrameStruct},
     hash_map,
     transport_parameters::TransportParameters,
@@ -387,15 +387,32 @@ impl StreamsState {
         }
     }
 
-    /// Whether any stream data is queued for this path, regardless of control frames.
-    pub(crate) fn can_send_stream_data(&self, path: PathId, include_affinity_any: bool) -> bool {
-        // Empty writes and late ACKs can leave entries without pending work; loss recovery
-        // can requeue reset streams.
-        self.pending.iter(path, include_affinity_any).any(|stream| {
+    /// Whether sticky-to-this-path stream data is pending, excluding control frames.
+    pub(crate) fn can_send_sticky_stream_data(&self, path: PathId) -> bool {
+        self.pending
+            .sticky
+            .get(&PathIdKey(path))
+            .is_some_and(|heap| {
+                heap.iter().any(|pending| {
+                    // Empty writes and late ACKs can leave entries without pending
+                    // work; loss recovery can requeue reset streams.
+                    self.send
+                        .get(&pending.id)
+                        .and_then(|s| s.as_ref())
+                        .is_some_and(|stream| !stream.is_reset() && stream.is_pending())
+                })
+            })
+    }
+
+    /// Whether non-path-sticky stream data is pending, excluding control frames.
+    pub(crate) fn can_send_any_stream_data(&self) -> bool {
+        self.pending.any.iter().any(|pending| {
+            // Empty writes and late ACKs can leave entries without pending work; loss
+            // recovery can requeue reset streams.
             self.send
-                .get(&stream.id)
+                .get(&pending.id)
                 .and_then(|s| s.as_ref())
-                .is_some_and(|s| !s.is_reset() && s.is_pending())
+                .is_some_and(|stream| !stream.is_reset() && stream.is_pending())
         })
     }
 
@@ -1480,7 +1497,7 @@ mod tests {
         assert_eq!(meta[1].id, id_mid);
         assert_eq!(meta[2].id, id_low);
 
-        assert!(!server.can_send_stream_data(PathId::ZERO, true));
+        assert!(!server.can_send_any_stream_data());
         assert_eq!(server.pending.len(), 0);
     }
 
@@ -1640,7 +1657,7 @@ mod tests {
         assert_eq!(meta[0].id, id_mid);
         assert_eq!(meta[1].id, id_high);
 
-        assert!(!server.can_send_stream_data(PathId::ZERO, true));
+        assert!(!server.can_send_any_stream_data());
         assert_eq!(server.pending.len(), 0);
     }
 
@@ -1700,7 +1717,7 @@ mod tests {
             metas.extend(meta);
         }
 
-        assert!(!server.can_send_stream_data(PathId::ZERO, true));
+        assert!(!server.can_send_any_stream_data());
         assert_eq!(server.pending.len(), 0);
 
         let stream_ids = metas.iter().map(|m| m.id).collect::<Vec<_>>();
@@ -1774,7 +1791,7 @@ mod tests {
             metas.extend(meta);
         }
 
-        assert!(!server.can_send_stream_data(PathId::ZERO, true));
+        assert!(!server.can_send_any_stream_data());
         assert_eq!(server.pending.len(), 0);
 
         let stream_ids = metas.iter().map(|m| m.id).collect::<Vec<_>>();
@@ -1838,7 +1855,7 @@ mod tests {
         stream.reset(0u32.into()).unwrap();
 
         assert_eq!(pending.reset_stream, &[(id, 0u32.into())]);
-        assert!(!server.can_send_stream_data(PathId::ZERO, true));
+        assert!(!server.can_send_any_stream_data());
     }
 
     #[test]
