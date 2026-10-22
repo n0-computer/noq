@@ -364,6 +364,7 @@ impl<'arbitrary> arbitrary::Arbitrary<'arbitrary> for StreamId {
 }
 
 /// An internal map key that uses identity hashing for [`StreamId`].
+///
 /// Keeps [`IdentityHashable`] out of the public [`StreamId`] API.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 struct StreamIdKey(StreamId);

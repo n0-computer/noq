@@ -7377,9 +7377,11 @@ struct PathSchedulingInfo {
     /// well.
     is_abandoned: bool,
     /// Whether the path has CIDs, is not abandoned, and is validated or handshaking.
+    ///
     /// Congestion, pacing, and anti-amplification limits are checked separately.
     can_send_data: bool,
     /// Whether the available/backup preference permits data on this path.
+    ///
     /// Always true during the handshake.
     status_allows_data: bool,
     /// Whether the path may send a CONNECTION_CLOSE frame.
