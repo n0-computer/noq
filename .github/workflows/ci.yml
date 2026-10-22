@@ -147,7 +147,7 @@ jobs:
     name: Build & test wasm32
     if: "github.event_name != 'pull_request' || ! contains(github.event.pull_request.labels.*.name, 'flaky-test')"
     timeout-minutes: 30
-    runs-on: [self-hosted, linux, X64]
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     env:
       CC_wasm32_unknown_unknown: clang
       AR_wasm32_unknown_unknown: llvm-ar
@@ -199,7 +199,7 @@ jobs:
     name: Android Build Only
     if: "github.event_name != 'pull_request' || ! contains(github.event.pull_request.labels.*.name, 'flaky-test')"
     timeout-minutes: 30
-    runs-on: [self-hosted, linux, X64]
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     strategy:
       fail-fast: false
       matrix:
@@ -504,7 +504,7 @@ jobs:
       - run: codespell --ignore-words-list=ans,atmost,crate,ect,inout,keep-alives,ser,te,worl --skip=CHANGELOG.md,*.lock
 
   check_semver:
-    runs-on: [self-hosted, linux, X64]
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     env:
       RUSTC_WRAPPER: "sccache"
       SCCACHE_GHA_ENABLED: "on"
