@@ -12,11 +12,12 @@ use std::{
     future::Future,
     io,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket},
+    num::NonZeroUsize,
     pin::{Pin, pin},
     str,
     sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     task::{Context, Poll, RawWaker, RawWakerVTable, Waker},
 };
@@ -127,6 +128,162 @@ async fn close_endpoint() {
             panic!("unexpected success");
         }
     }
+}
+
+/// Makes the next receive fail, which ends the endpoint driver on an I/O error.
+#[derive(Debug, Default)]
+struct SocketFailure {
+    armed: AtomicBool,
+    recv_waker: Mutex<Option<Waker>>,
+}
+
+impl SocketFailure {
+    fn trigger(&self) {
+        self.armed.store(true, Ordering::SeqCst);
+        if let Some(waker) = self.recv_waker.lock().unwrap().as_ref() {
+            waker.wake_by_ref();
+        }
+    }
+}
+
+/// Wraps a socket so that a test can make its next receive fail.
+#[derive(Debug)]
+struct FailingSocket {
+    inner: Box<dyn AsyncUdpSocket>,
+    failure: Arc<SocketFailure>,
+}
+
+impl AsyncUdpSocket for FailingSocket {
+    fn create_sender(&self) -> Pin<Box<dyn crate::runtime::UdpSender>> {
+        self.inner.create_sender()
+    }
+
+    fn poll_recv(
+        &mut self,
+        cx: &mut Context<'_>,
+        bufs: &mut [std::io::IoSliceMut<'_>],
+        meta: &mut [udp::RecvMeta],
+    ) -> Poll<io::Result<usize>> {
+        if self.failure.armed.load(Ordering::SeqCst) {
+            return Poll::Ready(Err(io::Error::other("injected socket failure")));
+        }
+        // Register before the inner socket can park this task, then check again, so
+        // a concurrent `trigger` cannot be lost.
+        *self.failure.recv_waker.lock().unwrap() = Some(cx.waker().clone());
+        if self.failure.armed.load(Ordering::SeqCst) {
+            return Poll::Ready(Err(io::Error::other("injected socket failure")));
+        }
+        self.inner.poll_recv(cx, bufs, meta)
+    }
+
+    fn local_addr(&self) -> io::Result<SocketAddr> {
+        self.inner.local_addr()
+    }
+
+    fn max_receive_segments(&self) -> NonZeroUsize {
+        self.inner.max_receive_segments()
+    }
+
+    fn may_fragment(&self) -> bool {
+        self.inner.may_fragment()
+    }
+}
+
+/// An `Incoming` handed out before the endpoint driver stops must not register a
+/// connection that nothing can drain.
+///
+/// The driver can stop on a socket error while the runtime keeps running. An accept
+/// that landed afterwards used to register a connection whose `Draining`/`Drained`
+/// events could never be processed, so `wait_all_draining` and `wait_idle` waited
+/// forever.
+#[test]
+fn accept_after_driver_loss() {
+    let _guard = subscribe();
+    let factory = EndpointFactory::new();
+
+    let server_runtime = rt_threaded();
+    let failure = Arc::new(SocketFailure::default());
+    let server = {
+        let _guard = server_runtime.enter();
+        let socket = crate::runtime::Runtime::wrap_udp_socket(
+            &TokioRuntime,
+            UdpSocket::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)).unwrap(),
+        )
+        .unwrap();
+        factory.endpoint_with_socket(
+            "server",
+            TransportConfig::default(),
+            Box::new(FailingSocket {
+                inner: socket,
+                failure: failure.clone(),
+            }),
+            Arc::new(TokioRuntime),
+        )
+    };
+    let server_addr = server.local_addr().unwrap();
+
+    let client_runtime = rt_threaded();
+    let client = {
+        let _guard = client_runtime.enter();
+        factory.endpoint("client")
+    };
+
+    // Hand the first `Incoming` to this thread without accepting it yet.
+    let (incoming_tx, incoming_rx) = std::sync::mpsc::channel();
+    server_runtime.spawn({
+        let server = server.clone();
+        async move {
+            let incoming = server.accept().await.expect("incoming");
+            let _ = incoming_tx.send(incoming);
+        }
+    });
+    {
+        let _guard = client_runtime.enter();
+        let connecting = client.connect(server_addr, "localhost").expect("connect");
+        client_runtime.spawn(async move {
+            let _ = connecting.await;
+        });
+    }
+    let incoming = incoming_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("no incoming");
+
+    // Fail the server socket. The driver stops on the error and `accept` yields
+    // `None` once it is gone.
+    failure.trigger();
+    let accepted = server_runtime
+        .block_on(async { tokio::time::timeout(Duration::from_secs(5), server.accept()).await });
+    assert!(
+        matches!(accepted, Ok(None)),
+        "driver did not stop after the socket failure: {accepted:?}"
+    );
+
+    // The connection must fail promptly instead of being registered for a driver
+    // that is no longer there, and nothing may be left for the drain waiters.
+    let connecting = {
+        let _guard = server_runtime.enter();
+        incoming.accept().expect("accept")
+    };
+    server_runtime.block_on(async {
+        tokio::time::timeout(Duration::from_secs(5), server.wait_all_draining())
+            .await
+            .expect("wait_all_draining did not return");
+        tokio::time::timeout(Duration::from_secs(5), server.wait_idle())
+            .await
+            .expect("wait_idle did not return");
+    });
+    let connecting = server_runtime
+        .block_on(async { tokio::time::timeout(Duration::from_secs(5), connecting).await });
+    // The connection fails because its endpoint driver is gone; which error variant
+    // the close paths leave behind is not part of what this test asserts.
+    assert!(
+        matches!(connecting, Ok(Err(_))),
+        "connection survived the loss of its endpoint driver: {connecting:?}"
+    );
+
+    drop(client);
+    client_runtime.shutdown_background();
+    server_runtime.shutdown_background();
 }
 
 #[test]
@@ -343,6 +500,21 @@ impl EndpointFactory {
         transport_config: TransportConfig,
         runtime: Arc<dyn crate::runtime::Runtime>,
     ) -> Endpoint {
+        let socket = crate::runtime::Runtime::wrap_udp_socket(
+            &*runtime,
+            UdpSocket::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)).unwrap(),
+        )
+        .unwrap();
+        self.endpoint_with_socket(name, transport_config, socket, runtime)
+    }
+
+    fn endpoint_with_socket(
+        &self,
+        name: impl Into<String>,
+        transport_config: TransportConfig,
+        socket: Box<dyn AsyncUdpSocket>,
+        runtime: Arc<dyn crate::runtime::Runtime>,
+    ) -> Endpoint {
         let span = info_span!("dummy");
         span.record("otel.name", name.into());
         let _guard = span.entered();
@@ -354,10 +526,10 @@ impl EndpointFactory {
 
         let mut roots = RootCertStore::empty();
         roots.add(self.cert.cert.der().clone()).unwrap();
-        let endpoint = Endpoint::new(
+        let endpoint = Endpoint::new_with_abstract_socket(
             self.endpoint_config.clone(),
             Some(server_config),
-            UdpSocket::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)).unwrap(),
+            socket,
             runtime,
         )
         .unwrap();
