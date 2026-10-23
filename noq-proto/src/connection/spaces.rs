@@ -150,13 +150,19 @@ impl PacketSpace {
             .number_spaces
             .values()
             .any(|pns| pns.pending_acks.can_send());
-        let space_specific = self.number_spaces.get(&path_id).is_some_and(|s| {
-            s.pending_ping || s.pending_immediate_ack || !s.pending_path_responses.is_empty()
-        });
+        let probing_frames = self
+            .number_spaces
+            .get(&path_id)
+            .is_some_and(|s| !s.pending_path_responses.is_empty());
+        let space_specific = self
+            .number_spaces
+            .get(&path_id)
+            .is_some_and(|s| s.pending_ping || s.pending_immediate_ack);
         let other = !self.pending.is_empty(streams);
         SendableFrames {
             acks,
             close: false,
+            probing_frames,
             space_specific,
             other,
         }
@@ -1041,14 +1047,23 @@ pub(super) struct SendableFrames {
     pub(super) acks: bool,
     /// Whether there is a CONNECTION_CLOSE to send, this is not ack-eliciting.
     pub(super) close: bool,
-    /// Whether there are any frames that must be sent on this specific space.
+    /// Whether there are any probing frames to send on this specific space.
+    ///
+    /// A space here in the sense of a QUIC Multipath packet number space: `Initial`,
+    /// `Handshake` and all `Data(PathId)` spaces.
+    ///
+    /// These frames are allowed to be sent on un-validated paths, e.g. PATH_CHALLENGE and
+    /// PATH_RESPONSE. These are ACK-eliciting.
+    ///
+    /// See [`Self::space_specific`] for frames that need to be sent on a validated space.
+    pub(super) probing_frames: bool,
+    /// Whether there are any frames that must be sent on this specific space if validated.
     ///
     /// A space here in the sense of a QUIC Multipath packet number space: `Initial`,
     /// `Handshake` and all `Data(PathId)` spaces.
     ///
     /// These are ack-eliciting. Some frames are scheduled per path, e.g. PING,
-    /// IMMEDIATE_ACK, PATH_CHALLENGE or PATH_RESPONSE. But also STREAM frames for streams
-    /// that are sticky to a path.
+    /// IMMEDIATE_ACK. But also STREAM frames for streams that are sticky to a path.
     pub(super) space_specific: bool,
     /// Whether there are any other frames to send, these are ack-eliciting.
     pub(super) other: bool,
@@ -1060,6 +1075,7 @@ impl SendableFrames {
         Self {
             acks: false,
             close: false,
+            probing_frames: false,
             space_specific: false,
             other: false,
         }
@@ -1070,6 +1086,7 @@ impl SendableFrames {
         let Self {
             acks: _,
             close,
+            probing_frames,
             space_specific,
             other,
         } = *self;
@@ -1077,7 +1094,7 @@ impl SendableFrames {
             // No ack-eliciting frames are included with a CONNECTION_CLOSE, only acks.
             return false;
         }
-        space_specific || other
+        probing_frames || space_specific || other
     }
 
     /// Whether no data is sendable.
@@ -1085,10 +1102,11 @@ impl SendableFrames {
         let Self {
             acks,
             close,
+            probing_frames,
             space_specific,
             other,
         } = *self;
-        !acks && !close && !space_specific && !other
+        !acks && !close && !probing_frames && !space_specific && !other
     }
 }
 
@@ -1097,12 +1115,14 @@ impl ::core::ops::BitOrAssign for SendableFrames {
         let Self {
             acks,
             close,
+            probing_frames,
             space_specific,
             other,
         } = rhs;
 
         self.acks |= acks;
         self.close |= close;
+        self.probing_frames |= probing_frames;
         self.space_specific |= space_specific;
         self.other |= other;
     }

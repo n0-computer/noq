@@ -1510,9 +1510,12 @@ impl Connection {
                 } else if can_send.close && scheduling_info.may_send_close {
                     // This is the best path to send a CONNECTION_CLOSE on.
                     true
-                } else if needs_loss_probe || can_send.space_specific {
-                    // We always send a loss probe or space-specific frames if the path is
+                } else if needs_loss_probe || can_send.probing_frames {
+                    // We always send a loss probe or space-specific probing if the path is
                     // not abandoned.
+                    true
+                } else if scheduling_info.can_send_data && can_send.space_specific {
+                    // Other space-specific frames are only sent if the path is validated.
                     true
                 } else {
                     // Anything else we only send if we're the best path for SpaceKind::Data
@@ -6988,15 +6991,15 @@ impl Connection {
     /// may need to be sent.
     fn can_send_1rtt(&self, path_id: PathId, max_size: usize) -> SendableFrames {
         let network_path = self.path_data(path_id).network_path;
-        let space_specific = self
+        let probing_frames = self
             .paths
             .get(&path_id)
             .is_some_and(|path| path.data.pending_challenge || !path.data.pending.is_empty())
             || self.spaces[SpaceKind::Data]
                 .number_spaces
                 .get(&path_id)
-                .is_some_and(|pns| pns.pending_path_responses.has_pending_on_path(network_path))
-            || self.streams.can_send_sticky_stream_data(path_id);
+                .is_some_and(|pns| pns.pending_path_responses.has_pending_on_path(network_path));
+        let space_specific = self.streams.can_send_sticky_stream_data(path_id);
 
         // Stream control frames are checked in PacketSpace::can_send, only check data here.
         let other = self.streams.can_send_any_stream_data()
@@ -7006,6 +7009,7 @@ impl Connection {
         SendableFrames {
             acks: false,
             close: false,
+            probing_frames,
             space_specific,
             other,
         }
