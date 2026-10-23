@@ -136,6 +136,9 @@ pub struct StreamsState {
     receive_window_shrink_debt: u64,
     /// Whether the locally-initiated stream limit has been hit, per direction
     pub(super) streams_blocked: [bool; 2],
+
+    /// Whether streams are interleaved by default.
+    pub(super) default_incremental: bool,
 }
 
 impl StreamsState {
@@ -147,6 +150,7 @@ impl StreamsState {
         send_window: u64,
         receive_window: VarInt,
         stream_receive_window: VarInt,
+        default_incremental: bool,
     ) -> Self {
         Self {
             side,
@@ -181,6 +185,7 @@ impl StreamsState {
             initial_max_stream_data_bidi_remote: 0u32.into(),
             receive_window_shrink_debt: 0,
             streams_blocked: [false, false],
+            default_incremental,
         }
     }
 
@@ -364,7 +369,7 @@ impl StreamsState {
         let Some(stream) = self
             .send
             .get_mut(&id)
-            .map(get_or_insert_send(max_send_data))
+            .map(get_or_insert_send(max_send_data, self.default_incremental))
         else {
             return;
         };
@@ -555,11 +560,11 @@ impl StreamsState {
 
             if stream.is_pending() {
                 // If the stream still has pending data, reinsert it, possibly with an updated
-                // priority value Fairness with other streams is achieved by
-                // implementing round-robin scheduling, so that the other streams
-                // will have a chance to write data before we touch this stream
-                // again.
-                self.pending.push_pending(id, stream.priority);
+                // priority value. Fairness with other streams in the incremental case is achieved
+                // with round-robin scheduling, so that the other streams will have a chance to
+                // write data before we touch this stream again.
+                self.pending
+                    .push_pending(id, stream.priority, stream.incremental);
             }
 
             let range = offsets.clone();
@@ -617,7 +622,8 @@ impl StreamsState {
             return;
         };
         if !stream.is_pending() {
-            self.pending.push_pending(frame.id, stream.priority);
+            self.pending
+                .push_pending(frame.id, stream.priority, stream.incremental);
         }
         stream.fin_pending |= frame.fin;
         stream.pending.retransmit(frame.offsets);
@@ -636,7 +642,8 @@ impl StreamsState {
                     continue;
                 }
                 if !stream.is_pending() {
-                    self.pending.push_pending(id, stream.priority);
+                    self.pending
+                        .push_pending(id, stream.priority, stream.incremental);
                 }
                 stream.pending.retransmit_all_for_0rtt();
             }
@@ -689,7 +696,7 @@ impl StreamsState {
         if let Some(ss) = self
             .send
             .get_mut(&id)
-            .map(get_or_insert_send(max_send_data))
+            .map(get_or_insert_send(max_send_data, self.default_incremental))
         {
             if ss.increase_max_data(offset) {
                 if write_limit > 0 {
@@ -938,8 +945,9 @@ impl StreamsState {
 #[inline]
 pub(super) fn get_or_insert_send(
     max_data: VarInt,
+    incremental: bool,
 ) -> impl Fn(&mut Option<Box<Send>>) -> &mut Box<Send> {
-    move |opt| opt.get_or_insert_with(|| Send::new(max_data))
+    move |opt| opt.get_or_insert_with(|| Send::new(max_data, incremental))
 }
 
 #[inline]
@@ -976,6 +984,7 @@ mod tests {
             1024 * 1024,
             (1024 * 1024u32).into(),
             (1024 * 1024u32).into(),
+            true,
         )
     }
 
@@ -988,6 +997,7 @@ mod tests {
             1024 * 1024,
             (1024 * 1024u32).into(),
             (1024 * 1024u32).into(),
+            true,
         );
         let id = StreamId::new(Side::Server, Dir::Uni, 0);
         let initial_max = client.local_max_data;
@@ -1543,11 +1553,118 @@ mod tests {
 
     #[test]
     fn same_stream_priority() {
+        for fair in [true, false] {
+            for incremental in [None, Some(true), Some(false)] {
+                let mut server = make(Side::Server);
+                server.set_params(&TransportParameters {
+                    initial_max_streams_bidi: 3u32.into(),
+                    initial_max_data: 300u32.into(),
+                    initial_max_stream_data_bidi_remote: 300u32.into(),
+                    ..TransportParameters::default()
+                });
+                server.default_incremental = fair;
+                let expected_incremental = incremental.unwrap_or(fair);
+
+                let (mut pending, state) = (Retransmits::default(), ConnState::established());
+                let mut streams = Streams {
+                    state: &mut server,
+                    conn_state: &state,
+                };
+
+                // a, b and c all have the same priority
+                let id_a = streams.open(Dir::Bi).unwrap();
+                let id_b = streams.open(Dir::Bi).unwrap();
+                let id_c = streams.open(Dir::Bi).unwrap();
+
+                let mut stream_a = SendStream {
+                    id: id_a,
+                    state: &mut server,
+                    pending: &mut pending,
+                    conn_state: &state,
+                };
+
+                // Verify the stream's default incremental value before and after setting it
+                assert_eq!(stream_a.incremental().unwrap(), fair);
+
+                if let Some(i) = incremental {
+                    stream_a.set_incremental(i).unwrap();
+                }
+
+                assert_eq!(stream_a.incremental().unwrap(), expected_incremental);
+                stream_a.write(&[b'a'; 100]).unwrap();
+
+                let mut stream_b = SendStream {
+                    id: id_b,
+                    state: &mut server,
+                    pending: &mut pending,
+                    conn_state: &state,
+                };
+
+                // Allocate the stream using the default
+                stream_b.set_priority(0).unwrap();
+                if let Some(i) = incremental {
+                    stream_b.set_incremental(i).unwrap();
+                }
+
+                assert_eq!(stream_b.incremental().unwrap(), expected_incremental);
+                stream_b.write(&[b'b'; 100]).unwrap();
+
+                let mut stream_c = SendStream {
+                    id: id_c,
+                    state: &mut server,
+                    pending: &mut pending,
+                    conn_state: &state,
+                };
+
+                if let Some(i) = incremental {
+                    stream_c.set_incremental(i).unwrap();
+                }
+
+                stream_c.write(&[b'c'; 100]).unwrap();
+
+                let mut metas = vec![];
+
+                // loop until all the streams are written
+                loop {
+                    let meta = server.write_frames_for_test(40);
+                    if meta.is_empty() {
+                        break;
+                    }
+                    metas.extend(meta);
+                }
+
+                assert!(!server.can_send_stream_data());
+                assert_eq!(server.pending.len(), 0);
+
+                let stream_ids = metas.iter().map(|m| m.id).collect::<Vec<_>>();
+
+                if expected_incremental {
+                    // When fairness is enabled, if we run out of buffer space to write out a
+                    // stream, the stream is re-queued after all the streams
+                    // with the same priority.
+                    assert_eq!(
+                        stream_ids,
+                        vec![id_a, id_b, id_c, id_a, id_b, id_c, id_a, id_b, id_c]
+                    );
+                } else {
+                    // When fairness is disabled the stream is re-queued before all the other
+                    // streams with the same priority.
+                    assert_eq!(
+                        stream_ids,
+                        vec![id_a, id_a, id_a, id_b, id_b, id_b, id_c, id_c, id_c]
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fair_scheduling_with_strict_priority() {
         let mut server = make(Side::Server);
         server.set_params(&TransportParameters {
-            initial_max_streams_bidi: 3u32.into(),
-            initial_max_data: 300u32.into(),
-            initial_max_stream_data_bidi_remote: 300u32.into(),
+            initial_max_streams_bidi: 7u32.into(),
+            initial_max_data: 700u32.into(),
+            initial_max_stream_data_bidi_remote: 700u32.into(),
             ..TransportParameters::default()
         });
 
@@ -1557,10 +1674,16 @@ mod tests {
             conn_state: &state,
         };
 
-        // a, b and c all have the same priority
+        // a, b, c, and d have the default urgency
+        // e, f have the highest urgency; g the lowest
+        // c, d, and e are non-incremental
         let id_a = streams.open(Dir::Bi).unwrap();
         let id_b = streams.open(Dir::Bi).unwrap();
         let id_c = streams.open(Dir::Bi).unwrap();
+        let id_d = streams.open(Dir::Bi).unwrap();
+        let id_e = streams.open(Dir::Bi).unwrap();
+        let id_f = streams.open(Dir::Bi).unwrap();
+        let id_g = streams.open(Dir::Bi).unwrap();
 
         let mut stream_a = SendStream {
             id: id_a,
@@ -1568,6 +1691,8 @@ mod tests {
             pending: &mut pending,
             conn_state: &state,
         };
+        stream_a.set_priority(0).unwrap();
+        stream_a.set_incremental(true).unwrap();
         stream_a.write(&[b'a'; 100]).unwrap();
 
         let mut stream_b = SendStream {
@@ -1576,15 +1701,61 @@ mod tests {
             pending: &mut pending,
             conn_state: &state,
         };
+        stream_b.set_priority(0).unwrap();
+        stream_b.set_incremental(true).unwrap();
         stream_b.write(&[b'b'; 100]).unwrap();
 
+        let mut stream_d = SendStream {
+            id: id_d,
+            state: &mut server,
+            pending: &mut pending,
+            conn_state: &state,
+        };
+        stream_d.set_priority(0).unwrap();
+        stream_d.set_incremental(false).unwrap();
+        stream_d.write(&[b'd'; 100]).unwrap();
+
+        // Write to C *after* D to test stream ID order rather than write order.
         let mut stream_c = SendStream {
             id: id_c,
             state: &mut server,
             pending: &mut pending,
             conn_state: &state,
         };
+        stream_c.set_priority(0).unwrap();
+        stream_c.set_incremental(false).unwrap();
         stream_c.write(&[b'c'; 100]).unwrap();
+
+        let mut stream_e = SendStream {
+            id: id_e,
+            state: &mut server,
+            pending: &mut pending,
+            conn_state: &state,
+        };
+        // Mark stream e as non-incremental with the highest priority
+        stream_e.set_priority(i32::MAX).unwrap();
+        stream_e.set_incremental(false).unwrap();
+        stream_e.write(&[b'e'; 100]).unwrap();
+
+        let mut stream_f = SendStream {
+            id: id_f,
+            state: &mut server,
+            pending: &mut pending,
+            conn_state: &state,
+        };
+        stream_f.set_priority(i32::MAX).unwrap();
+        stream_f.set_incremental(true).unwrap();
+        stream_f.write(&[b'f'; 100]).unwrap();
+
+        let mut stream_g = SendStream {
+            id: id_g,
+            state: &mut server,
+            pending: &mut pending,
+            conn_state: &state,
+        };
+        stream_g.set_priority(i32::MIN).unwrap();
+        stream_g.set_incremental(true).unwrap();
+        stream_g.write(&[b'g'; 100]).unwrap();
 
         let mut metas = vec![];
 
@@ -1601,10 +1772,15 @@ mod tests {
         assert_eq!(server.pending.len(), 0);
 
         let stream_ids = metas.iter().map(|m| m.id).collect::<Vec<_>>();
-        // If we run out of buffer space, the stream is re-queued after its peers.
         assert_eq!(
             stream_ids,
-            vec![id_a, id_b, id_c, id_a, id_b, id_c, id_a, id_b, id_c]
+            vec![
+                id_e, id_e, id_e, // non-incremental before incremental, highest urgency
+                id_f, id_f, id_f, // high-prio i=true sends before low-prio i=false
+                id_c, id_c, id_c, id_d, id_d, id_d, // non-incremental tie sorts by stream ID
+                id_a, id_b, id_a, id_b, id_a, id_b, // incremental, round-robin scheduling
+                id_g, id_g, id_g // incremental, scheduled alone due to lowest priority
+            ]
         );
     }
 
@@ -1635,6 +1811,7 @@ mod tests {
             pending: &mut pending,
             conn_state: &state,
         };
+        stream_a.set_incremental(false).unwrap();
         stream_a.write(&[b'a'; 100]).unwrap();
 
         let mut stream_b = SendStream {
@@ -1643,6 +1820,7 @@ mod tests {
             pending: &mut pending,
             conn_state: &state,
         };
+        stream_b.set_incremental(false).unwrap();
         stream_b.write(&[b'b'; 100]).unwrap();
 
         let mut metas = vec![];
@@ -1660,6 +1838,7 @@ mod tests {
             conn_state: &state,
         };
         stream_c.set_priority(1).unwrap();
+        stream_c.set_incremental(false).unwrap();
         stream_c.write(&[b'b'; 100]).unwrap();
 
         // loop until all the streams are written
@@ -1677,8 +1856,9 @@ mod tests {
         let stream_ids = metas.iter().map(|m| m.id).collect::<Vec<_>>();
         assert_eq!(
             stream_ids,
-            // stream_c preempts both lower-priority streams, which then resume round-robin.
-            vec![id_a, id_c, id_c, id_c, id_b, id_a, id_b, id_a, id_b]
+            // stream_c bumps stream_a which had already been partly written out
+            // when stream_c completes, resume stream_a since its stream_id is lower
+            vec![id_a, id_c, id_c, id_c, id_a, id_a, id_b, id_b, id_b]
         );
     }
 
@@ -1950,6 +2130,7 @@ mod tests {
             1024 * 1024,
             (1024 * 1024u32).into(),
             (1024 * 1024u32).into(),
+            true,
         );
         // No slots allocated until a stream is actually received.
         assert!(client.recv.is_empty());
