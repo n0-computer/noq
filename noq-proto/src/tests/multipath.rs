@@ -11,7 +11,7 @@ use tracing::info;
 use crate::connection::timer::{PathTimer, Timer};
 use crate::{
     ClientConfig, ConnectionId, ConnectionIdGenerator, Endpoint, EndpointConfig, FourTuple,
-    LOCAL_CID_COUNT, NetworkChangeHint, PathId, PathStatus, RandomConnectionIdGenerator,
+    Instant, LOCAL_CID_COUNT, NetworkChangeHint, PathId, PathStatus, RandomConnectionIdGenerator,
     ServerConfig, Side::*, TransportConfig, cid_queue::CidQueue,
 };
 use crate::{
@@ -2088,30 +2088,43 @@ fn path_open_challenge_lost() -> TestResult {
     info!("dropping client's packet");
     pair.server.inbound.clear();
 
+    // Advances the client to its next wakeup and drives it, repeating as necessary, until it has
+    // sent `expected_count` PATH_CHALLENGE frames in total. Returns the time the last one was
+    // sent.
+    //
+    // A single wakeup isn't necessarily enough: the client may also wake up in between to
+    // opportunistically bundle an unrelated pending ACK onto a packet (see
+    // `Connection::next_bundled_ack_delay`), which doesn't by itself re-send the lost
+    // PATH_CHALLENGE.
+    let advance_until_challenge = |pair: &mut ConnPair, expected_count: u64| -> Instant {
+        loop {
+            pair.time = pair
+                .client
+                .next_wakeup()
+                .expect("couldn't drive client forward");
+            info!("advancing to {:?} for client", pair.time - pair.epoch);
+            pair.drive_client();
+            let client_stats = pair.path_stats(Client, path_id).unwrap();
+            assert!(
+                client_stats.frame_tx.path_challenge <= expected_count,
+                "missed the expected PATH_CHALLENGE count"
+            );
+            if client_stats.frame_tx.path_challenge == expected_count {
+                return pair.time;
+            }
+            info!("dropping client's packet");
+            pair.server.inbound.clear();
+        }
+    };
+
     // Drop the 2nd PATH_CHALLENGE
-    pair.time = pair
-        .client
-        .next_wakeup()
-        .expect("couldn't drive client forward");
-    info!("advancing to {:?} for client", pair.time - pair.epoch);
-    let second_challenge = pair.time;
-    pair.drive_client();
-    let client_stats = pair.path_stats(Client, path_id).unwrap();
-    assert_eq!(client_stats.frame_tx.path_challenge, 2);
+    let second_challenge = advance_until_challenge(&mut pair, 2);
     assert!(pair.path_stats(Server, path_id).is_none());
     info!("dropping client's packet");
     pair.server.inbound.clear();
 
     // Send the 3rd PATH_CHALLENGE
-    pair.time = pair
-        .client
-        .next_wakeup()
-        .expect("couldn't drive client forward");
-    info!("advancing to {:?} for client", pair.time - pair.epoch);
-    let third_challenge = pair.time;
-    pair.drive_client();
-    let client_stats = pair.path_stats(Client, path_id).unwrap();
-    assert_eq!(client_stats.frame_tx.path_challenge, 3);
+    let third_challenge = advance_until_challenge(&mut pair, 3);
     assert!(pair.path_stats(Server, path_id).is_none());
 
     let first_delay = second_challenge - first_challenge;
