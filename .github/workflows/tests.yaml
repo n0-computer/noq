@@ -46,16 +46,15 @@ jobs:
             os: ubuntu-latest
             release-os: linux
             release-arch: amd64
-            runner: [self-hosted, linux, X64]
+            runner: blacksmith-8vcpu-ubuntu-2404
           - name: macOS-arm-latest
             os: macOS-latest
             release-os: darwin
             release-arch: aarch64
-            runner: [self-hosted, macOS, ARM64]
+            runner: blacksmith-6vcpu-macos-26
     env:
-      # Using self-hosted runners so use local cache for sccache and
-      # not SCCACHE_GHA_ENABLED.
       RUSTC_WRAPPER: "sccache"
+      SCCACHE_GHA_ENABLED: "on"
     steps:
       - name: Checkout
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -170,7 +169,7 @@ jobs:
   build_and_test_windows:
     timeout-minutes: 30
     name: "Tests"
-    runs-on: ${{ matrix.runner }}
+    runs-on: blacksmith-8vcpu-windows-2025
     strategy:
       fail-fast: false
       matrix:
@@ -179,14 +178,9 @@ jobs:
         features: [all, none, default]
         target:
           - x86_64-pc-windows-msvc
-        include:
-          - name: windows-latest
-            os: windows
-            runner: [self-hosted, windows, x64]
     env:
-      # Using self-hosted runners so use local cache for sccache and
-      # not SCCACHE_GHA_ENABLED.
       RUSTC_WRAPPER: "sccache"
+      SCCACHE_GHA_ENABLED: "on"
       # Force clang/bindgen to use MSVC target to avoid mingw headers from msys2
       BINDGEN_EXTRA_CLANG_ARGS: "--target=x86_64-pc-windows-msvc"
     steps:
@@ -245,7 +239,8 @@ jobs:
 
       - uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2.32.0
         with:
-          release: false
+          # Blacksmith's Windows image ships no pre-installed MSYS2 (C:\msys64).
+          release: true
 
       # FIPS dependencies for Windows
       - name: Setup Go
@@ -398,9 +393,7 @@ jobs:
   minimal-crates-windows:
     timeout-minutes: 30
     name: "Minimal Crates (Windows)"
-    # Still self-hosted; moving to windows-latest needs sccache switched to
-    # SCCACHE_GHA_ENABLED. Follow-up.
-    runs-on: ${{ matrix.runner }}
+    runs-on: blacksmith-8vcpu-windows-2025
     permissions:
       contents: read
     strategy:
@@ -410,14 +403,9 @@ jobs:
         rust: ["${{ inputs.rust-version}}"]
         target:
           - x86_64-pc-windows-msvc
-        include:
-          - name: windows-latest
-            os: windows
-            runner: [self-hosted, windows, x64]
     env:
-      # Using self-hosted runners so use local cache for sccache and
-      # not SCCACHE_GHA_ENABLED.
       RUSTC_WRAPPER: "sccache"
+      SCCACHE_GHA_ENABLED: "on"
       # Force clang/bindgen to use MSVC target to avoid mingw headers from msys2
       BINDGEN_EXTRA_CLANG_ARGS: "--target=x86_64-pc-windows-msvc"
     steps:
@@ -438,10 +426,14 @@ jobs:
 
       - uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2.32.0
         with:
-          release: false
+          # Blacksmith's Windows image ships no pre-installed MSYS2 (C:\msys64).
+          release: true
 
-      - name: Install cmake
-        uses: lukka/get-cmake@fffaaafeea488556c2c12dad60690008bc1caacb # v4.4.2
+      - name: Install Go (required for aws-lc-rs FIPS)
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "stable"
+          cache: false
 
       - name: Install NASM
         uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b # v1.5.2
@@ -464,11 +456,8 @@ jobs:
           echo "C:\Strawberry\perl\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           echo "C:\Strawberry\c\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
-      - name: Install Go (required for aws-lc-rs FIPS)
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: "stable"
-          cache: false
+      - name: Install cmake
+        uses: lukka/get-cmake@fffaaafeea488556c2c12dad60690008bc1caacb # v4.4.2
 
       # Install LLVM for libclang (required by bindgen for aws-lc-fips-sys)
       - name: Cache LLVM
@@ -493,6 +482,14 @@ jobs:
       # Set up MSVC environment to ensure clang/bindgen uses MSVC headers instead of mingw
       - name: Setup MSVC dev environment
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+
+      # Fail here with the resolved path rather than deep inside the
+      # aws-lc-fips-sys build script, which only reports "Missing dependency".
+      - name: Verify cmake
+        run: |
+          Get-Command cmake -All | Format-Table -AutoSize Source, Version
+          cmake --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: cargo check
         # No --locked: re-resolving is the point, so -Z min-publish-age guards

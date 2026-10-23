@@ -25,9 +25,10 @@ jobs:
   proptests:
     name: Extended Proptest Run
     timeout-minutes: 20
-    runs-on: [self-hosted, linux, X64]
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     env:
       RUSTC_WRAPPER: "sccache"
+      SCCACHE_GHA_ENABLED: "on"
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
@@ -138,9 +139,9 @@ jobs:
       matrix:
         include:
           - os: linux
-            runs-on: [self-hosted, linux, X64]
+            runs-on: blacksmith-8vcpu-ubuntu-2404
           - os: macos
-            runs-on: [self-hosted, macOS, ARM64]
+            runs-on: blacksmith-6vcpu-macos-26
     runs-on: ${{ matrix.runs-on }}
     env:
       RUSTFLAGS: -Dwarnings
