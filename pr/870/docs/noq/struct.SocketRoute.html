@@ -2,12 +2,12 @@
 <p>Passed with a socket to <a href="struct.Endpoint.html#method.new_with_multiple_sockets" title="associated function noq::Endpoint::new_with_multiple_sockets"><code>Endpoint::new_with_multiple_sockets</code></a> or <a href="struct.Endpoint.html#method.add_socket" title="method noq::Endpoint::add_socket"><code>Endpoint::add_socket</code></a>.
 For each transmit, the endpoint picks a socket from all routes of all its sockets:</p>
 <ol>
-<li>If the transmit has a source address, the first route whose source is that address, or
-which has no source and contains the destination.</li>
-<li>Without a source address, the first route that contains the destination. An IPv6
-link-local destination also matches a socket bound with the same, non-zero scope id.</li>
-<li>Otherwise, the first default route of the destination’s address family, or of the
-source’s if the transmit has one.</li>
+<li>If the transmit has a source address, the first route whose source is that address, or which
+has no source and contains the destination.</li>
+<li>Without a source address, the first route that contains the destination. An IPv6 link-local
+destination also matches a socket bound with the same, non-zero scope id.</li>
+<li>Otherwise, the first default route of the destination’s address family, or of the source’s if
+the transmit has one.</li>
 </ol>
 <p>Routes are ordered by prefix length, longest first, and then by the order they were added
 in. An IPv4 prefix counts as its IPv4-mapped IPv6 prefix, so <code>10.0.0.0/8</code> is a /104. The

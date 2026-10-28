@@ -19,12 +19,12 @@
 <a href=#19 id=19 data-nosnippet>19</a>/// Passed with a socket to [`Endpoint::new_with_multiple_sockets`] or [`Endpoint::add_socket`].
 <a href=#20 id=20 data-nosnippet>20</a>/// For each transmit, the endpoint picks a socket from all routes of all its sockets:
 <a href=#21 id=21 data-nosnippet>21</a>///
-<a href=#22 id=22 data-nosnippet>22</a>/// 1. If the transmit has a source address, the first route whose source is that address, or
-<a href=#23 id=23 data-nosnippet>23</a>///    which has no source and contains the destination.
-<a href=#24 id=24 data-nosnippet>24</a>/// 2. Without a source address, the first route that contains the destination. An IPv6
-<a href=#25 id=25 data-nosnippet>25</a>///    link-local destination also matches a socket bound with the same, non-zero scope id.
-<a href=#26 id=26 data-nosnippet>26</a>/// 3. Otherwise, the first default route of the destination's address family, or of the
-<a href=#27 id=27 data-nosnippet>27</a>///    source's if the transmit has one.
+<a href=#22 id=22 data-nosnippet>22</a>/// 1. If the transmit has a source address, the first route whose source is that address, or which
+<a href=#23 id=23 data-nosnippet>23</a>///    has no source and contains the destination.
+<a href=#24 id=24 data-nosnippet>24</a>/// 2. Without a source address, the first route that contains the destination. An IPv6 link-local
+<a href=#25 id=25 data-nosnippet>25</a>///    destination also matches a socket bound with the same, non-zero scope id.
+<a href=#26 id=26 data-nosnippet>26</a>/// 3. Otherwise, the first default route of the destination's address family, or of the source's if
+<a href=#27 id=27 data-nosnippet>27</a>///    the transmit has one.
 <a href=#28 id=28 data-nosnippet>28</a>///
 <a href=#29 id=29 data-nosnippet>29</a>/// Routes are ordered by prefix length, longest first, and then by the order they were added
 <a href=#30 id=30 data-nosnippet>30</a>/// in. An IPv4 prefix counts as its IPv4-mapped IPv6 prefix, so `10.0.0.0/8` is a /104. The
