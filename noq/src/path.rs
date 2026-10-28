@@ -131,6 +131,10 @@ impl Path {
         })
     }
 
+    pub(crate) fn from_parts(conn: ConnectionRef, path_ref: PathRef) -> Self {
+        Self { conn, path_ref }
+    }
+
     /// Returns a [`Path`] for a path id without checking if the path exists or is closed.
     fn new_unchecked(conn: ConnectionRef, id: PathId) -> Self {
         let path_ref = conn
