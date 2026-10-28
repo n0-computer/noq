@@ -29,6 +29,13 @@ jobs:
     if: "github.event_name != 'pull_request' || ! contains(github.event.pull_request.labels.*.name, 'flaky-test')"
     uses: "$/.github/workflows/tests.yaml"
 
+  min-crates:
+    name: Min Crates
+    uses: "n0-computer/workflows/.github/workflows/minimal-crates.yaml@v2"
+    with:
+      fips: true
+      crate-selection: "--workspace --exclude fuzz --all-features --lib --bins"
+
   test-aws-lc-rs:
     name: Test aws-lc-rs crypto backend
     if: "github.event_name != 'pull_request' || ! contains(github.event.pull_request.labels.*.name, 'flaky-test')"
