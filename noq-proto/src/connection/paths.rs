@@ -905,6 +905,14 @@ impl PathResponses {
         }
     }
 
+    /// Returns the destination [`pop_off_path`] would pop, without popping it.
+    ///
+    /// [`pop_off_path`]: PathResponses::pop_off_path
+    pub(crate) fn peek_off_path(&self, network_path: FourTuple) -> Option<FourTuple> {
+        let response = self.pending.last()?;
+        (response.network_path != network_path).then_some(response.network_path)
+    }
+
     pub(crate) fn pop_off_path(&mut self, network_path: FourTuple) -> Option<(u64, FourTuple)> {
         let response = *self.pending.last()?;
         // We use an exact comparison here, because once we've received for the first time,

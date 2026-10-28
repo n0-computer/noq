@@ -25,6 +25,25 @@ pub trait Runtime: Send + Sync + Debug + 'static {
     /// Convert `t` into the socket type used by this runtime
     #[cfg(not(wasm_browser))]
     fn wrap_udp_socket(&self, t: std::net::UdpSocket) -> io::Result<Box<dyn AsyncUdpSocket>>;
+    /// Convert `t` into a socket for [`Endpoint::new_with_multiple_sockets`]
+    ///
+    /// The default wraps `t` once for receiving and once, through
+    /// [`std::net::UdpSocket::try_clone`], for creating senders, so it creates at most one
+    /// receiver.
+    ///
+    /// [`Endpoint::new_with_multiple_sockets`]: crate::Endpoint::new_with_multiple_sockets
+    #[cfg(not(wasm_browser))]
+    fn wrap_udp_socket_next(
+        &self,
+        t: std::net::UdpSocket,
+    ) -> io::Result<Box<dyn AsyncUdpSocketNext>> {
+        let sender = self.wrap_udp_socket(t.try_clone()?)?;
+        let receiver = self.wrap_udp_socket(t)?;
+        Ok(Box::new(SplitSocket {
+            sender,
+            receiver: std::sync::Mutex::new(Some(receiver)),
+        }))
+    }
     /// Look up the current time
     ///
     /// Allows simulating the flow of time for testing.
@@ -104,6 +123,112 @@ pub trait UdpSender: Send + Sync + Debug + 'static {
     /// Maximum number of datagrams that a [`Transmit`] may encode.
     fn max_transmit_segments(&self) -> NonZeroUsize {
         NonZeroUsize::MIN
+    }
+}
+
+/// Abstract implementation of a UDP socket of an endpoint with multiple sockets
+///
+/// Unlike [`AsyncUdpSocket`], receiving is split off into [`UdpReceiver`]s, so the socket
+/// itself can be shared: the endpoint keeps it to create senders, and each receiver is polled
+/// by its own task.
+pub trait AsyncUdpSocketNext: Send + Sync + Debug + 'static {
+    /// Create a [`UdpSender`] with its own waker
+    ///
+    /// See [`AsyncUdpSocket::create_sender`].
+    fn create_sender(&self) -> Pin<Box<dyn UdpSender>>;
+
+    /// Create a receiver for this socket, or `None` if it can't create more
+    ///
+    /// The endpoint calls this up to [`max_receivers`] times when the socket is
+    /// added, and stops at the first `None`. Each receiver is polled by its own task.
+    ///
+    /// [`max_receivers`]: Self::max_receivers
+    fn create_receiver(&self) -> Option<Box<dyn UdpReceiver>>;
+
+    /// The maximum number of receivers worth creating for this socket
+    ///
+    /// Several receivers on one socket receive in parallel. The endpoint currently creates at
+    /// most one receiver per socket.
+    fn max_receivers(&self) -> usize {
+        1
+    }
+
+    /// Look up the local IP address and port used by this socket
+    fn local_addr(&self) -> io::Result<SocketAddr>;
+
+    /// Whether datagrams might get fragmented into multiple parts
+    ///
+    /// See [`AsyncUdpSocket::may_fragment`].
+    fn may_fragment(&self) -> bool {
+        true
+    }
+}
+
+/// Receives from an [`AsyncUdpSocketNext`]
+pub trait UdpReceiver: Send + Debug + 'static {
+    /// Receive UDP datagrams, or register to be woken if receiving may succeed in the future
+    fn poll_recv(
+        &mut self,
+        cx: &mut Context<'_>,
+        bufs: &mut [IoSliceMut<'_>],
+        meta: &mut [RecvMeta],
+    ) -> Poll<io::Result<usize>>;
+
+    /// Maximum number of datagrams that might be described by a single [`RecvMeta`]
+    fn max_receive_segments(&self) -> NonZeroUsize {
+        NonZeroUsize::MIN
+    }
+}
+
+/// An [`AsyncUdpSocketNext`] made of two [`AsyncUdpSocket`]s on the same socket
+///
+/// One creates the senders, the other receives.
+#[cfg(not(wasm_browser))]
+#[derive(Debug)]
+struct SplitSocket {
+    sender: Box<dyn AsyncUdpSocket>,
+    /// Taken by the first [`AsyncUdpSocketNext::create_receiver`] call
+    receiver: std::sync::Mutex<Option<Box<dyn AsyncUdpSocket>>>,
+}
+
+#[cfg(not(wasm_browser))]
+impl AsyncUdpSocketNext for SplitSocket {
+    fn create_sender(&self) -> Pin<Box<dyn UdpSender>> {
+        self.sender.create_sender()
+    }
+
+    fn create_receiver(&self) -> Option<Box<dyn UdpReceiver>> {
+        let receiver = self.receiver.lock().expect("poisoned").take()?;
+        Some(Box::new(SocketReceiver(receiver)))
+    }
+
+    fn local_addr(&self) -> io::Result<SocketAddr> {
+        self.sender.local_addr()
+    }
+
+    fn may_fragment(&self) -> bool {
+        self.sender.may_fragment()
+    }
+}
+
+/// Receives from an [`AsyncUdpSocket`]
+#[cfg(not(wasm_browser))]
+#[derive(Debug)]
+struct SocketReceiver(Box<dyn AsyncUdpSocket>);
+
+#[cfg(not(wasm_browser))]
+impl UdpReceiver for SocketReceiver {
+    fn poll_recv(
+        &mut self,
+        cx: &mut Context<'_>,
+        bufs: &mut [IoSliceMut<'_>],
+        meta: &mut [RecvMeta],
+    ) -> Poll<io::Result<usize>> {
+        self.0.poll_recv(cx, bufs, meta)
+    }
+
+    fn max_receive_segments(&self) -> NonZeroUsize {
+        self.0.max_receive_segments()
     }
 }
 
