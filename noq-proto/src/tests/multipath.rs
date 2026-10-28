@@ -2607,3 +2607,149 @@ fn regression_discarded_path_stats_are_up_to_date() -> TestResult {
 
     Ok(())
 }
+
+/// Connection idle timeout on both sides: past the path-level one, so the path times out first.
+const CONNECTION_IDLE: Duration = Duration::from_secs(30);
+const PATH_IDLE: Duration = Duration::from_secs(15);
+const KEEP_ALIVE: Duration = Duration::from_secs(5);
+
+/// `poll_transmit` must tolerate a connection whose last path was abandoned by the peer:
+/// between the abandoned path's drain (3·PTO of the measured RTT) and the `NoAvailablePath`
+/// grace close (3·PTO of the initial RTT) the path map is empty while the connection is still
+/// polled. Regression test for #807 — with `ack_frequency_config` set, that window panicked
+/// with `expect("one path exists")` instead of ending in `NO_VIABLE_PATH`.
+#[test]
+fn remote_path_abandon_last_path_leaves_empty_path_map() -> TestResult {
+    let _guard = subscribe();
+
+    let mut builder = ConnPair::builder();
+    {
+        // The panicking block only runs with ACK frequency enabled. 333 ms is the production
+        // initial RTT; the drain-before-grace ordering below depends on it.
+        let server = &mut builder.server_transport_cfg;
+        server.max_concurrent_multipath_paths(2);
+        server.max_idle_timeout(Some(CONNECTION_IDLE.try_into().unwrap()));
+        server.ack_frequency_config(Some(crate::AckFrequencyConfig::default()));
+        server.initial_rtt(Duration::from_millis(333));
+
+        // Path-level idle timeout, with keep-alives holding the connection itself open.
+        let client = &mut builder.client_transport_cfg;
+        client.max_concurrent_multipath_paths(2);
+        client.max_idle_timeout(Some(CONNECTION_IDLE.try_into().unwrap()));
+        client.keep_alive_interval(Some(KEEP_ALIVE));
+        client.default_path_keep_alive_interval(Some(KEEP_ALIVE));
+        client.default_path_max_idle_timeout(Some(PATH_IDLE));
+        client.initial_rtt(Duration::from_millis(333));
+    }
+    let (mut pair, _, _) = builder.lax_connect();
+    assert_eq!(pair.paths(Server), vec![PathId::ZERO]);
+
+    // One-way loss toward the client only. `blackhole_step`'s idle shortcut would stop at the
+    // keep-alive timers this scenario lives off, so drive by hand.
+    let blackout = pair.time;
+    let drive_blackholed = |pair: &mut ConnPair| {
+        pair.drive_client();
+        pair.drive_server();
+        pair.client.inbound.clear();
+        pair.advance_time()
+    };
+
+    // A backup path toward an address basic routing drops: it opens on the client, and the
+    // server never learns of it.
+    while pair.time < blackout + Duration::from_secs(1) {
+        assert!(
+            drive_blackholed(&mut pair),
+            "simulated time stopped advancing while the backup path was opened"
+        );
+    }
+    let dead_server_addr = SocketAddr::from(([0, 0, 0, 0, 0, 0, 2, 2], 1));
+    let backup = pair.open_path(
+        Client,
+        FourTuple::from_remote(dead_server_addr),
+        PathStatus::Backup,
+    )?;
+    assert_eq!(pair.paths(Client), vec![PathId::ZERO, backup]);
+    assert_eq!(pair.paths(Server), vec![PathId::ZERO]);
+
+    // The client abandons its silenced path as timed out; the backup means the last-open-path
+    // guard doesn't hold. It fires one keep-alive period late: the first ping is allowed to
+    // rearm the path's idle timer once, hence the slack in the deadline.
+    let mut client_abandoned = false;
+    let deadline = blackout + PATH_IDLE + KEEP_ALIVE + Duration::from_secs(5);
+    while pair.time < deadline && !client_abandoned {
+        assert!(
+            drive_blackholed(&mut pair),
+            "simulated time stopped advancing before the client's path idle timeout fired"
+        );
+        while let Some(event) = pair.poll(Client) {
+            if let Event::Path(PathEvent::Abandoned { id, reason }) = event {
+                info!(%id, ?reason, "client abandoned path");
+                if id == PathId::ZERO {
+                    assert_matches!(reason, PathAbandonReason::TimedOut);
+                    client_abandoned = true;
+                }
+            }
+        }
+    }
+    assert!(
+        client_abandoned,
+        "the client never gave up its silenced path as timed out"
+    );
+    assert_eq!(pair.paths(Server), vec![PathId::ZERO]);
+
+    // The PATH_ABANDON names the server's last known path. Its drain (measured RTT) discards
+    // the path long before the grace close (initial RTT): in between, the map is empty while
+    // the connection is still polled for transmits.
+    let mut server_abandoned = false;
+    let mut server_discarded = false;
+    let mut server_map_was_empty = false;
+    let mut server_lost = None;
+    let deadline = pair.time + Duration::from_secs(5);
+    while pair.time < deadline && server_lost.is_none() {
+        assert!(
+            drive_blackholed(&mut pair),
+            "simulated time stopped advancing before the server connection closed"
+        );
+        server_map_was_empty |= server_discarded && pair.paths(Server).is_empty();
+        while let Some(event) = pair.poll(Server) {
+            match event {
+                Event::Path(PathEvent::Abandoned {
+                    id: PathId::ZERO,
+                    reason: reason @ PathAbandonReason::RemoteAbandoned { .. },
+                }) => {
+                    info!(?reason, "server abandoned its last path");
+                    server_abandoned = true;
+                }
+                Event::Path(PathEvent::Discarded {
+                    id: PathId::ZERO, ..
+                }) => {
+                    server_discarded = true;
+                }
+                Event::ConnectionLost { reason } => {
+                    server_lost = Some(reason);
+                }
+                _ => {}
+            }
+        }
+    }
+    assert!(
+        server_abandoned,
+        "the server never abandoned its last path on the peer's PATH_ABANDON"
+    );
+    assert!(
+        server_discarded,
+        "the abandoned last path was never discarded on the server"
+    );
+    assert!(
+        server_map_was_empty,
+        "the server's path map was never empty between the drain and the grace close"
+    );
+
+    let reason = server_lost.expect("the server connection never closed");
+    let error = assert_matches!(
+        reason,
+        crate::ConnectionError::TransportError(error) => error
+    );
+    assert_eq!(error.code, TransportErrorCode::NO_VIABLE_PATH);
+    Ok(())
+}
