@@ -25,9 +25,10 @@ jobs:
   proptests:
     name: Extended Proptest Run
     timeout-minutes: 20
-    runs-on: [self-hosted, linux, X64]
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     env:
       RUSTC_WRAPPER: "sccache"
+      SCCACHE_GHA_ENABLED: "on"
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
@@ -117,10 +118,10 @@ jobs:
         with:
           persist-credentials: false
       - name: test on Illumos
-        # pinned: v1 tag moves and builder v2.0.3+ ships a VM with broken DNS
-        uses: vmactions/omnios-vm@4f4fcbf0847b079a6e0eafe6ff06b3d15510f0b0 # v1.1.5
+        # v1.3.x supports ubuntu-26.04 runners (older releases fail installing qemu-kvm)
+        uses: vmactions/omnios-vm@9576f0b6d15e7696548409baa533bc0a339caf42 # v1.3.7
         with:
-          usesh: true
+          release: r151058
           mem: 4096
           copyback: false
           prepare: |
@@ -138,9 +139,9 @@ jobs:
       matrix:
         include:
           - os: linux
-            runs-on: [self-hosted, linux, X64]
+            runs-on: blacksmith-8vcpu-ubuntu-2404
           - os: macos
-            runs-on: [self-hosted, macOS, ARM64]
+            runs-on: blacksmith-6vcpu-macos-26
     runs-on: ${{ matrix.runs-on }}
     env:
       RUSTFLAGS: -Dwarnings

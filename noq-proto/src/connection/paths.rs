@@ -1,6 +1,7 @@
 use alloc::{boxed::Box, vec::Vec};
 use core::{cmp, net::SocketAddr};
 
+use identity_hash::IdentityHashable;
 use thiserror::Error;
 use tracing::{debug, trace};
 
@@ -95,6 +96,20 @@ impl core::fmt::Display for PathId {
 impl<T: Into<u32>> From<T> for PathId {
     fn from(source: T) -> Self {
         Self(source.into())
+    }
+}
+
+/// An internal map key that uses identity hashing for [`PathId`].
+///
+/// Keeps [`IdentityHashable`] out of the public [`PathId`] API.
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Default)]
+pub(crate) struct PathIdKey(pub(crate) PathId);
+
+impl IdentityHashable for PathIdKey {}
+
+impl core::hash::Hash for PathIdKey {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        state.write_u32(self.0.0);
     }
 }
 
