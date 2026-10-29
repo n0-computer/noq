@@ -770,6 +770,30 @@ impl Connection {
         }));
     }
 
+    /// The delay to wait after sending an ACK for `path_id` before opportunistically bundling
+    /// the next one into an otherwise unrelated outgoing packet on that path.
+    ///
+    /// This delay prevents wasting the peer's resources by having it process bundled ACKs
+    /// unnecessarily frequently.
+    ///
+    /// If we receive an ack-eliciting packet on the path while this delay is still pending, the
+    /// path's `next_bundled_ack_time` is reset to `now` (see where packets are received), which
+    /// means this delay is effectively ignored in that case. So this delay only matters when we
+    /// keep sending on a path but stop receiving ack-eliciting packets on it for a while.
+    ///
+    /// This should be at least `RTT + peer's max_ack_delay`: since a bundled ACK frame rides
+    /// along with other, ack-eliciting, frames, the packet carrying it is itself ack-eliciting.
+    /// We should give the peer enough time to acknowledge it. Otherwise, we risk bundling
+    /// another ACK before the peer has even had a chance to acknowledge the previous one, which
+    /// wastes the peer's resources.
+    fn next_bundled_ack_delay(&self, path_id: PathId) -> Duration {
+        let rtt = self
+            .paths
+            .get(&path_id)
+            .map_or_else(Duration::default, |path| path.data.rtt.get());
+        rtt + self.ack_frequency.peer_max_ack_delay + TIMER_GRANULARITY
+    }
+
     /// Gets the [`PathData`] for a known [`PathId`].
     ///
     /// Will panic if the path_id does not reference any known path.
@@ -1669,16 +1693,19 @@ impl Connection {
                     .map(|(&path_id, _)| path_id)
                     .collect::<Vec<_>>()
                 {
-                    Self::populate_acks(
-                        now,
-                        self.receiving_ecn,
-                        path_id,
-                        space_id,
-                        &mut self.spaces[space_id],
-                        is_multipath_negotiated,
-                        &mut builder,
-                        &mut self.path_stats.get_mut(path_id).frame_tx,
-                        self.crypto_state.has_keys(space_id.encryption_level()),
+                    debug_assert!(
+                        Self::populate_acks(
+                            now,
+                            self.receiving_ecn,
+                            path_id,
+                            space_id,
+                            &mut self.spaces[space_id],
+                            is_multipath_negotiated,
+                            &mut builder,
+                            &mut self.path_stats.get_mut(path_id).frame_tx,
+                            self.crypto_state.has_keys(space_id.encryption_level()),
+                        ),
+                        "ack didn't fit a freshly built packet"
                     );
                 }
 
@@ -1763,10 +1790,10 @@ impl Connection {
             }
 
             for path_id in builder.sent_frames().largest_acked.keys() {
-                self.spaces[space_id]
-                    .for_path(*path_id)
-                    .pending_acks
-                    .acks_sent();
+                let next_bundled_ack_time = now + self.next_bundled_ack_delay(*path_id);
+                let pns = self.spaces[space_id].for_path(*path_id);
+                pns.pending_acks.acks_sent();
+                pns.next_bundled_ack_time = Some(next_bundled_ack_time);
                 self.timers.stop(
                     Timer::PerPath(*path_id, PathTimer::MaxAckDelay),
                     self.qlog.with_time(now),
@@ -5558,6 +5585,9 @@ impl Connection {
             .pending_acks
             .packet_received(now, number, ack_eliciting, &space.dedup)
         {
+            // We have something new to acknowledge on this path: stop throttling opportunistic
+            // ACK bundling, so the next outgoing packet on this path may carry it immediately.
+            space.next_bundled_ack_time = Some(now);
             if self.abandoned_paths.contains(&path_id) {
                 // § 3.4.3 QUIC-MULTIPATH: promptly send ACKs for packets received from
                 // abandoned paths.
@@ -6147,20 +6177,23 @@ impl Connection {
             for path_id in space
                 .number_spaces
                 .iter_mut()
-                .filter(|(_, pns)| pns.pending_acks.can_send())
+                .filter(|(_, pns)| pns.pending_acks.should_send())
                 .map(|(&path_id, _)| path_id)
                 .collect::<Vec<_>>()
             {
-                Self::populate_acks(
-                    now,
-                    self.receiving_ecn,
-                    path_id,
-                    space_id,
-                    space,
-                    is_multipath_negotiated,
-                    builder,
-                    stats,
-                    space_has_keys,
+                debug_assert!(
+                    Self::populate_acks(
+                        now,
+                        self.receiving_ecn,
+                        path_id,
+                        space_id,
+                        space,
+                        is_multipath_negotiated,
+                        builder,
+                        stats,
+                        space_has_keys,
+                    ),
+                    "ack didn't fit a freshly built packet"
                 );
             }
         }
@@ -6603,9 +6636,71 @@ impl Connection {
                 scheduling_info.status_allows_data,
             );
         }
+
+        // Bundle a pending ACK with other frames when there is room for it.
+        //
+        // We want to amortize the fixed overhead of a packet (header, auth tag, etc.) across
+        // the ACK and the other frames we are already sending, rather than requiring a
+        // dedicated ACK-only packet. But sending an ACK with every single packet we transmit
+        // would waste the peer's resources processing redundant ACKs, so each path's
+        // `next_bundled_ack_time` throttles how often we do this when not already required by
+        // `PendingAcks::should_send`.
+        //
+        // We only do this if the packet already carries a frame that itself justifies sending
+        // a packet (i.e. one that would make `SentFrames::is_ack_only` return `false` once an
+        // ACK is also present). Bundling onto, say, a packet that so far only carries an
+        // OBSERVED_ADDR frame would make the packet look ACK-only to the rest of the stack
+        // (that frame is not reflected by `SentFrames::is_ack_only`) which would trip the
+        // "ACK-only packet built without being asked for" sanity check below.
+        let sent_so_far = builder.sent_frames();
+        let has_non_ack_payload = !sent_so_far.stream_frames.is_empty()
+            || !sent_so_far.retransmits.is_empty(&self.streams)
+            || sent_so_far.non_retransmits;
+        if !scheduling_info.is_abandoned
+            && scheduling_info.can_send_data
+            && space_id == SpaceId::Data
+            && has_non_ack_payload
+        {
+            for bundle_path_id in space
+                .number_spaces
+                .iter()
+                .filter(|(other_path_id, pns)| {
+                    pns.pending_acks.can_send()
+                        && !builder
+                            .sent_frames()
+                            .largest_acked
+                            .contains_key(*other_path_id)
+                        && pns.next_bundled_ack_time.is_some_and(|time| time <= now)
+                })
+                .map(|(other_path_id, _)| *other_path_id)
+                .collect::<Vec<_>>()
+            {
+                Self::populate_acks(
+                    now,
+                    self.receiving_ecn,
+                    bundle_path_id,
+                    space_id,
+                    space,
+                    is_multipath_negotiated,
+                    builder,
+                    stats,
+                    space_has_keys,
+                );
+            }
+        }
     }
 
-    /// Write pending ACKs into a buffer
+    /// Writes pending ACKs into a buffer, if there is enough room for it.
+    ///
+    /// Returns whether the ACK was written. This is used both for dedicated ACK passes, where
+    /// the caller has already committed to sending an ACK (and should `debug_assert!` on the
+    /// result, since a `false` there indicates a packet was undersized for its own ACK), and to
+    /// opportunistically bundle an ACK onto a packet that is being sent for another reason
+    /// (e.g. it carries STREAM or DATAGRAM frames), where `false` just means it'll be retried on
+    /// a later packet.
+    ///
+    /// This method assumes ACKs are pending, and should only be called if
+    /// [`spaces::PendingAcks::can_send()`] returns `true`.
     fn populate_acks<'a, 'b>(
         now: Instant,
         receiving_ecn: bool,
@@ -6616,7 +6711,7 @@ impl Connection {
         builder: &mut PacketBuilder<'a, 'b>,
         stats: &mut FrameStats,
         space_has_keys: bool,
-    ) {
+    ) -> bool {
         // 0-RTT packets must never carry acks (which would have to be of handshake packets)
         debug_assert!(space_has_keys, "tried to send ACK in 0-RTT");
 
@@ -6640,19 +6735,33 @@ impl Connection {
             None
         };
 
+        let is_path_ack = is_multipath_negotiated && space_id == SpaceId::Data;
+        let range_count = ranges.range_count();
+        let size_bound = if is_path_ack {
+            frame::PathAck::size_bound(range_count, ecn)
+        } else {
+            frame::Ack::size_bound(range_count, ecn)
+        };
+        if builder.frame_space_remaining() < size_bound {
+            // The ACK frame might not fit. Rather than speculatively encoding it and rolling
+            // back (which our packet buffer does not support, since writing past the available
+            // frame space panics), we conservatively skip bundling it this time; it will be
+            // retried on a later packet.
+            return false;
+        }
+
         let delay_micros = pns.pending_acks.ack_delay(now).as_micros() as u64;
         // TODO: This should come from `TransportConfig` if that gets configurable.
         let ack_delay_exp = TransportParameters::default().ack_delay_exponent;
         let delay = delay_micros >> ack_delay_exp.into_inner();
 
-        if is_multipath_negotiated && space_id == SpaceId::Data {
-            if !ranges.is_empty() {
-                let frame = frame::PathAck::encoder(path_id, delay, ranges, ecn);
-                builder.write_frame(frame, stats);
-            }
+        if is_path_ack {
+            let frame = frame::PathAck::encoder(path_id, delay, ranges, ecn);
+            builder.write_frame(frame, stats);
         } else {
             builder.write_frame(frame::Ack::encoder(delay, ranges, ecn), stats);
         }
+        true
     }
 
     fn close_common(&mut self) {
