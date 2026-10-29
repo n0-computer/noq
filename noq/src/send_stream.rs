@@ -596,9 +596,9 @@ pub struct StreamAffinityContext {
 }
 
 impl StreamAffinityContext {
-    /// The [stable ID](stable_id) of the connection this callback is being invoked for.
+    /// The [stable ID] of the connection this callback is being invoked for.
     ///
-    /// [stable_id]: crate::Connection::stable_id
+    /// [stable ID]: crate::Connection::stable_id
     pub fn connection_stable_id(&self) -> usize {
         self.conn.stable_id()
     }
