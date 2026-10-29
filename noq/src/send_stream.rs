@@ -2,6 +2,7 @@ use core::fmt;
 use std::{
     future::{Future, poll_fn},
     io,
+    panic::RefUnwindSafe,
     pin::{Pin, pin},
     sync::Arc,
     task::{Context, Poll},
@@ -565,7 +566,7 @@ impl Future for Stopped {
 /// Trait to implement a callback to [set stream affinity].
 ///
 /// [set stream affinity]: SendStream::set_affinity
-pub trait StreamAffinityCallback: Send + Sync {
+pub trait StreamAffinityCallback: Send + Sync + RefUnwindSafe {
     /// Sets the affinity for a single stream.
     ///
     /// This function must not block.
