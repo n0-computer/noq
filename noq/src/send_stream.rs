@@ -1,21 +1,18 @@
-use core::fmt;
 use std::{
     future::{Future, poll_fn},
     io,
-    panic::RefUnwindSafe,
     pin::{Pin, pin},
-    sync::Arc,
     task::{Context, Poll},
 };
 
 use bytes::Bytes;
 use pin_project_lite::pin_project;
-use proto::{ClosedStream, ConnectionError, FinishError, StreamId};
+use proto::{ClosedStream, ConnectionError, FinishError, StreamAffinity, StreamId};
 use thiserror::Error;
 use tokio::sync::futures::OwnedNotified;
 
 use crate::{
-    Path, Side, VarInt,
+    VarInt,
     connection::{ConnectionRef, State},
 };
 
@@ -35,13 +32,11 @@ use crate::{
 ///
 /// [`reset()`]: SendStream::reset
 /// [`finish()`]: SendStream::finish
-#[derive(derive_more::Debug)]
+#[derive(Debug)]
 pub struct SendStream {
     conn: ConnectionRef,
     stream: StreamId,
     is_0rtt: bool,
-    #[debug("{}", StreamAffinityCallbackOption::new(affinity_cb))]
-    affinity_cb: Option<Arc<dyn StreamAffinityCallback>>,
 }
 
 impl SendStream {
@@ -50,7 +45,6 @@ impl SendStream {
             conn,
             stream,
             is_0rtt,
-            affinity_cb: None,
         }
     }
 
@@ -245,26 +239,19 @@ impl SendStream {
         conn.inner.send_stream(self.stream).priority()
     }
 
-    /// Sets a new callback to set the [`StreamAffinity`].
+    /// Sets a new affinity for this stream's application data.
     ///
-    /// The stream affinity allows to restrict over which network paths the *application
-    /// data* for a stream is sent, i.e. it only affects STREAM frames. The callback is
-    /// invoked immediately upon setting it, as well as any time that the available network
-    /// paths or their properties change.
+    /// Stream affinity allows to set the exact network path over which the STREAM frames
+    /// for a particular stream are sent. Setting the affinity to a path that can not carry
+    /// any data will mean the stream's data can not be transmitted. This is equivalent to
+    /// setting the affinity to [`StreamAffinity::Block`].
     ///
-    /// Conditions where this callback will be invoked:
-    /// - A path is *opened*.
-    /// - A path is *established*.
-    /// - Packet scheduling stops using a path.
-    /// - Packet scheduling starts using a path.
-    /// - A path's status is changed (PATH_STATUS_AVAILABLE, PATH_STATUS_BACKUP).
-    /// - A path is *closed*.
-    ///
-    /// A path is *opened* whenever either the local side opens the path, or a packet was
-    /// received from the peer on the path. In the former case there is no implication yet
-    /// that the path will be able to carry any datagrams between the two peers. A path is
-    /// *established* when their is indication that it is able to carry datagrams between
-    /// the peers.
+    /// Note that blocking stream frames from this API is not ideal: it uses up data from
+    /// the connection-wide [send window] before further writes to the stream are
+    /// blocked. Therefor it should be used as a last resort only, it is better to not
+    /// create a stream if no suitable network path exists. If the desired network path
+    /// disappears before the entire stream is delivered consider using
+    /// [`SendStream::reset`] as an alternative to blocking the stream data.
     ///
     /// Packet scheduling affects all QUIC frames and not only application data. It
     /// functions entirely independent of stream affinity. It may decide to stop scheduling
@@ -274,32 +261,17 @@ impl SendStream {
     /// what stream affinity indicates.
     ///
     /// Setting stream affinity to be sticky to a path on which no packets are sent means no
-    /// application data will be sent for the stream. This will quickly fill up the send
-    /// window and result in further writes being blocking.
+    /// application data will be sent for the stream. The same caveats as above apply in
+    /// this case. If a path becomes incapable to transmit packets entirely it will usually
+    /// be closed after a short while.
     ///
-    /// To react to gradual changes, e.g. a certain RTT threshold, paths must be monitored
-    /// outside of the callback and a new callback can be installed any time to change the
-    /// stream affinity.
-    pub fn set_affinity(
-        &mut self,
-        affinity_cb: Arc<dyn StreamAffinityCallback>,
-    ) -> Result<(), ClosedStream> {
-        self.affinity_cb = Some(affinity_cb);
-        let stream_priority = self.priority()?;
-        if let Some(ref cb) = self.affinity_cb {
-            let ctx = StreamAffinityContext {
-                conn: self.conn.clone(),
-                stream: self.stream,
-                stream_priority,
-            };
-            let affinity = cb.affinity(ctx);
-
-            let mut conn = self.conn.lock_without_waking("SendStream::priority");
-            conn.inner
-                .send_stream(self.stream)
-                .set_affinity(affinity.inner)?;
-        }
-        Ok(())
+    /// [send window]: crate::TransportConfig::send_window
+    pub fn set_affinity(&mut self, affinity: StreamAffinity) -> Result<(), ClosedStream> {
+        self.conn
+            .lock_without_waking("SendStream::priority")
+            .inner
+            .send_stream(self.stream)
+            .set_affinity(affinity)
     }
 
     /// Completes when the peer stops the stream or reads the stream to completion
@@ -437,25 +409,6 @@ impl Drop for SendStream {
     }
 }
 
-/// Helper struct to get [`fmt::Debug`] for `Option<Arc<dyn StreamAffinityCallback>>`.
-struct StreamAffinityCallbackOption<'a>(Option<&'a dyn StreamAffinityCallback>);
-
-impl<'a> StreamAffinityCallbackOption<'a> {
-    #[allow(unused, reason = "used by SendStream's derive_more::Debug")]
-    fn new(v: &'a Option<Arc<dyn StreamAffinityCallback>>) -> Self {
-        Self(v.as_deref())
-    }
-}
-
-impl fmt::Display for StreamAffinityCallbackOption<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.0 {
-            Some(_) => f.write_str("Some(<dyn StreamAffinityCallback>)"),
-            None => f.write_str("None"),
-        }
-    }
-}
-
 /// Errors that arise from writing to a stream
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum WriteError {
@@ -560,126 +513,6 @@ impl Future for Stopped {
             }
             std::task::ready!(this.notified.as_mut().poll(cx));
         }
-    }
-}
-
-/// Trait to implement a callback to [set stream affinity].
-///
-/// [set stream affinity]: SendStream::set_affinity
-pub trait StreamAffinityCallback: Send + Sync + RefUnwindSafe {
-    /// Sets the affinity for a single stream.
-    ///
-    /// This function must not block.
-    ///
-    /// The provided [`StreamAffinityContext`] gives some information about the connection
-    /// and stream the callback is being invoked for as well as the current paths available
-    /// right now.
-    ///
-    /// The desired affinity for the stream should be returned by an instance of the
-    /// [`StreamAffinity`] struct. This struct can be created directly using one of the
-    /// public constructors.
-    fn affinity(&self, ctx: StreamAffinityContext) -> StreamAffinity;
-}
-
-/// Context for the [`StreamAffinityCallback`] being called.
-///
-/// This provides information for which connection and stream the callback is being
-/// called. It also allows access to the current paths available to the connection.
-#[derive(Debug)]
-pub struct StreamAffinityContext {
-    conn: ConnectionRef,
-    stream: StreamId,
-    /// The stream priority.
-    ///
-    /// Captured to avoid unwrap on [`ClosedStream`].
-    stream_priority: i32,
-}
-
-impl StreamAffinityContext {
-    /// The [stable ID] of the connection this callback is being invoked for.
-    ///
-    /// [stable ID]: crate::Connection::stable_id
-    pub fn connection_stable_id(&self) -> usize {
-        self.conn.stable_id()
-    }
-
-    /// whether this is the server or client side of the connection.
-    pub fn connection_side(&self) -> Side {
-        self.conn
-            .lock_without_waking("StreamAffinityContext::connection_side")
-            .inner
-            .side()
-    }
-
-    /// Returns the identity of the stream.
-    pub fn stream_id(&self) -> StreamId {
-        self.stream
-    }
-
-    /// Returns the priority of the stream.
-    pub fn stream_priority(&self) -> i32 {
-        self.stream_priority
-    }
-
-    /// Iterator over all the currently known paths.
-    ///
-    /// This is a snapshot in time and should not be stored. The yielded [`Path`] objects
-    /// allow manipulation, it is encouraged to refrain from this and only inspect the
-    /// paths. Manipulation form here will make it harder to understand what is happening to
-    /// the connection.
-    pub fn paths(&self) -> impl Iterator<Item = Path> + '_ {
-        let paths = self
-            .conn
-            .lock_without_waking("Connection::iter_paths")
-            .path_refs
-            .iter()
-            .map(|(path_id, ref_owner)| {
-                Path::from_parts(self.conn.clone(), ref_owner.acquire(*path_id))
-            })
-            .collect::<Vec<_>>();
-        paths.into_iter()
-    }
-}
-
-/// Structure to allow choosing an affinity for a stream.
-///
-/// An instance of this needs to be returned in [`StreamAffinityCallback::affinity`].
-///
-/// The default affinity is [`StreamAffinity::any`], which is the implied affinity if no
-/// explicit stream affinity is set.
-#[derive(Debug, Default)]
-pub struct StreamAffinity {
-    inner: proto::StreamAffinity,
-}
-
-impl StreamAffinity {
-    /// Creates a new struct to return from [`StreamAffinityCallback::affinity`].
-    ///
-    /// Will use the default affinity, [`Self::any`].
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Sets not specific affinity for this stream, the default behaviour.
-    ///
-    /// STREAM frames for this stream may be sent on any path that the packet scheduling
-    /// decides could carry the data to reach the peer.
-    pub fn any(&mut self) {
-        self.inner = proto::StreamAffinity::Any;
-    }
-
-    /// Marks this stream to be only transmitted on a particular network path.
-    pub fn sticky(&mut self, path: proto::PathId) {
-        self.inner = proto::StreamAffinity::Sticky(path);
-    }
-
-    /// Stops transmitting data for this stream.
-    ///
-    /// If no network path is suitable to carry this stream's data it is possible to not
-    /// send it at all. This will result in write calls on the [`SendStream`] blocking once
-    /// the send window is filled up.
-    pub fn block(&mut self) {
-        self.inner = proto::StreamAffinity::Block;
     }
 }
 

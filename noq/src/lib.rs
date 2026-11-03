@@ -66,8 +66,8 @@ pub use proto::{
     ConnectionIdGenerator, ConnectionStats, DecryptedInitial, Dir, EcnCodepoint, EndpointConfig,
     FourTuple, FrameStats, FrameType, IdleTimeout, InvalidCid, MtuDiscoveryConfig,
     NetworkChangeHint, NoneTokenLog, NoneTokenStore, PathError, PathEvent, PathId, PathStats,
-    PathStatus, ServerConfig, SetPathStatusError, Side, StdSystemTime, StreamId, TimeSource,
-    TokenLog, TokenMemoryCache, TokenReuseError, TokenStore, Transmit, TransportConfig,
+    PathStatus, ServerConfig, SetPathStatusError, Side, StdSystemTime, StreamAffinity, StreamId,
+    TimeSource, TokenLog, TokenMemoryCache, TokenReuseError, TokenStore, Transmit, TransportConfig,
     TransportErrorCode, UdpStats, ValidationTokenConfig, VarInt, VarIntBoundsExceeded, congestion,
     crypto,
 };
@@ -95,10 +95,7 @@ pub use crate::runtime::TokioRuntime;
 #[cfg(any(feature = "runtime-tokio", feature = "runtime-smol"))]
 pub use crate::runtime::default_runtime;
 pub use crate::runtime::{AsyncTimer, AsyncUdpSocket, Runtime, UdpSender};
-pub use crate::send_stream::{
-    SendStream, Stopped, StoppedError, StreamAffinity, StreamAffinityCallback,
-    StreamAffinityContext, WriteError,
-};
+pub use crate::send_stream::{SendStream, Stopped, StoppedError, WriteError};
 
 #[cfg(test)]
 mod tests;
