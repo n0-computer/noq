@@ -87,7 +87,7 @@ any data will mean the stream’s data can not be transmitted. This is equivalen
 setting the affinity to <a href="enum.StreamAffinity.html#variant.Block" title="variant noq::StreamAffinity::Block"><code>StreamAffinity::Block</code></a>.</p>
 <p>Note that blocking stream frames from this API is not ideal: it uses up data from
 the connection-wide <a href="struct.TransportConfig.html#method.send_window" title="method noq::TransportConfig::send_window">send window</a> before further writes to the stream are
-blocked. Therefor it should be used as a last resort only, it is better to not
+blocked. Therefore it should be used as a last resort only, it is better to not
 create a stream if no suitable network path exists. If the desired network path
 disappears before the entire stream is delivered consider using
 <a href="struct.SendStream.html#method.reset" title="method noq::SendStream::reset"><code>SendStream::reset</code></a> as an alternative to blocking the stream data.</p>
