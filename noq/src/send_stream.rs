@@ -248,7 +248,7 @@ impl SendStream {
     ///
     /// Note that blocking stream frames from this API is not ideal: it uses up data from
     /// the connection-wide [send window] before further writes to the stream are
-    /// blocked. Therefor it should be used as a last resort only, it is better to not
+    /// blocked. Therefore it should be used as a last resort only, it is better to not
     /// create a stream if no suitable network path exists. If the desired network path
     /// disappears before the entire stream is delivered consider using
     /// [`SendStream::reset`] as an alternative to blocking the stream data.
