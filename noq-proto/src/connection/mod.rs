@@ -1633,8 +1633,9 @@ impl Connection {
             let Some(mut builder) =
                 PacketBuilder::new(now, space_id, path_id, remote_cid, transmit, self)
             else {
-                // Confidentiality limit is exceeded and the connection has been killed. We
-                // should not send any other packets. This works in a roundabout way: We
+                // Confidentiality limit is exceeded, or an Initial token left no room for
+                // frames, and the connection has been killed. We should not send any other
+                // packets. This works in a roundabout way: We
                 // have started a datagram but not written anything into it. So even if we
                 // get called again for another space we will see an already started
                 // datagram and try and start another packet here. Then be stopped by the
@@ -1679,22 +1680,25 @@ impl Connection {
                         &mut builder,
                         &mut self.path_stats.get_mut(path_id).frame_tx,
                         self.crypto_state.has_keys(space_id.encryption_level()),
+                        // Reserve room for CONNECTION_CLOSE even when an Initial token leaves
+                        // little space after the header.
+                        frame::ConnectionClose::SIZE_BOUND,
                     );
                 }
 
-                // Since there only 64 ACK frames there will always be enough space
-                // to encode the ConnectionClose frame too. However we still have the
-                // check here to prevent crashes if something changes.
+                // ACKs are only written if they leave space for the ConnectionClose frame.
+                // However we still have the check here to prevent crashes if something
+                // changes.
 
                 // TODO(flub): This needs fixing for multipath, to ensure we can always
                 //    write the CONNECTION_CLOSE even if we have many PATH_ACKs to send:
                 //    https://github.com/n0-computer/noq/issues/367.
                 debug_assert!(
-                    builder.frame_space_remaining() > frame::ConnectionClose::SIZE_BOUND,
+                    builder.frame_space_remaining() >= frame::ConnectionClose::SIZE_BOUND,
                     "ACKs should leave space for ConnectionClose"
                 );
                 let stats = &mut self.path_stats.get_mut(path_id).frame_tx;
-                if frame::ConnectionClose::SIZE_BOUND < builder.frame_space_remaining() {
+                if frame::ConnectionClose::SIZE_BOUND <= builder.frame_space_remaining() {
                     let max_frame_size = builder.frame_space_remaining();
                     let close: Close = match self.state.as_type() {
                         StateType::Closed => {
@@ -6161,6 +6165,7 @@ impl Connection {
                     builder,
                     stats,
                     space_has_keys,
+                    0,
                 );
             }
         }
@@ -6616,6 +6621,7 @@ impl Connection {
         builder: &mut PacketBuilder<'a, 'b>,
         stats: &mut FrameStats,
         space_has_keys: bool,
+        reserve: usize,
     ) {
         // 0-RTT packets must never carry acks (which would have to be of handshake packets)
         debug_assert!(space_has_keys, "tried to send ACK in 0-RTT");
@@ -6645,13 +6651,20 @@ impl Connection {
         let ack_delay_exp = TransportParameters::default().ack_delay_exponent;
         let delay = delay_micros >> ack_delay_exp.into_inner();
 
+        // Skip the ACK rather than overrun the packet, e.g. after a large Initial token
+        let fits = |size: usize| size + reserve <= builder.frame_space_remaining();
         if is_multipath_negotiated && space_id == SpaceId::Data {
             if !ranges.is_empty() {
                 let frame = frame::PathAck::encoder(path_id, delay, ranges, ecn);
-                builder.write_frame(frame, stats);
+                if fits(frame.size()) {
+                    builder.write_frame(frame, stats);
+                }
             }
         } else {
-            builder.write_frame(frame::Ack::encoder(delay, ranges, ecn), stats);
+            let frame = frame::Ack::encoder(delay, ranges, ecn);
+            if fits(frame.size()) {
+                builder.write_frame(frame, stats);
+            }
         }
     }
 
@@ -7779,6 +7792,101 @@ fn negotiate_max_idle_timeout(x: Option<VarInt>, y: Option<VarInt>) -> Option<Du
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(all(feature = "rustls", any(feature = "aws-lc-rs", feature = "ring")))]
+    #[test]
+    fn large_initial_token_leaves_room_for_close() {
+        use alloc::vec;
+
+        use crate::{
+            DEFAULT_SUPPORTED_VERSIONS, Endpoint, EndpointConfig,
+            packet::{FixedLengthConnectionIdParser, PartialDecode},
+        };
+
+        let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+        let mut roots = rustls::RootCertStore::empty();
+        roots.add(cert.cert.der().clone()).unwrap();
+        let config = crate::ClientConfig::with_root_certificates(Arc::new(roots)).unwrap();
+        // With 40 bytes of header overhead, a 16-byte tag, and a 35-byte ACK,
+        // a 1084-byte token leaves exactly ConnectionClose::SIZE_BOUND bytes.
+        for (token_len, ack_fits) in [
+            (1083, true),
+            (1084, true),
+            (1085, false),
+            (1100, false),
+            // Exactly enough frame space for CONNECTION_CLOSE alone.
+            (1119, false),
+        ] {
+            config
+                .token_store
+                .insert("localhost", vec![0; token_len].into());
+            let mut endpoint = Endpoint::new(Arc::new(EndpointConfig::default()), None, true);
+            let now = Instant::now();
+            let (_, mut conn) = endpoint
+                .connect(
+                    now,
+                    config.clone(),
+                    "[::1]:4433".parse().unwrap(),
+                    "localhost",
+                )
+                .unwrap();
+            let keys = conn
+                .crypto_state
+                .session
+                .initial_keys(conn.initial_dst_cid, Side::Server);
+            let pns = conn.spaces[SpaceId::Initial].for_path(PathId::ZERO);
+            for pn in (0..32).step_by(2) {
+                pns.pending_acks.insert_one(pn, now);
+                pns.dedup.insert(pn);
+                pns.pending_acks.packet_received(now, pn, true, &pns.dedup);
+            }
+            conn.close(now, 0u32.into(), Bytes::new());
+            let mut buf = Vec::new();
+            assert!(
+                conn.poll_transmit(now, NonZeroUsize::MIN, &mut buf)
+                    .is_some()
+            );
+            assert!(buf.len() <= 1200);
+            assert!(!conn.connection_close_pending);
+
+            let (packet, rest) = PartialDecode::new(
+                buf.as_slice().into(),
+                &FixedLengthConnectionIdParser::new(0),
+                DEFAULT_SUPPORTED_VERSIONS,
+                false,
+            )
+            .unwrap();
+            assert!(rest.is_none());
+            let mut packet = packet.finish(Some(&*keys.header.remote)).unwrap();
+            assert_eq!(packet.header_data.len(), 40 + token_len);
+            let pn = packet.header.number().unwrap().expand(0);
+            keys.packet
+                .remote
+                .decrypt(PathId::ZERO, pn, &packet.header_data, &mut packet.payload)
+                .unwrap();
+            let mut frames = frame::Iter::new(packet.payload.freeze())
+                .unwrap()
+                .map(Result::unwrap)
+                .filter(|frame| !matches!(frame, Frame::Padding));
+            if ack_fits {
+                assert!(
+                    matches!(frames.next(), Some(Frame::Ack(_))),
+                    "token {token_len}"
+                );
+            }
+            assert!(
+                matches!(
+                    frames.next(),
+                    Some(Frame::Close(Close::Connection(frame::ConnectionClose {
+                        error_code: TransportErrorCode::APPLICATION_ERROR,
+                        ..
+                    })))
+                ),
+                "token {token_len}"
+            );
+            assert!(frames.next().is_none());
+        }
+    }
 
     #[test]
     fn negotiate_max_idle_timeout_commutative() {
