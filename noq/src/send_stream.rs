@@ -268,7 +268,7 @@ impl SendStream {
     /// [send window]: crate::TransportConfig::send_window
     pub fn set_affinity(&mut self, affinity: StreamAffinity) -> Result<(), ClosedStream> {
         self.conn
-            .lock_without_waking("SendStream::priority")
+            .lock_and_wake("SendStream::set_affinity")
             .inner
             .send_stream(self.stream)
             .set_affinity(affinity)
