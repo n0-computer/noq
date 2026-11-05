@@ -244,7 +244,9 @@ impl SendStream {
     /// Stream affinity allows setting the exact network path over which the STREAM frames
     /// for a particular stream are sent. Setting the affinity to a path that can not carry
     /// any data will mean the stream's data can not be transmitted. This is equivalent to
-    /// setting the affinity to [`StreamAffinity::Block`].
+    /// setting the affinity to [`StreamAffinity::Block`]. It is up to the application to
+    /// monitor for path changes and update a stream's affinity if a
+    /// [`StreamAffinity::Sticky`] path closes.
     ///
     /// Note that blocking stream frames from this API is not ideal: it uses up data from
     /// the connection-wide [send window] before further writes to the stream are
