@@ -1,4 +1,4 @@
-use alloc::boxed::Box;
+use alloc::{boxed::Box, vec::Vec};
 use core::{
     mem,
     ops::{Index, IndexMut},
@@ -39,21 +39,44 @@ pub(super) struct DecryptPacketResult {
     pub(super) outgoing_key_update_acked: bool,
     /// Whether the peer has initiated a key update
     pub(super) incoming_key_update: bool,
+    /// Whether the packet was protected with the current 1-RTT keys
+    pub(super) current_keys: bool,
 }
 
 pub(super) struct PrevCrypto {
     /// The keys used for the previous key phase, temporarily retained to decrypt packets sent by
     /// the peer prior to its own key update.
     pub(super) crypto: KeyPair<Box<dyn PacketKey>>,
-    /// The incoming packet that ends the interval for which these keys are applicable, and the
-    /// time of its receipt.
+    /// When the first incoming packet using the newer keys was received, on any path.
     ///
-    /// Incoming packets should be decrypted using these keys iff this is `None` or their packet
-    /// number is lower. `None` indicates that we have not yet received a packet using newer keys,
-    /// which implies that the update was locally initiated.
-    pub(super) end_packet: Option<(u64, Instant)>,
+    /// `None` indicates that we have not yet received a packet using newer keys, which implies
+    /// that the update was locally initiated.
+    pub(super) end_time: Option<Instant>,
+    /// For each path, the number of the first incoming packet using the newer keys.
+    ///
+    /// Incoming packets on a path should be decrypted using these keys iff the path has no entry
+    /// or their packet number is lower. Packet numbers are per path, so a single packet number
+    /// can't tell an older packet still in flight on one path from a further key update.
+    pub(super) end_packets: Vec<(PathId, u64)>,
     /// Whether the following key phase is from a remotely initiated update that we haven't acked
     pub(super) update_unacked: bool,
+}
+
+impl PrevCrypto {
+    /// Whether a packet on `path_id` was sent before the key update reached that path.
+    fn precedes_update(&self, path_id: PathId, packet_number: u64) -> bool {
+        self.end_packets
+            .iter()
+            .find(|(path, _)| *path == path_id)
+            .is_none_or(|(_, end)| packet_number < *end)
+    }
+
+    /// Records the first incoming packet using the newer keys on `path_id`.
+    pub(super) fn record_end(&mut self, path_id: PathId, packet_number: u64) {
+        if !self.end_packets.iter().any(|(path, _)| *path == path_id) {
+            self.end_packets.push((path_id, packet_number));
+        }
+    }
 }
 
 pub(super) struct ZeroRttCrypto {
@@ -233,10 +256,10 @@ impl CryptoState {
             let (_, packet) = self.remote_crypto(space.encryption_level()).unwrap();
             packet
         } else if let Some(prev) = self.prev_crypto.as_ref().filter(|crypto| {
-            // If this packet comes prior to acknowledgment of the key update by the peer,
-            // use the previous keys. Otherwise this must be a remotely-initiated key update
-            // and we let this fall through to the final case.
-            crypto.end_packet.is_none_or(|(pn, _)| packet_number < pn)
+            // If this packet comes prior to acknowledgment of the key update by the peer on this
+            // path, use the previous keys. Otherwise this must be a remotely-initiated key
+            // update and we let this fall through to the final case.
+            crypto.precedes_update(path_id, packet_number)
         }) {
             &*prev.crypto.remote
         } else {
@@ -268,7 +291,7 @@ impl CryptoState {
 
         let mut outgoing_key_update_acked = false;
         if let Some(ref prev) = self.prev_crypto
-            && prev.end_packet.is_none()
+            && prev.end_time.is_none()
             && packet_key_phase == conn_key_phase
         {
             outgoing_key_update_acked = true;
@@ -292,6 +315,9 @@ impl CryptoState {
             packet_number,
             outgoing_key_update_acked,
             incoming_key_update: crypto_update,
+            current_keys: !packet.header.is_0rtt()
+                && space == SpaceKind::Data
+                && packet_key_phase == conn_key_phase,
         }))
     }
 
@@ -397,7 +423,7 @@ impl CryptoState {
     /// keys. Updates `key_phase` and `key_phase_size` accordingly.
     ///
     /// PANICS: If 1-RTT keys are missing.
-    pub(super) fn update_keys(&mut self, end_packet: Option<(u64, Instant)>, remote: bool) {
+    pub(super) fn update_keys(&mut self, end_packet: Option<(PathId, u64, Instant)>, remote: bool) {
         trace!("executing key update");
 
         let new = self
@@ -415,7 +441,11 @@ impl CryptoState {
         );
         self.prev_crypto = Some(PrevCrypto {
             crypto: old,
-            end_packet,
+            end_time: end_packet.map(|(_, _, time)| time),
+            end_packets: end_packet
+                .map(|(path_id, packet_number, _)| (path_id, packet_number))
+                .into_iter()
+                .collect(),
             update_unacked: remote,
         });
 
