@@ -1530,7 +1530,7 @@ fn stream_affinity_persists_across_packets() -> TestResult {
         "stream {pinned} should need more than one packet on path {backup}"
     );
 
-    // sanity check that the data transfered
+    // sanity check that the data transferred
     assert_eq!(pair.streams(Server).accept(Dir::Uni), Some(pinned));
     let mut recv = pair.recv_stream(Server, pinned);
     let mut chunks = recv.read(true)?;
