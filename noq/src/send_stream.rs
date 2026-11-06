@@ -268,7 +268,7 @@ impl SendStream {
     /// usually be closed after a short while.
     ///
     /// [send window]: crate::TransportConfig::send_window
-    pub fn set_affinity(&mut self, affinity: StreamAffinity) -> Result<(), ClosedStream> {
+    pub fn set_affinity(&self, affinity: StreamAffinity) -> Result<(), ClosedStream> {
         self.conn
             .lock_and_wake("SendStream::set_affinity")
             .inner
