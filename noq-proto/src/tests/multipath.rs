@@ -1488,6 +1488,63 @@ fn stream_affinity_block_and_resume() -> TestResult {
 }
 
 #[test]
+fn stream_affinity_persists_across_packets() -> TestResult {
+    let _guard = subscribe();
+    let mut pair = ConnPair::builder().enable_multipath().connect();
+
+    let available = PathId::ZERO;
+    let server_addr = pair.routes.public_server_addr();
+    let backup = pair.open_path(
+        Client,
+        FourTuple::from_remote(server_addr),
+        PathStatus::Backup,
+    )?;
+    pair.drive();
+    assert_matches!(
+        pair.poll(Client),
+        Some(Event::Path(PathEvent::Established { id })) if id == backup
+    );
+
+    // Too large for one packet, so the stream is requeued after each packet it fills.
+    // The backup path cannot send unpinned data, so a requeue that drops the affinity would
+    // move the remaining data to the available path.
+    let pinned = pair.streams(Client).open(Dir::Uni).unwrap();
+    pair.send_stream(Client, pinned)
+        .set_affinity(StreamAffinity::Sticky(backup))?;
+
+    let available_before = pair.path_stats(Client, available).unwrap().frame_tx.stream;
+    let backup_before = pair.path_stats(Client, backup).unwrap().frame_tx.stream;
+
+    const MSG: &[u8] = &[42u8; 10_000];
+    assert_eq!(pair.send_stream(Client, pinned).write(MSG)?, MSG.len());
+    pair.send_stream(Client, pinned).finish()?;
+    pair.drive();
+
+    assert_eq!(
+        pair.path_stats(Client, available).unwrap().frame_tx.stream,
+        available_before,
+        "stream {pinned} should not use path {available}"
+    );
+    assert!(
+        pair.path_stats(Client, backup).unwrap().frame_tx.stream > backup_before + 1,
+        "stream {pinned} should need more than one packet on path {backup}"
+    );
+
+    // sanity check that the data transferred
+    assert_eq!(pair.streams(Server).accept(Dir::Uni), Some(pinned));
+    let mut recv = pair.recv_stream(Server, pinned);
+    let mut chunks = recv.read(true)?;
+    let mut received = Vec::new();
+    while let Ok(Some(chunk)) = chunks.next(usize::MAX) {
+        received.extend_from_slice(&chunk.bytes);
+    }
+    let _ = chunks.finalize();
+    assert_eq!(received, MSG);
+
+    Ok(())
+}
+
+#[test]
 fn stream_affinity_moves_buffered_data() -> TestResult {
     let _guard = subscribe();
     let mut pair = ConnPair::builder().enable_multipath().connect();
