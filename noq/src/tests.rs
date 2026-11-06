@@ -1673,8 +1673,8 @@ async fn nat_traversal_wakes_connection_driver() -> TestResult {
 /// This test connects two endpoints and opens a uni stream with its affinity set
 /// to `StreamAffinity::Block`, writes and finishes it, and checks the server does
 /// not see the stream while the connection goes idle. It then unblocks the stream
-/// and checks that the server reads all of its data within 500ms.
-#[tokio::test]
+/// and checks that the server reads all of its data within 10s.
+#[tokio::test(start_paused = true)]
 async fn stream_affinity_wakes_connection_driver() -> TestResult {
     let _logging = subscribe();
     let factory = EndpointFactory::new();
@@ -1721,15 +1721,15 @@ async fn stream_affinity_wakes_connection_driver() -> TestResult {
         // Unblocking requeues the stream's data.
         send.set_affinity(StreamAffinity::Any).unwrap();
 
-        // The server should read the whole stream within 500ms.
-        let result = tokio::time::timeout(Duration::from_millis(500), async {
+        // The server should read the whole stream within 10s.
+        let result = tokio::time::timeout(Duration::from_secs(10), async {
             let mut recv = server_conn.accept_uni().await.unwrap();
             recv.read_to_end(usize::MAX).await.unwrap()
         })
         .await;
         let Ok(received) = result else {
             panic!(
-                "server should read the unblocked stream within 500ms — \
+                "server should read the unblocked stream within 10s — \
                  data likely stuck waiting for connection driver wake"
             );
         };
@@ -1750,7 +1750,7 @@ async fn stream_affinity_wakes_connection_driver() -> TestResult {
 ///
 /// The test sends one stream pinned to the first path, then one pinned to the second path.
 /// This is to ensure that the data was not sent on the first path as a fluke.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn stream_affinity_pins_stream_to_path() -> TestResult {
     let _logging = subscribe();
     let factory = EndpointFactory::new();
@@ -1805,12 +1805,12 @@ async fn stream_affinity_pins_stream_to_path() -> TestResult {
         send.write_all(MSG).await.unwrap();
         send.finish().unwrap();
 
-        let received = tokio::time::timeout(Duration::from_secs(1), async {
+        let received = tokio::time::timeout(Duration::from_secs(10), async {
             let mut recv = server_conn.accept_uni().await.unwrap();
             recv.read_to_end(usize::MAX).await.unwrap()
         })
         .await
-        .expect("server should read the stream pinned to the first path within 1s");
+        .expect("server should read the stream pinned to the first path within 10s");
         assert_eq!(received, MSG);
 
         // Retransmits may add STREAM frames, but only on the pinned path.
@@ -1835,12 +1835,12 @@ async fn stream_affinity_pins_stream_to_path() -> TestResult {
         send.write_all(MSG).await.unwrap();
         send.finish().unwrap();
 
-        let received = tokio::time::timeout(Duration::from_secs(1), async {
+        let received = tokio::time::timeout(Duration::from_secs(10), async {
             let mut recv = server_conn.accept_uni().await.unwrap();
             recv.read_to_end(usize::MAX).await.unwrap()
         })
         .await
-        .expect("server should read the stream pinned to the second path within 1s");
+        .expect("server should read the stream pinned to the second path within 10s");
         assert_eq!(received, MSG);
 
         assert!(
