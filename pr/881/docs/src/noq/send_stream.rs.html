@@ -268,7 +268,7 @@
 <a href=#268 id=268 data-nosnippet>268</a>    /// usually be closed after a short while.
 <a href=#269 id=269 data-nosnippet>269</a>    ///
 <a href=#270 id=270 data-nosnippet>270</a>    /// [send window]: crate::TransportConfig::send_window
-<a href=#271 id=271 data-nosnippet>271</a>    </span><span class="kw">pub fn </span>set_affinity(<span class="kw-2">&amp;mut </span><span class="self">self</span>, affinity: StreamAffinity) -&gt; <span class="prelude-ty">Result</span>&lt;(), ClosedStream&gt; {
+<a href=#271 id=271 data-nosnippet>271</a>    </span><span class="kw">pub fn </span>set_affinity(<span class="kw-2">&amp;</span><span class="self">self</span>, affinity: StreamAffinity) -&gt; <span class="prelude-ty">Result</span>&lt;(), ClosedStream&gt; {
 <a href=#272 id=272 data-nosnippet>272</a>        <span class="self">self</span>.conn
 <a href=#273 id=273 data-nosnippet>273</a>            .lock_and_wake(<span class="string">"SendStream::set_affinity"</span>)
 <a href=#274 id=274 data-nosnippet>274</a>            .inner
