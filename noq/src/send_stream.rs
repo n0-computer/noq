@@ -32,7 +32,7 @@ use crate::{
 ///
 /// [`reset()`]: SendStream::reset
 /// [`finish()`]: SendStream::finish
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SendStream {
     conn: ConnectionRef,
     stream: StreamId,
