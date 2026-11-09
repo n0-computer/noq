@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["CongestionAlgorithm"],"fn":["parse_byte_size"],"mod":["client","noprotection","server","stats"],"static":["PERF_CIPHER_SUITES"],"struct":["CommonOpt"]};
