@@ -1074,6 +1074,13 @@ impl<'a> PathAckEncoder<'a> {
             false => FrameType::PathAck,
         }
     }
+
+    /// Encoded size of this frame
+    pub(crate) fn size(&self) -> usize {
+        self.get_type().size()
+            + self.path_id.size()
+            + ack_body_size(self.delay, self.ranges, self.ecn)
+    }
 }
 
 impl<'a> Encodable for PathAckEncoder<'a> {
@@ -1187,6 +1194,33 @@ impl<'a> AckEncoder<'a> {
             false => FrameType::Ack,
         }
     }
+
+    /// Encoded size of this frame
+    pub(crate) fn size(&self) -> usize {
+        self.get_type().size() + ack_body_size(self.delay, self.ranges, self.ecn)
+    }
+}
+
+/// Encoded size of the part of an ACK or PATH_ACK frame following the type and path ID
+///
+/// PANICS: if `ranges` is empty.
+fn ack_body_size(delay: u64, ranges: &ArrayRangeSet, ecn: Option<&EcnCounts>) -> usize {
+    let var = |x: u64| VarInt::from_u64(x).unwrap().size();
+    let mut rest = ranges.iter().rev();
+    let first = rest.next().unwrap();
+    let mut size = var(first.end - 1)
+        + var(delay)
+        + var(ranges.range_count() as u64 - 1)
+        + var(first.end - first.start - 1);
+    let mut prev = first.start;
+    for block in rest {
+        size += var(prev - block.end - 1) + var(block.end - block.start - 1);
+        prev = block.start;
+    }
+    if let Some(x) = ecn {
+        size += var(x.ect0) + var(x.ect1) + var(x.ce);
+    }
+    size
 }
 
 impl<'a> Encodable for AckEncoder<'a> {
@@ -2563,7 +2597,9 @@ mod test {
             ect1: 24,
             ce: 12,
         };
-        Ack::encoder(42, &ranges, Some(&ECN)).encode(&mut buf);
+        let encoder = Ack::encoder(42, &ranges, Some(&ECN));
+        encoder.encode(&mut buf);
+        assert_eq!(encoder.size(), buf.len());
         let frames = frames(buf);
         assert_eq!(frames.len(), 1);
         match frames[0] {
@@ -2592,7 +2628,9 @@ mod test {
             ce: 12,
         };
         const PATH_ID: PathId = PathId::MAX;
-        PathAck::encoder(PATH_ID, 42, &ranges, Some(&ECN)).encode(&mut buf);
+        let encoder = PathAck::encoder(PATH_ID, 42, &ranges, Some(&ECN));
+        encoder.encode(&mut buf);
+        assert_eq!(encoder.size(), buf.len());
         let frames = frames(buf);
         assert_eq!(frames.len(), 1);
         match frames[0] {
@@ -2617,7 +2655,9 @@ mod test {
         }
         let mut buf = Vec::new();
         const PATH_ID: PathId = PathId::MAX;
-        PathAck::encoder(PATH_ID, 42, &ranges, None).encode(&mut buf);
+        let encoder = PathAck::encoder(PATH_ID, 42, &ranges, None);
+        encoder.encode(&mut buf);
+        assert_eq!(encoder.size(), buf.len());
         let frames = frames(buf);
         assert_eq!(frames.len(), 1);
         match frames[0] {
@@ -2629,6 +2669,32 @@ mod test {
                 assert_eq!(ack.ecn, None);
             }
             ref x => panic!("incorrect frame {x:?}"),
+        }
+    }
+
+    #[test]
+    fn ack_size_matches_encoding() {
+        let mut ranges = ArrayRangeSet::new();
+        for start in [0, 100, 20_000, 1 << 31, 1 << 40] {
+            ranges.insert(start..start + 70);
+        }
+        let ecn = EcnCounts {
+            ect0: 1 << 20,
+            ect1: 63,
+            ce: 1 << 35,
+        };
+        for ecn in [None, Some(&ecn)] {
+            for delay in [0, 1 << 14, 1 << 30] {
+                let mut buf = Vec::new();
+                let encoder = Ack::encoder(delay, &ranges, ecn);
+                encoder.encode(&mut buf);
+                assert_eq!(encoder.size(), buf.len());
+
+                let mut buf = Vec::new();
+                let encoder = PathAck::encoder(PathId(300), delay, &ranges, ecn);
+                encoder.encode(&mut buf);
+                assert_eq!(encoder.size(), buf.len());
+            }
         }
     }
 
