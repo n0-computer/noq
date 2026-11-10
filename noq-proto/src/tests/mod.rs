@@ -4029,7 +4029,19 @@ fn stream_gso() {
 fn datagram_gso() {
     let _guard = subscribe();
     let mut pair = Pair::default();
-    let (client_ch, _) = pair.connect();
+    let (client_ch, server_ch) = pair.connect();
+
+    // Prompt the client to send an ACK back to the server now, and let it settle. Otherwise the
+    // client might still have a pending ACK left over from the handshake, which would then be
+    // opportunistically bundled with the first datagram sent below, upsetting the byte-count
+    // assertion this test makes (the rest of the GSO batch is padded to match the first
+    // datagram's size, so a single bundled ACK inflates the whole batch). Driving to completion
+    // here also arms the bundling throttle for the client, so no further ACK gets bundled with
+    // the datagrams sent below.
+    pair.server_datagrams(server_ch)
+        .send(Bytes::new(), false)
+        .unwrap();
+    pair.drive();
 
     let initial_transmit_count = pair.client_conn_mut(client_ch).stats().transmits_tx;
     let initial_bytes = pair.client_conn_mut(client_ch).stats().udp_tx.bytes;
@@ -4211,6 +4223,72 @@ fn voluntary_ack_with_large_datagrams() {
         final_datagrams - initial_datagrams,
         COUNT as u64,
         "client should have sent some ACK-only packets"
+    );
+}
+
+/// Verify that a pending ACK is opportunistically bundled into a packet that is already being
+/// sent for another reason (here, one carrying a DATAGRAM frame), instead of waiting for a
+/// dedicated ACK-only packet. Also verify that this bundling is throttled, so a redundant ACK
+/// isn't bundled again immediately after the first one.
+#[test]
+fn ack_bundled_with_datagram() {
+    let _guard = subscribe();
+    let mut pair = Pair::default_with_deterministic_pns();
+    let (client_ch, server_ch) = pair.connect_with(client_config_with_deterministic_pns());
+    let mut pair = ConnPair::new(pair, client_ch, server_ch);
+
+    // Let the server receive a datagram from the client. A single ack-eliciting packet doesn't
+    // cross `ack_eliciting_threshold`, so the resulting ACK isn't urgent enough to warrant a
+    // dedicated packet of its own; without bundling it would just sit pending until the
+    // MaxAckDelay timer eventually fires.
+    pair.datagrams(Client)
+        .send(vec![0; 1].into(), false)
+        .unwrap();
+    pair.drive_client();
+    pair.drive_server();
+
+    let initial_acks = pair.stats(Server).frame_tx.acks;
+    let initial_datagrams = pair.stats(Server).udp_tx.datagrams;
+
+    // The server now sends an unrelated datagram of its own. The pending ACK for the client's
+    // datagram should ride along in the same packet, rather than waiting for its own dedicated
+    // one.
+    pair.datagrams(Server)
+        .send(vec![0; 1].into(), false)
+        .unwrap();
+    pair.drive_server();
+
+    assert_eq!(
+        pair.stats(Server).frame_tx.acks,
+        initial_acks + 1,
+        "server should have bundled an ACK frame with the DATAGRAM frame"
+    );
+    assert_eq!(
+        pair.stats(Server).udp_tx.datagrams,
+        initial_datagrams + 1,
+        "server should not have needed an extra UDP datagram to send the bundled ACK"
+    );
+
+    // Send a second unrelated datagram right away. The bundling throttle should prevent another
+    // ACK from being sent immediately after the one that was just bundled.
+    pair.datagrams(Server)
+        .send(vec![0; 1].into(), false)
+        .unwrap();
+    pair.drive_server();
+    assert_eq!(
+        pair.stats(Server).frame_tx.acks,
+        initial_acks + 1,
+        "server should not bundle a redundant ACK right after the previous one"
+    );
+
+    pair.drive();
+
+    // No further ACK should have been needed either: the client already learned everything it
+    // needed to from the bundled ACK above.
+    assert_eq!(
+        pair.stats(Server).frame_tx.acks,
+        initial_acks + 1,
+        "server should not have sent a redundant ACK frame"
     );
 }
 

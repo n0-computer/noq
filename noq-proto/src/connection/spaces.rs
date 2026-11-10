@@ -149,7 +149,7 @@ impl PacketSpace {
         let acks = self
             .number_spaces
             .values()
-            .any(|pns| pns.pending_acks.can_send());
+            .any(|pns| pns.pending_acks.should_send());
         let probing_frames = self
             .number_spaces
             .get(&path_id)
@@ -280,6 +280,16 @@ pub(super) struct PacketNumberSpace {
     pub(super) pending_ping: bool,
     /// Packet numbers to acknowledge.
     pub(super) pending_acks: PendingAcks,
+    /// The earliest time at which we are willing to opportunistically bundle a pending ACK for
+    /// this path into a packet that is otherwise being sent (e.g. one carrying STREAM or
+    /// DATAGRAM frames), rather than waiting to send it in a dedicated ACK packet.
+    ///
+    /// The goal is to wait long enough for the peer to acknowledge our previous bundled ACK, so
+    /// we don't waste the peer's resources processing redundant bundled ACKs. A packet-count
+    /// threshold would over- or under-shoot this depending on how fast we happen to be sending,
+    /// so a time threshold is used instead. See
+    /// [`Connection::next_bundled_ack_delay`](super::Connection::next_bundled_ack_delay).
+    pub(super) next_bundled_ack_time: Option<Instant>,
     /// An IMMEDIATE_ACK (draft-ietf-quic-ack-frequency) frame needs to be sent on this path.
     pub(super) pending_immediate_ack: bool,
     /// Responses to path challenges that need to be sent, on and off-path.
@@ -328,6 +338,7 @@ impl PacketNumberSpace {
             ecn_feedback: frame::EcnCounts::ZERO,
             pending_ping: false,
             pending_acks: PendingAcks::new(),
+            next_bundled_ack_time: None,
             pending_immediate_ack: false,
             pending_path_responses: PathResponses::default(),
             dedup: Default::default(),
@@ -358,6 +369,7 @@ impl PacketNumberSpace {
             ecn_feedback: frame::EcnCounts::ZERO,
             pending_ping: false,
             pending_acks: PendingAcks::new(),
+            next_bundled_ack_time: None,
             pending_immediate_ack: false,
             pending_path_responses: PathResponses::default(),
             dedup: Default::default(),
@@ -1203,7 +1215,7 @@ impl PendingAcks {
             .map(|earliest_unacked| earliest_unacked + max_ack_delay)
     }
 
-    /// Whether any ACK frames SHOULD be sent
+    /// Whether any ACK frames SHOULD be sent.
     ///
     /// This is used in the top-level [`Connection::space_can_send`], so determines if a
     /// packet will be built. It is often possible to construct new ACK ranges to send
@@ -1211,8 +1223,17 @@ impl PendingAcks {
     /// processing those at the receiver costs CPU for very little improvements.
     ///
     /// [`Connection::space_can_send`]: super::Connection::space_can_send
-    pub(super) fn can_send(&self) -> bool {
+    pub(super) fn should_send(&self) -> bool {
         self.immediate_ack_required && !self.ranges.is_empty()
+    }
+
+    /// Whether an ACK frame could be opportunistically bundled with other frames.
+    ///
+    /// Unlike [`Self::should_send`], this does not require `immediate_ack_required` to be set:
+    /// bundling a pending ACK into a packet that is being sent anyway is essentially free, as
+    /// opposed to sending a dedicated ACK-only packet for it.
+    pub(super) fn can_send(&self) -> bool {
+        !self.ranges.is_empty()
     }
 
     /// Returns the delay since the packet with the largest packet number was received
@@ -1254,7 +1275,7 @@ impl PendingAcks {
             self.is_out_of_order(packet_number, prev_largest_ack_eliciting, dedup);
 
         // Arm max_ack_delay timer if necessary
-        if self.earliest_ack_eliciting_since_last_ack_sent.is_none() && !self.can_send() {
+        if self.earliest_ack_eliciting_since_last_ack_sent.is_none() && !self.should_send() {
             self.earliest_ack_eliciting_since_last_ack_sent = Some(now);
             return true;
         }
@@ -1580,11 +1601,11 @@ mod test {
 
         // Sanity check
         assert!(!acks.ranges.is_empty());
-        assert!(!acks.can_send());
+        assert!(!acks.should_send());
 
         // Can send ACK after max_ack_delay exceeded
         acks.set_immediate_ack_required();
-        assert!(acks.can_send());
+        assert!(acks.should_send());
     }
 
     #[test]
