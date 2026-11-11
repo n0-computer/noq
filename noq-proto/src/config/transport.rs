@@ -36,7 +36,6 @@ pub struct TransportConfig {
     pub(crate) stream_receive_window: VarInt,
     pub(crate) receive_window: VarInt,
     pub(crate) send_window: u64,
-    pub(crate) send_fairness: bool,
 
     pub(crate) packet_threshold: u32,
     pub(crate) time_threshold: f32,
@@ -157,18 +156,11 @@ impl TransportConfig {
         self
     }
 
-    /// Whether to implement fair queuing for send streams having the same priority.
-    ///
-    /// When enabled, connections schedule data from outgoing streams having the same priority in a
-    /// round-robin fashion. When disabled, streams are scheduled in the order they are written to.
-    ///
-    /// Note that this only affects streams with the same priority. Higher priority streams always
-    /// take precedence over lower priority streams.
-    ///
-    /// Disabling fairness can reduce fragmentation and protocol overhead for workloads that use
-    /// many small streams.
-    pub fn send_fairness(&mut self, value: bool) -> &mut Self {
-        self.send_fairness = value;
+    /// Has no effect. Equal-priority send streams are always scheduled round-robin.
+    #[deprecated(
+        note = "Send fairness is now always enabled. Neither enabling nor disabling it has no effect."
+    )]
+    pub fn send_fairness(&mut self, _value: bool) -> &mut Self {
         self
     }
 
@@ -310,6 +302,8 @@ impl TransportConfig {
     /// The peer is forbidden to send single datagrams larger than this size. If the aggregate size
     /// of all datagrams that have been received from the peer but not consumed by the application
     /// exceeds this value, old datagrams are dropped until it is no longer exceeded.
+    ///
+    /// The amount of payload data buffered may be smaller than `value` due to overhead.
     pub fn datagram_receive_buffer_size(&mut self, value: Option<usize>) -> &mut Self {
         self.datagram_receive_buffer_size = value;
         self
@@ -321,6 +315,8 @@ impl TransportConfig {
     /// than the link, or even the underlying hardware, can transmit them. This limits the amount of
     /// memory that may be consumed in that case. When the send buffer is full and a new datagram is
     /// sent, older datagrams are dropped until sufficient space is available.
+    ///
+    /// The amount of payload data buffered may be smaller than `value` due to overhead.
     pub fn datagram_send_buffer_size(&mut self, value: usize) -> &mut Self {
         self.datagram_send_buffer_size = value;
         self
@@ -430,7 +426,7 @@ impl TransportConfig {
     /// existing paths.
     ///
     /// The idle timeout will only apply to paths of a multipath-negotiated connection. Before
-    /// multipath is negotiated, only the connection-wide max idle timeout is in effect.   
+    /// multipath is negotiated, only the connection-wide max idle timeout is in effect.
     ///
     /// [`Connection::set_path_max_idle_timeout`]: crate::Connection::set_path_max_idle_timeout
     pub fn default_path_max_idle_timeout(&mut self, timeout: Option<Duration>) -> &mut Self {
@@ -582,7 +578,6 @@ impl Default for TransportConfig {
             stream_receive_window: STREAM_RWND.into(),
             receive_window: VarInt::MAX,
             send_window: (8 * STREAM_RWND).into(),
-            send_fairness: true,
 
             packet_threshold: 3,
             time_threshold: 9.0 / 8.0,
@@ -636,7 +631,6 @@ impl fmt::Debug for TransportConfig {
             stream_receive_window,
             receive_window,
             send_window,
-            send_fairness,
             packet_threshold,
             time_threshold,
             initial_rtt,
@@ -675,7 +669,6 @@ impl fmt::Debug for TransportConfig {
             .field("stream_receive_window", stream_receive_window)
             .field("receive_window", receive_window)
             .field("send_window", send_window)
-            .field("send_fairness", send_fairness)
             .field("packet_threshold", packet_threshold)
             .field("time_threshold", time_threshold)
             .field("initial_rtt", initial_rtt)

@@ -29,6 +29,13 @@ jobs:
     if: "github.event_name != 'pull_request' || ! contains(github.event.pull_request.labels.*.name, 'flaky-test')"
     uses: "$/.github/workflows/tests.yaml"
 
+  min-crates:
+    name: Min Crates
+    uses: "n0-computer/workflows/.github/workflows/minimal-crates.yaml@v2"
+    with:
+      fips: true
+      crate-selection: "--workspace --exclude fuzz --all-features --lib --bins"
+
   test-aws-lc-rs:
     name: Test aws-lc-rs crypto backend
     if: "github.event_name != 'pull_request' || ! contains(github.event.pull_request.labels.*.name, 'flaky-test')"
@@ -60,7 +67,7 @@ jobs:
     name: Test posix_minimal (noq-udp)
     if: "github.event_name != 'pull_request' || ! contains(github.event.pull_request.labels.*.name, 'flaky-test')"
     timeout-minutes: 30
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     env:
       RUSTC_WRAPPER: "sccache"
       SCCACHE_GHA_ENABLED: "on"
@@ -147,7 +154,7 @@ jobs:
     name: Build & test wasm32
     if: "github.event_name != 'pull_request' || ! contains(github.event.pull_request.labels.*.name, 'flaky-test')"
     timeout-minutes: 30
-    runs-on: [self-hosted, linux, X64]
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     env:
       CC_wasm32_unknown_unknown: clang
       AR_wasm32_unknown_unknown: llvm-ar
@@ -170,6 +177,10 @@ jobs:
         with:
           node-version: 20
       - uses: bytecodealliance/actions/wasm-tools/setup@9152e710e9f7182e4c29ad218e4f335a7b203613 # v1.1.3
+        with:
+          # Pinned: with `latest` the action pages through the list-releases API,
+          # which intermittently returns an empty array and fails the job.
+          version: "1.262.0"
       - uses: cargo-bins/cargo-binstall@8110b3aa84cb581a90696bc57469b0656f972494 # v1.16.3
 
       - name: wasm32 test build (noq-proto)
@@ -199,7 +210,7 @@ jobs:
     name: Android Build Only
     if: "github.event_name != 'pull_request' || ! contains(github.event.pull_request.labels.*.name, 'flaky-test')"
     timeout-minutes: 30
-    runs-on: [self-hosted, linux, X64]
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     strategy:
       fail-fast: false
       matrix:
@@ -504,7 +515,7 @@ jobs:
       - run: codespell --ignore-words-list=ans,atmost,crate,ect,inout,keep-alives,ser,te,worl --skip=CHANGELOG.md,*.lock
 
   check_semver:
-    runs-on: [self-hosted, linux, X64]
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     env:
       RUSTC_WRAPPER: "sccache"
       SCCACHE_GHA_ENABLED: "on"
