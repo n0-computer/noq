@@ -1,4 +1,4 @@
-use alloc::{boxed::Box, vec::Vec};
+use alloc::boxed::Box;
 use core::{
     mem,
     ops::{Index, IndexMut},
@@ -13,10 +13,11 @@ use crate::packet::{Packet, PartialDecode};
 use crate::token::ResetToken;
 use rand::{CryptoRng, RngExt};
 
-use crate::{ConnectionId, Instant, Side};
+use crate::{ConnectionId, Instant, IntMap, Side};
 use crate::{RESET_TOKEN_SIZE, TransportError};
 
 use super::PathId;
+use super::paths::PathIdKey;
 use super::spaces::PacketSpace;
 
 /// Perform key updates this many packets before the AEAD confidentiality limit.
@@ -55,9 +56,8 @@ pub(super) struct PrevCrypto {
     /// For each path, the number of the first incoming packet using the newer keys.
     ///
     /// Incoming packets on a path should be decrypted using these keys iff the path has no entry
-    /// or their packet number is lower. Packet numbers are per path, so a single packet number
-    /// can't tell an older packet still in flight on one path from a further key update.
-    pub(super) end_packets: Vec<(PathId, u64)>,
+    /// or their packet number is lower.
+    end_packets: IntMap<PathIdKey, u64>,
     /// Whether the following key phase is from a remotely initiated update that we haven't acked
     pub(super) update_unacked: bool,
 }
@@ -66,16 +66,20 @@ impl PrevCrypto {
     /// Whether a packet on `path_id` was sent before the key update reached that path.
     fn precedes_update(&self, path_id: PathId, packet_number: u64) -> bool {
         self.end_packets
-            .iter()
-            .find(|(path, _)| *path == path_id)
-            .is_none_or(|(_, end)| packet_number < *end)
+            .get(&PathIdKey(path_id))
+            .is_none_or(|end| packet_number < *end)
     }
 
     /// Records the first incoming packet using the newer keys on `path_id`.
+    ///
+    /// Only the first call for a path has an effect, later calls are intentionally ignored
+    /// whatever their packet number. Any packet using the newer keys is numbered above every
+    /// packet the peer sent on this path with the previous keys and below any further key
+    /// update, so the first one seen is enough to tell the two apart.
     pub(super) fn record_end(&mut self, path_id: PathId, packet_number: u64) {
-        if !self.end_packets.iter().any(|(path, _)| *path == path_id) {
-            self.end_packets.push((path_id, packet_number));
-        }
+        self.end_packets
+            .entry(PathIdKey(path_id))
+            .or_insert(packet_number);
     }
 }
 
@@ -443,7 +447,7 @@ impl CryptoState {
             crypto: old,
             end_time: end_packet.map(|(_, _, time)| time),
             end_packets: end_packet
-                .map(|(path_id, packet_number, _)| (path_id, packet_number))
+                .map(|(path_id, packet_number, _)| (PathIdKey(path_id), packet_number))
                 .into_iter()
                 .collect(),
             update_unacked: remote,
