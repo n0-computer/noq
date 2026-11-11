@@ -1,8 +1,14 @@
-use identity_hash::{IdentityHashable, IntMap};
+#[cfg(test)]
+use alloc::vec::Vec;
+
+use identity_hash::IdentityHashable;
 
 use crate::{
-    Instant,
-    connection::qlog::{QlogSink, QlogSinkWithTime},
+    Instant, IntMap,
+    connection::{
+        paths::PathIdKey,
+        qlog::{QlogSink, QlogSinkWithTime},
+    },
 };
 
 use super::PathId;
@@ -83,18 +89,6 @@ impl PathTimer {
     ];
 }
 
-/// Newtype around [`PathId`] that implements [`IdentityHashable`].
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Default)]
-struct PathIdKey(PathId);
-
-impl IdentityHashable for PathIdKey {}
-
-impl std::hash::Hash for PathIdKey {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        state.write_u32(self.0.0);
-    }
-}
-
 /// Keeps track of the nearest timeout for each `Timer`
 ///
 /// The [`TimerTable`] is advanced with [`TimerTable::expire_before`].
@@ -125,7 +119,7 @@ impl<K, V, const SIZE: usize> Default for SmallMap<K, V, SIZE> {
 
 impl<K, V, const SIZE: usize> SmallMap<K, V, SIZE>
 where
-    K: Eq + std::hash::Hash + IdentityHashable,
+    K: Eq + core::hash::Hash + IdentityHashable,
 {
     fn insert(&mut self, key: K, value: V) -> Option<V> {
         // check stack for space
@@ -133,7 +127,7 @@ where
             match el {
                 Some((k, v)) => {
                     if *k == key {
-                        let old_value = std::mem::replace(v, value);
+                        let old_value = core::mem::replace(v, value);
                         return Some(old_value);
                     }
                 }
@@ -426,7 +420,8 @@ impl TimerTable {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use alloc::vec;
+    use core::time::Duration;
 
     use crate::connection::qlog::QlogSink;
 

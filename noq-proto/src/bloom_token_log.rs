@@ -1,16 +1,15 @@
-use std::{
-    collections::HashSet,
+use core::{
     f64::consts::LN_2,
     hash::{BuildHasher, Hasher},
     mem::{size_of, take},
-    sync::Mutex,
 };
+use std::sync::Mutex;
 
 use fastbloom::BloomFilter;
 use rustc_hash::FxBuildHasher;
 use tracing::{trace, warn};
 
-use crate::{Duration, SystemTime, TokenLog, TokenReuseError, UNIX_EPOCH};
+use crate::{Duration, HashSet, SystemTime, TokenLog, TokenReuseError, UNIX_EPOCH};
 
 /// Bloom filter-based [`TokenLog`]
 ///
@@ -254,6 +253,8 @@ const DEFAULT_EXPECTED_HITS: u64 = 1_000_000;
 
 #[cfg(test)]
 mod test {
+    use alloc::vec::Vec;
+
     use super::*;
     use rand::prelude::*;
     use rand_pcg::Pcg32;

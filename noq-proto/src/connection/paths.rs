@@ -1,6 +1,7 @@
-use std::{cmp, net::SocketAddr};
+use alloc::{boxed::Box, vec::Vec};
+use core::{cmp, net::SocketAddr};
 
-use identity_hash::IntMap;
+use identity_hash::IdentityHashable;
 use thiserror::Error;
 use tracing::{debug, trace};
 
@@ -11,7 +12,7 @@ use super::{
     spaces::{PacketNumberSpace, SentPacket},
 };
 use crate::{
-    ConnectionId, Duration, FourTuple, Instant, TIMER_GRANULARITY, TransportConfig,
+    ConnectionId, Duration, FourTuple, Instant, IntMap, TIMER_GRANULARITY, TransportConfig,
     TransportErrorCode, VarInt,
     coding::{self, Decodable, Encodable},
     congestion,
@@ -27,8 +28,8 @@ use qlog::events::quic::RecoveryMetricsUpdated;
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Default)]
 pub struct PathId(pub(crate) u32);
 
-impl std::hash::Hash for PathId {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+impl core::hash::Hash for PathId {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
         state.write_u32(self.0);
     }
 }
@@ -86,8 +87,8 @@ impl PathId {
     }
 }
 
-impl std::fmt::Display for PathId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for PathId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         self.0.fmt(f)
     }
 }
@@ -95,6 +96,20 @@ impl std::fmt::Display for PathId {
 impl<T: Into<u32>> From<T> for PathId {
     fn from(source: T) -> Self {
         Self(source.into())
+    }
+}
+
+/// An internal map key that uses identity hashing for [`PathId`].
+///
+/// Keeps [`IdentityHashable`] out of the public [`PathId`] API.
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Default)]
+pub(crate) struct PathIdKey(pub(crate) PathId);
+
+impl IdentityHashable for PathIdKey {}
+
+impl core::hash::Hash for PathIdKey {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        state.write_u32(self.0.0);
     }
 }
 
@@ -529,7 +544,7 @@ impl PathData {
                 // the path as validated though, because for a change in local_ip only we do
                 // not need to re-validate the path.
                 let sent_instant = info.sent_instant;
-                if !std::mem::replace(&mut self.validated, true) {
+                if !core::mem::replace(&mut self.validated, true) {
                     trace!("new path validated");
                 }
                 // Clear any other on-path sent challenges and stop sending new ones.
@@ -1011,7 +1026,7 @@ impl PathStatusState {
         }
 
         self.local_seq = self.local_seq.saturating_add(1u8);
-        Some(std::mem::replace(&mut self.local_status, status))
+        Some(core::mem::replace(&mut self.local_status, status))
     }
 
     pub(crate) fn seq(&self) -> VarInt {
@@ -1179,7 +1194,7 @@ impl PathRetransmits {
     }
 }
 
-impl std::ops::BitOrAssign for PathRetransmits {
+impl core::ops::BitOrAssign for PathRetransmits {
     fn bitor_assign(&mut self, rhs: Self) {
         let Self { observed_address } = rhs;
         self.observed_address |= observed_address;

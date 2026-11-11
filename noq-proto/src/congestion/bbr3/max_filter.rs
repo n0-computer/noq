@@ -1,4 +1,4 @@
-use std::fmt::Debug;
+use core::fmt::Debug;
 
 const MAX_FILTER_LEN: usize = 3;
 

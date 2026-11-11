@@ -1,4 +1,4 @@
-use std::hash::Hasher;
+use core::hash::Hasher;
 
 use rand::Rng;
 use rand::RngExt;

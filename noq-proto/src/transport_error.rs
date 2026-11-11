@@ -1,4 +1,5 @@
-use std::{fmt, sync::Arc};
+use alloc::{string::String, sync::Arc};
+use core::fmt;
 
 use bytes::{Buf, BufMut};
 
@@ -23,7 +24,7 @@ pub struct Error {
     /// Human-readable explanation of the reason
     pub reason: String,
     /// An underlying crypto (e.g. TLS) layer error
-    pub crypto: Option<Arc<dyn std::error::Error + Send + Sync>>,
+    pub crypto: Option<Arc<dyn core::error::Error + Send + Sync>>,
 }
 
 impl Error {
@@ -59,7 +60,7 @@ impl fmt::Display for Error {
     }
 }
 
-impl std::error::Error for Error {}
+impl core::error::Error for Error {}
 
 /// Transport-level error code
 #[derive(Copy, Clone, Eq, PartialEq)]

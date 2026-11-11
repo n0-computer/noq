@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   tests:
-    uses: './.github/workflows/tests.yaml'
+    uses: '$/.github/workflows/tests.yaml'
     with:
       rust-version: beta
 

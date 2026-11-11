@@ -1,13 +1,11 @@
-use std::{
+use alloc::{boxed::Box, format, sync::Arc, vec, vec::Vec};
+use core::{
     any::Any,
     convert::TryInto,
     mem,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     num::NonZeroUsize,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use assert_matches::assert_matches;
@@ -28,18 +26,19 @@ use tracing::info;
 
 use crate::{
     AckFrequencyConfig, ApplicationClose, ClientConfig, Connection, ConnectionClose,
-    ConnectionError, ConnectionEvent, ConnectionHandle, DEFAULT_SUPPORTED_VERSIONS, Datagram,
-    DatagramEvent, Dir, Duration, EcnCodepoint, Endpoint, EndpointConfig, Event, FinishError,
-    FourTuple, HashedConnectionIdGenerator, Instant, MIN_INITIAL_SIZE, PathEvent, PathId,
-    PathStatus, ReadError, ReadableError, RecvStream, SendDatagramError, ServerConfig,
+    ConnectionError, ConnectionEvent, ConnectionHandle, ConnectionId, DEFAULT_SUPPORTED_VERSIONS,
+    Datagram, DatagramEvent, Dir, Duration, EcnCodepoint, Endpoint, EndpointConfig, Event,
+    FinishError, FourTuple, HashedConnectionIdGenerator, INITIAL_MTU, Instant, MIN_INITIAL_SIZE,
+    PathEvent, PathId, PathStatus, ReadError, ReadableError, RecvStream, SendDatagramError,
+    ServerConfig,
     Side::*,
-    StreamEvent, Transmit, TransportConfig, TransportErrorCode, VarInt, WriteError,
+    StreamEvent, Transmit, TransportConfig, TransportError, TransportErrorCode, VarInt, WriteError,
     cid_generator::{ConnectionIdGenerator, RandomConnectionIdGenerator},
     coding::{Decodable, Encodable},
     congestion::{Controller, ControllerFactory, ControllerMetrics},
     crypto::rustls::{QuicServerConfig, configured_provider},
     frame::{self, Frame, FrameStruct},
-    packet::{FixedLengthConnectionIdParser, PartialDecode},
+    packet::{FixedLengthConnectionIdParser, Header, InitialHeader, PacketNumber, PartialDecode},
     shared::{ConnectionEventInner, DatagramConnectionEvent},
     tests::util::{BwLimitConfig, BwLimitedRouting},
     transport_parameters::TransportParameters,
@@ -172,6 +171,77 @@ fn lifecycle() {
     assert_eq!(pair.client.known_cids(), 0);
     assert_eq!(pair.server.known_connections(), 0);
     assert_eq!(pair.server.known_cids(), 0);
+}
+
+#[test]
+fn stats_include_congestion_controller_bandwidth_estimate() {
+    const WINDOW: u64 = 12_000;
+    const BANDWIDTH_ESTIMATE: u64 = 4_000_000;
+
+    #[derive(Debug, Clone)]
+    struct TestController;
+
+    impl Controller for TestController {
+        fn on_congestion_event(
+            &mut self,
+            _now: Instant,
+            _sent: Instant,
+            _is_persistent_congestion: bool,
+            _is_ecn: bool,
+            _lost_bytes: u64,
+            _largest_lost_pn: u64,
+        ) {
+        }
+
+        fn on_mtu_update(&mut self, _new_mtu: u16) {}
+
+        fn window(&self) -> u64 {
+            WINDOW
+        }
+
+        fn metrics(&self) -> ControllerMetrics {
+            ControllerMetrics {
+                congestion_window: WINDOW,
+                bandwidth_estimate: Some(BANDWIDTH_ESTIMATE),
+                ..Default::default()
+            }
+        }
+
+        fn clone_box(&self) -> Box<dyn Controller> {
+            Box::new(self.clone())
+        }
+
+        fn initial_window(&self) -> u64 {
+            WINDOW
+        }
+
+        fn into_any(self: Box<Self>) -> Box<dyn Any> {
+            self
+        }
+    }
+
+    struct TestControllerFactory;
+
+    impl ControllerFactory for TestControllerFactory {
+        fn build(self: Arc<Self>, _now: Instant, _current_mtu: u16) -> Box<dyn Controller> {
+            Box::new(TestController)
+        }
+    }
+
+    let mut transport = TransportConfig::default();
+    transport.congestion_controller_factory(Arc::new(TestControllerFactory));
+    let mut config = client_config();
+    config.transport_config(Arc::new(transport));
+
+    let mut pair = Pair::default();
+    let (client_ch, _) = pair.connect_with(config);
+    let stats = pair
+        .client_conn_mut(client_ch)
+        .path_stats(PathId::ZERO)
+        .unwrap();
+
+    assert_eq!(stats.cwnd, WINDOW);
+    assert_eq!(stats.bandwidth_estimate, Some(BANDWIDTH_ESTIMATE));
 }
 
 #[test]
@@ -618,6 +688,34 @@ fn congestion() {
     pair.drive();
     assert!(pair.client_conn_mut(client_ch).congestion_window() >= TARGET);
     pair.client_send(client_ch, s).write(&[42; 1024]).unwrap();
+}
+
+#[test]
+fn full_initial_window() {
+    let _guard = subscribe();
+
+    // Keep `current_mtu` pinned to `INITIAL_MTU`, which the default initial window of 12000 bytes
+    // is an exact multiple of, so that the window can be filled precisely.
+    let mut pair = ConnPair::builder().disable_mtud_discovery().connect();
+    assert_eq!(pair.conn(Client).bytes_in_flight(), 0);
+    let window = pair.conn(Client).congestion_window();
+    let mtu = u64::from(INITIAL_MTU);
+    assert_eq!(window % mtu, 0, "window must be exactly fillable");
+
+    let s = pair.streams(Client).open(Dir::Uni).unwrap();
+    let data = vec![42; 2 * window as usize];
+    assert_eq!(
+        pair.send_stream(Client, s).write(&data),
+        Ok(data.len()),
+        "the test must be limited by congestion control, not by flow control"
+    );
+
+    let span = tracing::info_span!("client");
+    let _guard = span.enter();
+    let now = pair.time;
+    pair.client.drive(now);
+    assert_eq!(pair.conn(Client).bytes_in_flight(), window);
+    assert_eq!(pair.client.outbound.len() as u64, window / mtu);
 }
 
 #[test]
@@ -1196,6 +1294,25 @@ fn streams_blocked_not_sent_under_limit() {
     );
 }
 
+/// A built pair holds a connection's initial keys unless the test says otherwise
+///
+/// Production starts a connection with a short key phase (10..1000 packets) so that peers which
+/// mishandle key updates fail early. That puts the first autonomous update at an unpredictable
+/// point, so `ConnPairBuilder` pins it out of reach; see `ConnPairBuilder::with_key_update`.
+#[test]
+fn connpair_initial_key_phase_is_pinned() {
+    let pair = ConnPair::builder().connect();
+    assert_eq!(pair.conn(Client).key_phase_size(), u64::MAX);
+    assert_eq!(pair.conn(Server).key_phase_size(), u64::MAX);
+
+    let pair = ConnPair::builder().with_key_update().connect();
+    let size = pair.conn(Client).key_phase_size();
+    assert!(
+        (10..1000).contains(&size),
+        "opted into key updates, expected a short initial phase, got {size}"
+    );
+}
+
 #[test]
 fn key_update_simple() {
     let _guard = subscribe();
@@ -1632,6 +1749,52 @@ fn close_from_migrated_address() {
 
     let path = pair.conn(Server).network_path(PathId::ZERO).unwrap();
     assert_eq!(path.remote(), client_addr);
+}
+
+/// A connection closed while its congestion window is saturated must still deliver
+/// CONNECTION_CLOSE to the peer promptly, rather than leaving the peer to discover the close via
+/// its idle timeout (see <https://github.com/quinn-rs/quinn/issues/2785>).
+#[test]
+fn connection_close_while_congestion_blocked() {
+    let _guard = subscribe();
+    let mut pair = ConnPair::default();
+
+    // Saturate the congestion window with unacknowledged stream data by transmitting from the
+    // client without driving the server, so no ACKs come back and in-flight bytes stay pinned at
+    // the window
+    let s = pair.streams(Client).open(Dir::Uni).unwrap();
+    pair.send_stream(Client, s)
+        .write(&[42; 1024 * 1024])
+        .unwrap();
+    pair.drive_client();
+
+    // Close while the window is full and stream data is still pending
+    const REASON: &[u8] = b"whee";
+    let close_time = pair.time;
+    pair.close(Client, 42, REASON);
+
+    // Step the simulation by hand so we can catch the exact moment the server hears about the
+    // close: check for the event after each packet exchange, before the clock jumps ahead
+    let mut result = None;
+    loop {
+        pair.drive_client();
+        pair.drive_server();
+        while let Some(event) = pair.poll(Server) {
+            if let Event::ConnectionLost { reason } = event {
+                result = Some((reason, pair.time));
+            }
+        }
+        if result.is_some() || !pair.step() {
+            break;
+        }
+    }
+    let (reason, delivered_at) = result.expect("server never learned of the close");
+    assert_matches!(reason, ConnectionError::ApplicationClosed(
+        ApplicationClose { error_code: VarInt(42), ref reason }
+    ) if reason == REASON);
+    // Close packets aren't congestion controlled and the test link has no latency, so the close
+    // should arrive the moment it was issued — any delay means a timer had to rescue it
+    assert_eq!(delivered_at, close_time);
 }
 
 #[test]
@@ -2346,11 +2509,188 @@ fn datagram_send_recv() {
 }
 
 #[test]
+fn datagram_batch_send_recv_many() {
+    let _guard = subscribe();
+    let mut pair = Pair::default();
+    let (client_ch, server_ch) = pair.connect();
+    assert_matches!(pair.server_conn_mut(server_ch).poll(), None);
+    assert_matches!(pair.client_datagrams(client_ch).max_size(), Some(x) if x > 0);
+
+    // Send a batch of 5 datagrams in one call.
+    const N: usize = 5;
+    let batch: Vec<Bytes> = (0..N).map(|i| Bytes::from(format!("pkt-{i}"))).collect();
+    let queued = pair
+        .client_datagrams(client_ch)
+        .send_many(&batch, true)
+        .unwrap();
+    assert_eq!(queued, N);
+
+    pair.drive();
+    assert_matches!(
+        pair.server_conn_mut(server_ch).poll(),
+        Some(Event::DatagramReceived)
+    );
+
+    // Drain with an `out` smaller than the number buffered: only `out.len()` are
+    // taken, the rest stay queued for the next call.
+    let mut out = vec![Bytes::new(); 3];
+    let got = pair.server_datagrams(server_ch).recv_many(&mut out);
+    assert_eq!(got, 3);
+    for (i, d) in out.iter().enumerate() {
+        assert_eq!(d.as_ref(), format!("pkt-{i}").as_bytes());
+    }
+    // The second call yields the remaining 2 in order; the extra slot is untouched.
+    let mut out = vec![Bytes::new(); 3];
+    let got = pair.server_datagrams(server_ch).recv_many(&mut out);
+    assert_eq!(got, 2);
+    assert_eq!(out[0].as_ref(), b"pkt-3");
+    assert_eq!(out[1].as_ref(), b"pkt-4");
+    assert!(out[2].is_empty());
+    // Buffer is now empty.
+    let mut more = vec![Bytes::new(); 1];
+    assert_eq!(pair.server_datagrams(server_ch).recv_many(&mut more), 0);
+    assert!(more[0].is_empty());
+}
+
+/// `send_many` rejects the whole batch if any datagram is too large, queueing
+/// nothing, so a size error is never a partial send.
+#[test]
+fn datagram_batch_send_rejects_oversized() {
+    let _guard = subscribe();
+    let mut pair = Pair::default();
+    let (client_ch, server_ch) = pair.connect();
+    let max = pair.client_datagrams(client_ch).max_size().unwrap();
+
+    let oversized = Bytes::from(vec![0u8; max + 1]);
+    let ok1 = Bytes::from_static(b"ok1");
+    let ok2 = Bytes::from_static(b"ok2");
+    let batch = [ok1, oversized, ok2];
+
+    assert_matches!(
+        pair.client_datagrams(client_ch).send_many(&batch, true),
+        Err(SendDatagramError::TooLarge)
+    );
+
+    // Nothing was queued: the server sees no datagrams.
+    pair.drive();
+    assert_matches!(pair.server_conn_mut(server_ch).poll(), None);
+    let mut out = vec![Bytes::new(); 3];
+    assert_eq!(pair.server_datagrams(server_ch).recv_many(&mut out), 0);
+}
+
+/// `send_many` with `drop = false` queues datagrams until the send buffer is
+/// full, then stops and returns the number queued, leaving the rest for the
+/// caller to retry.
+#[test]
+fn datagram_batch_send_no_drop_stops_when_full() {
+    let _guard = subscribe();
+
+    const WINDOW: usize = 100;
+    let client_cfg = ClientConfig {
+        transport: Arc::new(TransportConfig {
+            datagram_send_buffer_size: WINDOW,
+            ..TransportConfig::default()
+        }),
+        ..client_config()
+    };
+    let mut pair = Pair::default();
+    let (client_ch, server_ch) = pair.connect_with(client_cfg);
+    assert_matches!(pair.server_conn_mut(server_ch).poll(), None);
+
+    // Each datagram is just over half the budget, so only the first fits before
+    // the buffer is full.
+    let a = Bytes::from(vec![0xA0; WINDOW / 2 + 1]);
+    let b = Bytes::from(vec![0xB0; WINDOW / 2 + 1]);
+    let queued = pair
+        .client_datagrams(client_ch)
+        .send_many(&[a.clone(), b.clone()], false)
+        .unwrap();
+    assert_eq!(queued, 1);
+
+    pair.drive();
+    assert_matches!(
+        pair.server_conn_mut(server_ch).poll(),
+        Some(Event::DatagramReceived)
+    );
+    assert_eq!(pair.server_datagrams(server_ch).recv().unwrap(), a);
+    assert_matches!(pair.server_datagrams(server_ch).recv(), None);
+}
+
+/// `send_many` with `drop = true` applies drop-oldest backpressure like repeated
+/// `send(data, true)` calls, so the newest datagrams survive.
+#[test]
+fn datagram_batch_send_drop_oldest() {
+    let _guard = subscribe();
+
+    const WINDOW: usize = 100;
+    let client_cfg = ClientConfig {
+        transport: Arc::new(TransportConfig {
+            datagram_send_buffer_size: WINDOW,
+            ..TransportConfig::default()
+        }),
+        ..client_config()
+    };
+    let mut pair = Pair::default();
+    let (client_ch, server_ch) = pair.connect_with(client_cfg);
+    assert_matches!(pair.server_conn_mut(server_ch).poll(), None);
+    let max = pair.client_datagrams(client_ch).max_size().unwrap();
+    assert!(max > WINDOW, "MTU must exceed the test budget");
+
+    // Three datagrams, each just over half `WINDOW`, so no two fit at once. Room is
+    // made for each datagram before it is pushed, so A is displaced by B and B by C,
+    // leaving only the newest queued, exactly as send(data, true) thrice.
+    let a = Bytes::from(vec![0xA0; WINDOW / 2 + 1]);
+    let b = Bytes::from(vec![0xB0; WINDOW / 2 + 1]);
+    let c = Bytes::from(vec![0xC0; WINDOW / 2 + 1]);
+    let queued = pair
+        .client_datagrams(client_ch)
+        .send_many(&[a.clone(), b.clone(), c.clone()], true)
+        .unwrap();
+    assert_eq!(queued, 3);
+    pair.drive();
+    assert_matches!(
+        pair.server_conn_mut(server_ch).poll(),
+        Some(Event::DatagramReceived)
+    );
+    let mut out = vec![Bytes::new(); 3];
+    let got = pair.server_datagrams(server_ch).recv_many(&mut out);
+    assert_eq!(got, 1);
+    assert_eq!(out[0], c);
+
+    // Batched and single sends reject datagrams larger than the send buffer.
+    let big = Bytes::from(vec![0xD0; WINDOW + 10]);
+    assert!(big.len() < max);
+    assert_matches!(
+        pair.client_datagrams(client_ch)
+            .send_many(core::slice::from_ref(&big), true),
+        Err(SendDatagramError::TooLarge)
+    );
+}
+
+#[test]
+fn datagram_batch_send_empty_is_ok() {
+    let _guard = subscribe();
+    let mut pair = Pair::default();
+    let (client_ch, server_ch) = pair.connect();
+    assert_matches!(pair.server_conn_mut(server_ch).poll(), None);
+
+    // An empty batch is a no-op, not an error.
+    let queued = pair
+        .client_datagrams(client_ch)
+        .send_many(&[], true)
+        .unwrap();
+    assert_eq!(queued, 0);
+}
+
+#[test]
 fn datagram_recv_buffer_overflow() {
     let _guard = subscribe();
-    const WINDOW: usize = 100;
+    const PAYLOAD_WINDOW: usize = 100;
+    const METADATA_WINDOW: usize = 2 * size_of::<Datagram>();
+    const WINDOW: usize = PAYLOAD_WINDOW + METADATA_WINDOW;
     let server = ServerConfig {
         transport: Arc::new(TransportConfig {
+            // Account for exactly two datagrams of metadata space
             datagram_receive_buffer_size: Some(WINDOW),
             ..TransportConfig::default()
         }),
@@ -2364,9 +2704,9 @@ fn datagram_recv_buffer_overflow() {
         Some(WINDOW - Datagram::SIZE_BOUND)
     );
 
-    const DATA1: &[u8] = &[0xAB; (WINDOW / 3) + 1];
-    const DATA2: &[u8] = &[0xBC; (WINDOW / 3) + 1];
-    const DATA3: &[u8] = &[0xCD; (WINDOW / 3) + 1];
+    const DATA1: &[u8] = &[0xAB; (PAYLOAD_WINDOW / 3) + 1];
+    const DATA2: &[u8] = &[0xBC; (PAYLOAD_WINDOW / 3) + 1];
+    const DATA3: &[u8] = &[0xCD; (PAYLOAD_WINDOW / 3) + 1];
     pair.client_datagrams(client_ch)
         .send(DATA1.into(), true)
         .unwrap();
@@ -4302,7 +4642,7 @@ fn oversized_datagrams_trigger_unblock() {
 
     assert_eq!(
         pair.client_datagrams(client_ch).send_buffer_space(),
-        send_buffer_size,
+        send_buffer_size - size_of::<Datagram>(),
         "expected the send buffer to be empty after too large datagrams were dropped",
     );
     match pair.client_conn_mut(client_ch).poll() {
@@ -4432,6 +4772,93 @@ fn handshake_confirmation_no_resumption_shortcut() {
     assert_matches!(pair.client_conn_mut(ch).poll(), None);
 }
 
+/// A CONNECTION_CLOSE frame of type 0x1d must be rejected in an Initial packet.
+///
+/// RFC 9000 §12.4 Table 3 lists CONNECTION_CLOSE with the packet-type marker `ih01`, defined as
+/// "Only a CONNECTION_CLOSE frame of type 0x1c can appear in Initial or Handshake packets", and
+/// §12.4 requires that "An endpoint MUST treat receipt of a frame in a packet type that is not
+/// permitted as a connection error of type PROTOCOL_VIOLATION". §12.5 repeats the rule:
+/// "CONNECTION_CLOSE frames signaling application errors (type 0x1d) MUST only appear in the
+/// application data packet number space."
+#[test]
+fn application_close_in_initial_is_rejected() {
+    let _guard = subscribe();
+    let server_addr = SocketAddr::new(Ipv6Addr::LOCALHOST.into(), 4433);
+    let mut client = Endpoint::new(Arc::new(EndpointConfig::default()), None, true);
+    let now = Instant::now();
+    let (_, mut conn) = client
+        .connect(now, client_config(), server_addr, "localhost")
+        .unwrap();
+
+    // Grab the client's Initial packet so we can learn the connection IDs and version it chose.
+    let mut buf = Vec::new();
+    let transmit = conn
+        .poll_transmit(now, NonZeroUsize::MIN, &mut buf)
+        .expect("client should send an Initial packet");
+    let initial = &buf[..transmit.size];
+    // Long header: flags(1) version(4) dcid_len(1) dcid scid_len(1) scid ...
+    let version = u32::from_be_bytes(initial[1..5].try_into().unwrap());
+    let dcid_len = initial[5] as usize;
+    let orig_dst_cid = ConnectionId::new(&initial[6..6 + dcid_len]);
+    let scid_len = initial[6 + dcid_len] as usize;
+    let client_cid = ConnectionId::new(&initial[7 + dcid_len..7 + dcid_len + scid_len]);
+
+    // Forge a server Initial packet whose payload is a single APPLICATION_CLOSE (0x1d) frame.
+    // Initial packets are protected with keys derived from the client's original destination
+    // connection ID, which travels in the clear, so anyone who observes the handshake can do this.
+    let keys = server_config()
+        .crypto
+        .initial_keys(version, orig_dst_cid)
+        .unwrap();
+    let number = PacketNumber::U8(0);
+    let header = Header::Initial(InitialHeader {
+        dst_cid: client_cid,
+        src_cid: ConnectionId::new(&[]),
+        token: Bytes::new(),
+        number,
+        version,
+    });
+    let mut packet = Vec::new();
+    let partial = header.encode(&mut packet);
+    let header_len = packet.len();
+    // APPLICATION_CLOSE: type 0x1d, Error Code (varint) = 42, Reason Phrase Length (varint) = 0
+    packet.extend_from_slice(&[0x1d, 0x2a, 0x00]);
+    // PADDING, so that the packet is long enough for header protection sampling
+    packet.resize(header_len + 16, 0);
+    // Room for the AEAD tag
+    packet.resize(packet.len() + keys.packet.local.tag_len(), 0);
+    partial.finish(
+        &mut packet,
+        keys.header.local.as_ref(),
+        Some((0, PathId::ZERO, keys.packet.local.as_ref())),
+    );
+
+    let event = client.handle(
+        now,
+        FourTuple {
+            remote: server_addr,
+            local_ip: None,
+        },
+        None,
+        BytesMut::from(&packet[..]),
+        &mut buf,
+    );
+    let Some(DatagramEvent::ConnectionEvent(_, event)) = event else {
+        panic!("forged Initial packet was not routed to the connection");
+    };
+    conn.handle_event(event);
+
+    assert_matches!(
+        conn.poll(),
+        Some(Event::ConnectionLost {
+            reason: ConnectionError::TransportError(TransportError {
+                code: TransportErrorCode::PROTOCOL_VIOLATION,
+                ..
+            })
+        })
+    );
+}
+
 /// A controller whose window is effectively unbounded but which always reports a low pacing
 /// rate, so the only thing that can ever block a send is the pacer. Counts how many times the
 /// connection reports the spec's `C.is_cwnd_limited` signal.
@@ -4470,6 +4897,7 @@ impl Controller for PacingOnlyController {
             // continuously.
             pacing_rate: Some(125_000),
             send_quantum: Some(2 * 1200),
+            bandwidth_estimate: None,
         }
     }
 
@@ -4563,6 +4991,7 @@ impl Controller for FixedQuantumController {
             // 1 GB/s: high enough that the pacer never delays within a single batch.
             pacing_rate: Some(1_000_000_000),
             send_quantum: Some(self.send_quantum),
+            bandwidth_estimate: None,
         }
     }
 
@@ -4936,4 +5365,209 @@ fn regression_initial_coalescing_large_cid() {
     // in time a bit:
     pair.time += Duration::from_secs(5);
     pair.drive_client(); // this used to try to build a packet without enough datagram space
+}
+
+/// A CONNECTION_CLOSE written while more than one packet number space still has keys hands
+/// its datagram to the next space to coalesce into, without checking that what is left of
+/// the datagram can hold another packet.
+///
+/// A client pads its Initial CONNECTION_CLOSE packet to `MIN_INITIAL_SIZE`. With an
+/// `initial_mtu` above `MIN_INITIAL_SIZE` that leaves a tail smaller than a packet, and the
+/// Handshake space used to write into that tail: a failed `MIN_PACKET_SPACE` debug assertion
+/// in the debug profile, a packet written past the end of the datagram in the release
+/// profile.
+///
+/// The tail has to stay below `MIN_PACKET_SPACE`, above that it holds a whole packet and
+/// coalescing into it is fine. `min_mtu` at `MIN_INITIAL_SIZE` and an `initial_mtu` of 1250
+/// leave 50 bytes.
+#[test]
+fn close_during_handshake_does_not_coalesce_into_a_too_small_datagram_tail() {
+    let _guard = subscribe();
+
+    const MIN_MTU: u16 = MIN_INITIAL_SIZE;
+    const MTU: u16 = 1250;
+
+    let mut transport = TransportConfig::default();
+    transport.min_mtu(MIN_MTU);
+    transport.initial_mtu(MTU);
+    transport.mtu_discovery_config(None);
+    let transport = Arc::new(transport);
+
+    let mut server_cfg = server_config();
+    server_cfg.transport = transport.clone();
+    let mut pair = Pair::new(Default::default(), server_cfg);
+
+    let mut client_cfg = client_config();
+    client_cfg.transport = transport;
+
+    // The client's Initial goes out and the server's flight comes back, but the client only
+    // *receives* it: it now has Handshake keys while still holding its Initial keys, because
+    // a client discards those when it sends its first Handshake packet, which it has not
+    // done yet.
+    let client_ch = pair.begin_connect(client_cfg);
+    pair.drive_client();
+    pair.drive_server();
+
+    let now = pair.time;
+    pair.client.drive_incoming(now);
+    let events: Vec<_> = pair
+        .client
+        .conn_events
+        .remove(&client_ch)
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+    let conn = pair.client.connections.get_mut(&client_ch).unwrap();
+    for event in events {
+        conn.handle_event(event);
+    }
+    conn.close(now, VarInt::from_u32(42), Bytes::from_static(b"bye"));
+
+    let mut buf = Vec::new();
+    let transmit = conn
+        .poll_transmit(now, NonZeroUsize::new(10).expect("known"), &mut buf)
+        .expect("a CONNECTION_CLOSE is sent");
+
+    // The Initial CONNECTION_CLOSE packet fills its datagram to MIN_INITIAL_SIZE, and the
+    // 50 byte tail that leaves in a MTU sized datagram is not handed on: the Handshake and
+    // Data CONNECTION_CLOSE packets go into a datagram of their own.
+    let segment_size = transmit
+        .segment_size
+        .expect("more than one datagram was written");
+    assert_eq!(
+        segment_size,
+        usize::from(MIN_INITIAL_SIZE),
+        "the datagram carrying the Initial CONNECTION_CLOSE ends at MIN_INITIAL_SIZE"
+    );
+    assert!(
+        transmit.size > segment_size,
+        "expected a CONNECTION_CLOSE in a further space, got {} bytes",
+        transmit.size
+    );
+}
+
+/// Snapshot test to prevent accidentally skipping code-paths related to `sent_packets` stats.
+#[test]
+fn sent_packets_stats_snapshot_test() {
+    let _guard = subscribe();
+    let mut pair = Pair::default();
+    let (client_ch, server_ch) = pair.connect();
+    pair.drive();
+
+    let client_stats = pair.client_conn_mut(client_ch).stats();
+    let server_stats = pair.server_conn_mut(server_ch).stats();
+    assert_eq!(client_stats.sent_packets, 13);
+    assert_eq!(server_stats.sent_packets, 10);
+
+    let s = pair.client_streams(client_ch).open(Dir::Uni).unwrap();
+    const MSG: &[u8] = b"Hello, World!";
+    pair.client_send(client_ch, s).write(MSG).unwrap();
+    pair.drive();
+
+    let client_stats2 = pair.client_conn_mut(client_ch).stats();
+    let server_stats2 = pair.server_conn_mut(server_ch).stats();
+    assert_eq!(client_stats2.sent_packets, 14);
+    assert_eq!(server_stats2.sent_packets, 11);
+}
+
+#[cfg(feature = "qlog")]
+#[test]
+fn qlog_packet_lost_trigger() {
+    use std::{
+        io::{self, Write},
+        sync::Mutex,
+    };
+
+    use qlog::{
+        events::{EventData, quic::PacketLostTrigger},
+        reader::{Event as QlogEvent, QlogSeqReader},
+    };
+
+    use crate::{ConnectionId, QlogConfig, QlogFactory, Side};
+
+    /// Captures the qlog trace of every connection into one buffer
+    #[derive(Clone, Default)]
+    struct SharedBuffer(Arc<Mutex<Vec<u8>>>);
+
+    impl QlogFactory for SharedBuffer {
+        fn for_connection(
+            &self,
+            _side: Side,
+            _remote: SocketAddr,
+            _initial_dst_cid: ConnectionId,
+            _now: Instant,
+        ) -> Option<QlogConfig> {
+            Some(QlogConfig::new(Box::new(self.clone())))
+        }
+    }
+
+    impl Write for SharedBuffer {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let _guard = subscribe();
+    let qlog = SharedBuffer::default();
+    let mut transport = TransportConfig::default();
+    transport
+        .deterministic_packet_numbers(true)
+        .qlog_factory(Arc::new(qlog.clone()));
+    let mut config = client_config();
+    config.transport_config(Arc::new(transport));
+    let mut pair = Pair::default();
+    let (client_ch, _) = pair.connect_with(config);
+    pair.drive();
+
+    // Drop a packet, then deliver fewer later packets than the packet threshold, so that only the
+    // time threshold can declare it lost
+    pair.client_conn_mut(client_ch).ping();
+    pair.client.drive(pair.time);
+    assert_eq!(pair.client.outbound.len(), 1);
+    pair.client.outbound.clear();
+    pair.client_conn_mut(client_ch).ping();
+    pair.drive();
+
+    // Drop a packet, then deliver as many later packets as the packet threshold without advancing
+    // time, so that only the packet threshold can declare it lost
+    pair.client_conn_mut(client_ch).ping();
+    pair.client.drive(pair.time);
+    assert_eq!(pair.client.outbound.len(), 1);
+    pair.client.outbound.clear();
+    for _ in 0..3 {
+        pair.client_conn_mut(client_ch).ping();
+        pair.client.drive(pair.time);
+    }
+    assert_eq!(pair.client.outbound.len(), 3);
+    pair.drive();
+
+    assert_eq!(
+        pair.client_conn_mut(client_ch)
+            .path_stats(PathId::ZERO)
+            .unwrap()
+            .lost_packets,
+        2
+    );
+    let triggers = QlogSeqReader::new(Box::new(&qlog.0.lock().unwrap()[..]))
+        .unwrap()
+        .filter_map(|event| match event {
+            QlogEvent::Qlog(event) => match event.data {
+                EventData::QuicPacketLost(lost) => lost.trigger,
+                _ => None,
+            },
+            QlogEvent::Json(_) => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        triggers,
+        [
+            PacketLostTrigger::TimeThreshold,
+            PacketLostTrigger::ReorderingThreshold
+        ]
+    );
 }

@@ -1,4 +1,4 @@
-//! Low-level protocol logic for the QUIC protoocol
+//! Low-level protocol logic for the QUIC protocol.
 //!
 //! noq-proto contains a fully deterministic implementation of QUIC protocol logic. It contains
 //! no networking code and does not get any relevant timestamps from the operating system. Most
@@ -17,8 +17,19 @@
 #![allow(clippy::too_many_arguments)]
 #![warn(unreachable_pub)]
 #![warn(clippy::use_self)]
+// The crate does not (yet) support no_std, this setup however allows us to work
+// with the `core::prelude` while still linking alloc and std. This forces all
+// non-core imports to be explicit rather than rely on the std prelude.
+#![no_std]
+#![warn(
+    clippy::alloc_instead_of_core,
+    clippy::std_instead_of_alloc,
+    clippy::std_instead_of_core
+)]
+extern crate alloc;
+extern crate std;
 
-use std::{
+use core::{
     fmt,
     net::{IpAddr, SocketAddr},
     ops,
@@ -33,6 +44,7 @@ mod tests;
 pub mod transport_parameters;
 mod varint;
 
+use identity_hash::IdentityHashable;
 pub use varint::{VarInt, VarIntBoundsExceeded};
 
 #[cfg(feature = "bloom")]
@@ -46,7 +58,7 @@ pub use crate::connection::{
     ConnectionStats, Datagrams, Event, FinishError, FrameStats, MultipathNotNegotiated,
     NetworkChangeHint, PathAbandonReason, PathError, PathEvent, PathId, PathStats, PathStatus,
     ReadError, ReadableError, RecvStream, RttEstimator, SendDatagramError, SendStream,
-    SetPathStatusError, ShouldTransmit, StreamEvent, Streams, UdpStats, WriteError,
+    SetPathStatusError, ShouldTransmit, StreamAffinity, StreamEvent, Streams, UdpStats, WriteError,
 };
 #[cfg(test)]
 use test_strategy::Arbitrary;
@@ -111,10 +123,31 @@ pub use token_memory_cache::TokenMemoryCache;
 pub mod n0_nat_traversal;
 
 // Deal with time
+pub(crate) use core::time::Duration;
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-pub(crate) use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+pub(crate) use std::time::{Instant, SystemTime, UNIX_EPOCH};
 #[cfg(all(target_family = "wasm", target_os = "unknown"))]
-pub(crate) use web_time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+pub(crate) use web_time::{Instant, SystemTime, UNIX_EPOCH};
+
+// Deal with hash maps
+#[expect(clippy::disallowed_types)]
+pub(crate) type HashMap<K, V, S = std::hash::RandomState> = std::collections::HashMap<K, V, S>;
+#[cfg(any(test, feature = "bloom"))]
+#[expect(clippy::disallowed_types)]
+pub(crate) type HashSet<T, S = std::hash::RandomState> = std::collections::HashSet<T, S>;
+#[expect(clippy::disallowed_types)]
+pub(crate) type FxHashMap<K, V> = rustc_hash::FxHashMap<K, V>;
+#[expect(clippy::disallowed_types)]
+pub(crate) type FxHashSet<T> = rustc_hash::FxHashSet<T>;
+#[expect(clippy::disallowed_types)]
+pub(crate) type IntMap<K, V> = identity_hash::IntMap<K, V>;
+pub(crate) mod hash_map {
+    #[expect(clippy::disallowed_types)]
+    pub(crate) type Entry<'a, K, V> = std::collections::hash_map::Entry<'a, K, V>;
+
+    #[expect(clippy::disallowed_types)]
+    pub(crate) type OccupiedEntry<'a, K, V> = std::collections::hash_map::OccupiedEntry<'a, K, V>;
+}
 
 #[cfg(feature = "bench")]
 pub mod bench_exports {
@@ -129,6 +162,9 @@ pub mod fuzzing {
     pub use crate::packet::PartialDecode;
     pub use crate::transport_parameters::TransportParameters;
     pub use bytes::{BufMut, BytesMut};
+
+    #[cfg(feature = "arbitrary")]
+    use alloc::vec::Vec;
 
     #[cfg(feature = "arbitrary")]
     use arbitrary::{Arbitrary, Result, Unstructured};
@@ -324,6 +360,20 @@ impl Encodable for StreamId {
 impl<'arbitrary> arbitrary::Arbitrary<'arbitrary> for StreamId {
     fn arbitrary(u: &mut arbitrary::Unstructured<'arbitrary>) -> arbitrary::Result<Self> {
         Ok(VarInt::arbitrary(u)?.into())
+    }
+}
+
+/// An internal map key that uses identity hashing for [`StreamId`].
+///
+/// Keeps [`IdentityHashable`] out of the public [`StreamId`] API.
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+struct StreamIdKey(StreamId);
+
+impl IdentityHashable for StreamIdKey {}
+
+impl core::hash::Hash for StreamIdKey {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        state.write_u64(self.0.0);
     }
 }
 

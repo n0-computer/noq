@@ -1,5 +1,5 @@
-use std::any::Any;
-use std::sync::Arc;
+use alloc::{boxed::Box, sync::Arc};
+use core::any::Any;
 
 use super::{BASE_DATAGRAM_SIZE, Controller, ControllerFactory};
 use crate::Instant;
@@ -121,6 +121,7 @@ impl Controller for NewReno {
             ssthresh: Some(self.ssthresh),
             pacing_rate: None,
             send_quantum: None,
+            bandwidth_estimate: None,
         }
     }
 

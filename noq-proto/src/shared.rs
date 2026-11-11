@@ -1,4 +1,5 @@
-use std::{fmt, net::SocketAddr};
+use alloc::vec::Vec;
+use core::{fmt, net::SocketAddr};
 
 use bytes::{Buf, BufMut, BytesMut};
 
@@ -146,14 +147,14 @@ impl ConnectionId {
     }
 }
 
-impl ::std::ops::Deref for ConnectionId {
+impl ::core::ops::Deref for ConnectionId {
     type Target = [u8];
     fn deref(&self) -> &[u8] {
         &self.bytes[0..self.len as usize]
     }
 }
 
-impl ::std::ops::DerefMut for ConnectionId {
+impl ::core::ops::DerefMut for ConnectionId {
     fn deref_mut(&mut self) -> &mut [u8] {
         &mut self.bytes[0..self.len as usize]
     }

@@ -8,6 +8,15 @@ type: bug
 
 ---
 
+<!-- Attention agents and contributors using AI, please see our AI policy before opening an issue: https://github.com/n0-computer/noq/blob/main/AI_POLICY.md -->
+<!-- Any issues violating this policy will be closed. -->
+
+**Describe the bug**
+<!-- A clear and concise description of what the bug is. -->
+
+**Relevant Logs**
+<!-- Setup `tracing_subscriber` in your application and use the `RUST_LOG = trace` env variable to turn on debug logs. Please see: https://docs.rs/tracing-subscriber/latest/tracing_subscriber/fmt/fn.init.html -->
+
 **Describe the bug**
 <!-- A clear and concise description of what the bug is. -->
 

@@ -1,22 +1,22 @@
 //! Tests for multipath
 
-use std::net::SocketAddr;
-use std::num::NonZeroU32;
-use std::sync::Arc;
-use std::time::Duration;
+use alloc::{boxed::Box, format, sync::Arc, vec, vec::Vec};
+use core::{net::SocketAddr, num::NonZeroU32, time::Duration};
+use std::dbg;
 
 use assert_matches::assert_matches;
 use testresult::TestResult;
 use tracing::info;
 
+use crate::connection::timer::{PathTimer, Timer};
 use crate::{
     ClientConfig, ConnectionId, ConnectionIdGenerator, Endpoint, EndpointConfig, FourTuple,
     LOCAL_CID_COUNT, NetworkChangeHint, PathId, PathStatus, RandomConnectionIdGenerator,
     ServerConfig, Side::*, TransportConfig, cid_queue::CidQueue,
 };
 use crate::{
-    ClosePathError, Dir, Event, PathAbandonReason, PathEvent, StreamEvent, TransportErrorCode,
-    n0_nat_traversal,
+    ClosePathError, Dir, Event, PathAbandonReason, PathEvent, StreamAffinity, StreamEvent,
+    TransportErrorCode, n0_nat_traversal,
 };
 
 use super::util::{
@@ -451,10 +451,15 @@ fn open_path_validation_fails_server_side() -> TestResult {
 
     info!("manual keep-alive of PathId::ZERO");
     pair.ping_path(Client, PathId::ZERO)?;
+    // Sent here, before the clock moves: `drive_until_timer` advances time before it
+    // drives, so a queued keep-alive would otherwise go out at the deadline itself.
     pair.drive();
 
     info!("advancing time to past client path {path_id} idle");
-    pair.advance_time();
+    pair.drive_until_timer(Client, Timer::PerPath(path_id, PathTimer::PathIdle));
+    // Deliver the abandonment to the server: the timer fires while driving the client, and
+    // the loop drives the server before that packet arrives. Without this step the
+    // `poll(Server)` check below would pass simply because the server never heard about it.
     pair.drive();
 
     // The client gave up first and timed out.
@@ -803,7 +808,7 @@ fn per_path_observed_address() -> TestResult {
 
     let mut found_first = false;
     let mut found_second = false;
-    let post_connect_events = std::iter::from_fn(|| pair.poll(Client));
+    let post_connect_events = core::iter::from_fn(|| pair.poll(Client));
     for event in client_events.into_iter().chain(post_connect_events) {
         if let Event::Path(PathEvent::ObservedAddr { id, addr }) = event {
             if id == PathId::ZERO && addr == first_addr {
@@ -1285,6 +1290,372 @@ fn path_scheduling_path_status() -> TestResult {
     assert!((stats_path0_t1.udp_tx.datagrams - stats_path0_t0.udp_tx.datagrams) == 0);
     assert!((stats_path1_t1.udp_tx.datagrams - stats_path1_t0.udp_tx.datagrams) > 0);
 
+    Ok(())
+}
+
+#[test]
+fn stream_affinity_overrides_backup_status() -> TestResult {
+    let _guard = subscribe();
+    let mut pair = ConnPair::builder().enable_multipath().connect();
+
+    let available = PathId::ZERO;
+    let server_addr = pair.routes.public_server_addr();
+    let backup = pair.open_path(
+        Client,
+        FourTuple::from_remote(server_addr),
+        PathStatus::Backup,
+    )?;
+    pair.drive();
+    assert_matches!(
+        pair.poll(Client),
+        Some(Event::Path(PathEvent::Established { id })) if id == backup
+    );
+
+    let ordinary = pair.streams(Client).open(Dir::Uni).unwrap();
+    let pinned = pair.streams(Client).open(Dir::Uni).unwrap();
+    pair.send_stream(Client, pinned)
+        .set_affinity(StreamAffinity::Sticky(backup))?;
+
+    // Send separately so each path's STREAM counter identifies the stream it carried.
+    for (stream, expected_path, other_path) in
+        [(ordinary, available, backup), (pinned, backup, available)]
+    {
+        let expected_before = pair
+            .path_stats(Client, expected_path)
+            .unwrap()
+            .frame_tx
+            .stream;
+        let other_before = pair.path_stats(Client, other_path).unwrap().frame_tx.stream;
+
+        const MSG: &[u8] = b"stream affinity";
+        pair.send_stream(Client, stream).write(MSG)?;
+        pair.send_stream(Client, stream).finish()?;
+        pair.drive();
+
+        assert_eq!(
+            pair.path_stats(Client, expected_path)
+                .unwrap()
+                .frame_tx
+                .stream,
+            expected_before + 1,
+            "stream {stream} should use path {expected_path}"
+        );
+        assert_eq!(
+            pair.path_stats(Client, other_path).unwrap().frame_tx.stream,
+            other_before,
+            "stream {stream} should not use path {other_path}"
+        );
+        assert_eq!(pair.conn(Client).path_status(backup)?, PathStatus::Backup);
+
+        assert_eq!(pair.streams(Server).accept(Dir::Uni), Some(stream));
+        let mut recv = pair.recv_stream(Server, stream);
+        let mut chunks = recv.read(true)?;
+        assert_matches!(chunks.next(usize::MAX), Ok(Some(chunk)) if chunk.bytes == MSG);
+        assert_matches!(chunks.next(usize::MAX), Ok(None));
+        let _ = chunks.finalize();
+    }
+
+    Ok(())
+}
+
+#[test]
+fn stream_affinity_selects_second_available_path() -> TestResult {
+    let _guard = subscribe();
+    let mut pair = ConnPair::builder().enable_multipath().connect();
+
+    let first = PathId::ZERO;
+    let server_addr = pair.routes.public_server_addr();
+    let second = pair.open_path(
+        Client,
+        FourTuple::from_remote(server_addr),
+        PathStatus::Available,
+    )?;
+    pair.drive();
+    assert!(second > first);
+    assert_matches!(
+        pair.poll(Client),
+        Some(Event::Path(PathEvent::Established { id })) if id == second
+    );
+
+    // First establish the default choice, then override it for another stream.
+    for (affinity, expected_path, other_path) in [
+        (StreamAffinity::Any, first, second),
+        (StreamAffinity::Sticky(second), second, first),
+    ] {
+        let expected_before = pair
+            .path_stats(Client, expected_path)
+            .unwrap()
+            .frame_tx
+            .stream;
+        let other_before = pair.path_stats(Client, other_path).unwrap().frame_tx.stream;
+
+        let stream = pair.streams(Client).open(Dir::Uni).unwrap();
+        pair.send_stream(Client, stream).set_affinity(affinity)?;
+        const MSG: &[u8] = b"choose the second available path";
+        pair.send_stream(Client, stream).write(MSG)?;
+        pair.send_stream(Client, stream).finish()?;
+        pair.drive();
+
+        assert_eq!(
+            pair.path_stats(Client, expected_path)
+                .unwrap()
+                .frame_tx
+                .stream,
+            expected_before + 1,
+            "stream {stream} should use path {expected_path}"
+        );
+        assert_eq!(
+            pair.path_stats(Client, other_path).unwrap().frame_tx.stream,
+            other_before,
+            "stream {stream} should not use path {other_path}"
+        );
+        for path in [first, second] {
+            assert_eq!(pair.conn(Client).path_status(path)?, PathStatus::Available);
+        }
+
+        assert_eq!(pair.streams(Server).accept(Dir::Uni), Some(stream));
+        let mut recv = pair.recv_stream(Server, stream);
+        let mut chunks = recv.read(true)?;
+        assert_matches!(chunks.next(usize::MAX), Ok(Some(chunk)) if chunk.bytes == MSG);
+        assert_matches!(chunks.next(usize::MAX), Ok(None));
+        let _ = chunks.finalize();
+    }
+
+    Ok(())
+}
+
+#[test]
+fn stream_affinity_block_and_resume() -> TestResult {
+    let _guard = subscribe();
+    let mut pair = ConnPair::builder().enable_multipath().connect();
+    let first = PathId::ZERO;
+    let server_addr = pair.routes.public_server_addr();
+    let backup = pair.open_path(
+        Client,
+        FourTuple::from_remote(server_addr),
+        PathStatus::Backup,
+    )?;
+    pair.drive();
+
+    // A blocked high-priority stream must not prevent an ordinary stream from sending.
+    let blocked = pair.streams(Client).open(Dir::Uni).unwrap();
+    let ordinary = pair.streams(Client).open(Dir::Uni).unwrap();
+    pair.send_stream(Client, blocked).set_priority(1)?;
+    pair.send_stream(Client, blocked)
+        .set_affinity(StreamAffinity::Block)?;
+    pair.send_stream(Client, blocked).write(b"blocked")?;
+    pair.send_stream(Client, blocked).finish()?;
+    pair.send_stream(Client, ordinary).write(b"ordinary")?;
+    pair.send_stream(Client, ordinary).finish()?;
+
+    let first_before = pair.path_stats(Client, first).unwrap().frame_tx.stream;
+    let backup_before = pair.path_stats(Client, backup).unwrap().frame_tx.stream;
+    pair.drive();
+    assert_eq!(
+        pair.path_stats(Client, first).unwrap().frame_tx.stream,
+        first_before + 1
+    );
+    assert_eq!(
+        pair.path_stats(Client, backup).unwrap().frame_tx.stream,
+        backup_before
+    );
+    {
+        let mut recv = pair.recv_stream(Server, ordinary);
+        let mut chunks = recv.read(true)?;
+        assert_matches!(chunks.next(usize::MAX), Ok(Some(chunk)) if chunk.bytes == b"ordinary"[..]);
+        assert_matches!(chunks.next(usize::MAX), Ok(None));
+        let _ = chunks.finalize();
+    }
+
+    // No new write is needed to resume the buffered data and FIN on the backup path.
+    pair.send_stream(Client, blocked)
+        .set_affinity(StreamAffinity::Sticky(backup))?;
+    pair.drive();
+    assert_eq!(
+        pair.path_stats(Client, first).unwrap().frame_tx.stream,
+        first_before + 1
+    );
+    assert_eq!(
+        pair.path_stats(Client, backup).unwrap().frame_tx.stream,
+        backup_before + 1
+    );
+    let mut recv = pair.recv_stream(Server, blocked);
+    let mut chunks = recv.read(true)?;
+    assert_matches!(chunks.next(usize::MAX), Ok(Some(chunk)) if chunk.bytes == b"blocked"[..]);
+    assert_matches!(chunks.next(usize::MAX), Ok(None));
+    let _ = chunks.finalize();
+    Ok(())
+}
+
+#[test]
+fn stream_affinity_persists_across_packets() -> TestResult {
+    let _guard = subscribe();
+    let mut pair = ConnPair::builder().enable_multipath().connect();
+
+    let available = PathId::ZERO;
+    let server_addr = pair.routes.public_server_addr();
+    let backup = pair.open_path(
+        Client,
+        FourTuple::from_remote(server_addr),
+        PathStatus::Backup,
+    )?;
+    pair.drive();
+    assert_matches!(
+        pair.poll(Client),
+        Some(Event::Path(PathEvent::Established { id })) if id == backup
+    );
+
+    // Too large for one packet, so the stream is requeued after each packet it fills.
+    // The backup path cannot send unpinned data, so a requeue that drops the affinity would
+    // move the remaining data to the available path.
+    let pinned = pair.streams(Client).open(Dir::Uni).unwrap();
+    pair.send_stream(Client, pinned)
+        .set_affinity(StreamAffinity::Sticky(backup))?;
+
+    let available_before = pair.path_stats(Client, available).unwrap().frame_tx.stream;
+    let backup_before = pair.path_stats(Client, backup).unwrap().frame_tx.stream;
+
+    const MSG: &[u8] = &[42u8; 10_000];
+    assert_eq!(pair.send_stream(Client, pinned).write(MSG)?, MSG.len());
+    pair.send_stream(Client, pinned).finish()?;
+    pair.drive();
+
+    assert_eq!(
+        pair.path_stats(Client, available).unwrap().frame_tx.stream,
+        available_before,
+        "stream {pinned} should not use path {available}"
+    );
+    assert!(
+        pair.path_stats(Client, backup).unwrap().frame_tx.stream > backup_before + 1,
+        "stream {pinned} should need more than one packet on path {backup}"
+    );
+
+    // sanity check that the data transferred
+    assert_eq!(pair.streams(Server).accept(Dir::Uni), Some(pinned));
+    let mut recv = pair.recv_stream(Server, pinned);
+    let mut chunks = recv.read(true)?;
+    let mut received = Vec::new();
+    while let Ok(Some(chunk)) = chunks.next(usize::MAX) {
+        received.extend_from_slice(&chunk.bytes);
+    }
+    let _ = chunks.finalize();
+    assert_eq!(received, MSG);
+
+    Ok(())
+}
+
+#[test]
+fn stream_affinity_moves_buffered_data() -> TestResult {
+    let _guard = subscribe();
+    let mut pair = ConnPair::builder().enable_multipath().connect();
+    let first = PathId::ZERO;
+    let server_addr = pair.routes.public_server_addr();
+    let second = pair.open_path(
+        Client,
+        FourTuple::from_remote(server_addr),
+        PathStatus::Backup,
+    )?;
+    pair.drive();
+
+    let affinities = [
+        StreamAffinity::Any,
+        StreamAffinity::Sticky(first),
+        StreamAffinity::Sticky(second),
+        StreamAffinity::Block,
+    ];
+    for old in affinities {
+        for new in affinities {
+            let stream = pair.streams(Client).open(Dir::Uni).unwrap();
+            pair.send_stream(Client, stream).set_affinity(old)?;
+            pair.send_stream(Client, stream).write(b"move me")?;
+            pair.send_stream(Client, stream).finish()?;
+            pair.send_stream(Client, stream).set_affinity(new)?;
+
+            let first_before = pair.path_stats(Client, first).unwrap().frame_tx.stream;
+            let second_before = pair.path_stats(Client, second).unwrap().frame_tx.stream;
+            pair.drive();
+            if new == StreamAffinity::Block {
+                assert_eq!(
+                    pair.path_stats(Client, first).unwrap().frame_tx.stream,
+                    first_before
+                );
+                assert_eq!(
+                    pair.path_stats(Client, second).unwrap().frame_tx.stream,
+                    second_before
+                );
+                pair.send_stream(Client, stream)
+                    .set_affinity(StreamAffinity::Any)?;
+                pair.drive();
+            }
+
+            let use_second = new == StreamAffinity::Sticky(second);
+            assert_eq!(
+                pair.path_stats(Client, first).unwrap().frame_tx.stream,
+                first_before + u64::from(!use_second)
+            );
+            assert_eq!(
+                pair.path_stats(Client, second).unwrap().frame_tx.stream,
+                second_before + u64::from(use_second)
+            );
+            assert_eq!(pair.streams(Server).accept(Dir::Uni), Some(stream));
+            let mut recv = pair.recv_stream(Server, stream);
+            let mut chunks = recv.read(true)?;
+            assert_matches!(chunks.next(usize::MAX), Ok(Some(chunk)) if chunk.bytes == b"move me"[..]);
+            assert_matches!(chunks.next(usize::MAX), Ok(None));
+            let _ = chunks.finalize();
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn stream_affinity_retransmit_on_new_path() -> TestResult {
+    let _guard = subscribe();
+    let mut pair = ConnPair::builder().enable_multipath().connect();
+    let first = PathId::ZERO;
+    let server_addr = pair.routes.public_server_addr();
+    let second = pair.open_path(
+        Client,
+        FourTuple::from_remote(server_addr),
+        PathStatus::Backup,
+    )?;
+    pair.drive();
+
+    // Exercise both data retransmission and a FIN-only retransmission.
+    for msg in [&b"retransmitted"[..], &b""[..]] {
+        let stream = pair.streams(Client).open(Dir::Uni).unwrap();
+        pair.send_stream(Client, stream)
+            .set_affinity(StreamAffinity::Sticky(first))?;
+        if !msg.is_empty() {
+            pair.send_stream(Client, stream).write(msg)?;
+        }
+        pair.send_stream(Client, stream).finish()?;
+        let first_before = pair.path_stats(Client, first).unwrap().frame_tx.stream;
+        let second_before = pair.path_stats(Client, second).unwrap().frame_tx.stream;
+        pair.drive_client();
+        assert_eq!(
+            pair.path_stats(Client, first).unwrap().frame_tx.stream,
+            first_before + 1
+        );
+        pair.server.inbound.clear();
+
+        pair.send_stream(Client, stream)
+            .set_affinity(StreamAffinity::Sticky(second))?;
+        pair.drive();
+        assert_eq!(
+            pair.path_stats(Client, first).unwrap().frame_tx.stream,
+            first_before + 1
+        );
+        assert!(pair.path_stats(Client, second).unwrap().frame_tx.stream > second_before);
+        assert_eq!(pair.streams(Server).accept(Dir::Uni), Some(stream));
+        let mut recv = pair.recv_stream(Server, stream);
+        let mut chunks = recv.read(true)?;
+        if !msg.is_empty() {
+            assert_matches!(chunks.next(usize::MAX), Ok(Some(chunk)) if chunk.bytes == msg);
+        }
+        assert_matches!(chunks.next(usize::MAX), Ok(None));
+        let _ = chunks.finalize();
+    }
     Ok(())
 }
 

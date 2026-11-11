@@ -1,3 +1,4 @@
+use alloc::vec::Vec;
 use bytes::{BufMut, BytesMut};
 use proptest::{prelude::*, prop_assert_ne};
 use test_strategy::proptest;

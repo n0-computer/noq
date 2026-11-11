@@ -1,5 +1,8 @@
-use std::mem;
-use std::ops::{Index, IndexMut};
+use alloc::boxed::Box;
+use core::{
+    mem,
+    ops::{Index, IndexMut},
+};
 
 use tracing::{debug, trace};
 
@@ -135,6 +138,17 @@ impl CryptoState {
             // at the 100th short-header packet.
             key_phase_size: rng.random_range(10..1000),
         }
+    }
+
+    /// Override how many packets the first key phase lasts
+    ///
+    /// See `TransportConfig::initial_key_phase_size`.
+    #[cfg(test)]
+    pub(super) fn with_key_phase_size(mut self, packets: Option<u64>) -> Self {
+        if let Some(packets) = packets {
+            self.key_phase_size = packets;
+        }
+        self
     }
 
     /// Removes header protection of a packet, or returns `None` if the packet was dropped.

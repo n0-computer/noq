@@ -1,6 +1,6 @@
 //! Coding related traits.
 
-use std::net::{Ipv4Addr, Ipv6Addr};
+use core::net::{Ipv4Addr, Ipv6Addr};
 
 use bytes::{Buf, BufMut};
 use thiserror::Error;
@@ -13,7 +13,7 @@ use crate::VarInt;
 pub struct UnexpectedEnd;
 
 /// Coding result type
-pub type Result<T> = ::std::result::Result<T, UnexpectedEnd>;
+pub type Result<T> = ::core::result::Result<T, UnexpectedEnd>;
 
 /// Infallible encoding of QUIC primitives.
 pub trait Encodable {

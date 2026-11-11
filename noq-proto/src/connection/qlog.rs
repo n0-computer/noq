@@ -10,14 +10,22 @@
 // Function bodies in this module are regularly cfg'd out
 #![allow(unused_variables)]
 
-#[cfg(not(feature = "qlog"))]
-use std::marker::PhantomData;
 #[cfg(feature = "qlog")]
-use std::sync::{Arc, Mutex};
-use std::{
+use alloc::{
+    boxed::Box,
+    format,
+    string::{String, ToString},
+    sync::Arc,
+    vec,
+};
+#[cfg(not(feature = "qlog"))]
+use core::marker::PhantomData;
+use core::{
     net::{IpAddr, SocketAddr},
     time::Duration,
 };
+#[cfg(feature = "qlog")]
+use std::sync::Mutex;
 
 #[cfg(feature = "qlog")]
 use qlog::{
@@ -212,7 +220,7 @@ impl QlogSink {
                 }),
                 frames: None,
                 trigger: Some(
-                    match info.time_sent.saturating_duration_since(now) >= loss_delay {
+                    match now.saturating_duration_since(info.time_sent) >= loss_delay {
                         true => PacketLostTrigger::TimeThreshold,
                         false => PacketLostTrigger::ReorderingThreshold,
                     },

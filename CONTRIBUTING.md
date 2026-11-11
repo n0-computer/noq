@@ -30,9 +30,35 @@ The codebase has a deliberate two-tier split:
 
 ## Code contributions!
 
+### Issue and PR policy
+
+In response to the influx of AI-assisted PRs, we have a new workflow for getting your PRs merged. The intention is to make it easier for developers who are making meaningful contributions to `noq` to get the attention of maintainers.
+
+Note: please join our [discord][discord] if you are looking to be mentored through a bug or feature!
+
+Here is the general workflow you should follow to contribute to `noq`:
+
+  **Open an issue and have a human-to-human discussion with the maintainers**
+
+  **We will automatically close any PRs that do not reference issues labeled `ready-for-pr`.**
+
+  Before opening a PR, open or find an issue and discuss the proposed change with a maintainer. When there is reasonable consensus on how to implement the feature or solve the bug, then a PR is welcome. The PR description must link to that issue (for example, `Fixes #123` or `Refs #123`).
+
+  You will know that reasonable consensus was reached when the label `ready-for-pr` is added to the issue.
+
+- A PR that does not link to an issue will be closed automatically.
+- A linked issue only counts if the label `ready-for-pr` was added. Typically this means that a discussion took place between humans and reasonable consensus was reached.
+- A PR may still be closed if the PR does not match the scope agreed on in the issue.
+
+  We are a handful of folks trying to maintain high-quality open-source software as well as a welcoming community. Please note that if your PR is closed **it is not a judgment on you or the code**. It just reflects the changing software landscape that we are all currently living through and the different processes that need to exit to respond to those changes.
+
+  Please refer to our [AI Policy][AIPolicy] before using AI to assist or generate any issues you open or comments you write.
+
+  Sensible exceptions will be made for small changes that don't require issues, such as doc fixes or maintenance chores, at the discretion of the maintainers.
+
 ### A great pull request to noq has:
 
-- An issue linked to it. Discuss solutions with maintainers in the linked issue
+- An issue linked to it with the label `ready-for-pr`. Discuss solutions with maintainers in the linked issue
   before diving in. This helps keep contributors and maintainers aligned.
 - A title following this pattern: `<type>(<scope>): <description>`. If the
   change is a breaking change it must also include a `!`: `<type>(<scope>)!: <description>`.
@@ -98,3 +124,5 @@ one. In your syncing branch `HEAD` should point to `<noq-hash>`. Now do
 - `git push`. Always verify against CI that the merge commit is good to go.
 - After CI gives you green light, locally merge to `noq`'s main using `git
   merge --ff-only <merge-hash>`
+
+[AIPolicy]: https://github.com/n0-computer/noq/blob/main/AI_POLICY.md

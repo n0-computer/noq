@@ -1,12 +1,21 @@
-use std::{
-    cmp,
-    collections::{BTreeMap, HashMap, HashSet, VecDeque},
-    io::{self, Write},
-    mem,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs},
+use alloc::{
+    boxed::Box,
+    collections::{BTreeMap, VecDeque},
+    sync::Arc,
+    vec,
+    vec::Vec,
+};
+use core::{
+    cmp, mem,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     num::{NonZeroU32, NonZeroUsize},
     str,
-    sync::{Arc, LazyLock, Mutex},
+};
+use std::{
+    io::{self, Write},
+    net::ToSocketAddrs,
+    print,
+    sync::{LazyLock, Mutex},
 };
 
 use assert_matches::assert_matches;
@@ -19,11 +28,12 @@ use rustls::{
 };
 use tracing::{debug, info, info_span, trace};
 
+use crate::connection::timer::Timer;
 use crate::crypto::rustls::{QuicClientConfig, QuicServerConfig, configured_provider};
 use crate::{
     ClientConfig, ClosePathError, ClosedPath, Connection, ConnectionError, ConnectionEvent,
     ConnectionHandle, ConnectionStats, DatagramEvent, Datagrams, Dir, Duration, EcnCodepoint,
-    Endpoint, EndpointConfig, EndpointEvent, Event, FourTuple, Incoming, Instant,
+    Endpoint, EndpointConfig, EndpointEvent, Event, FourTuple, HashMap, HashSet, Incoming, Instant,
     MultipathNotNegotiated, NetworkChangeHint, PathAbandonReason, PathError, PathId, PathStats,
     PathStatus, RecvStream, SendStream, ServerConfig, SetPathStatusError, Side, StreamId, Streams,
     SystemTime, TokenLog, TokenReuseError, Transmit, TransportConfig, VarInt,
@@ -521,6 +531,7 @@ pub(super) struct ConnPairBuilder {
     pub(super) client_endpoint_cfg: EndpointConfig,
     server_cfg: Option<ServerConfig>,
     routes: Option<Routing>,
+    key_updates: bool,
 }
 
 impl Default for ConnPairBuilder {
@@ -542,6 +553,7 @@ impl Default for ConnPairBuilder {
             client_endpoint_cfg: Default::default(),
             server_cfg: None,
             routes: None,
+            key_updates: false,
         }
     }
 }
@@ -563,6 +575,17 @@ impl ConnPairBuilder {
     pub(super) fn with_transport_cfg(mut self, cfg: TransportConfig) -> Self {
         self.server_transport_cfg = cfg.clone();
         self.client_transport_cfg = cfg;
+        self
+    }
+
+    /// Enables automatic key updates.
+    ///
+    /// By default a built pair pins the first key phase out of reach, so that a test cannot be
+    /// interrupted by an autonomous key update it never asked for. Tests about key updates
+    /// themselves, or about what an update does to timers and paths, should call this. Peer
+    /// initiated and forced updates (`Self::force_key_update`) work either way.
+    pub(super) fn with_key_update(mut self) -> Self {
+        self.key_updates = true;
         self
     }
 
@@ -619,13 +642,19 @@ impl ConnPairBuilder {
         let Self {
             latency,
             mtu,
-            server_transport_cfg,
-            client_transport_cfg,
+            mut server_transport_cfg,
+            mut client_transport_cfg,
             server_endpoint_cfg,
             client_endpoint_cfg,
             server_cfg,
             routes,
+            key_updates,
         } = self;
+
+        if !key_updates {
+            client_transport_cfg.initial_key_phase_size(Some(u64::MAX));
+            server_transport_cfg.initial_key_phase_size(Some(u64::MAX));
+        }
 
         let server_cfg = server_cfg.unwrap_or(ServerConfig {
             transport: Arc::new(server_transport_cfg),
@@ -764,6 +793,40 @@ impl ConnPair {
 
     pub(super) fn poll_timeout(&mut self, side: Side) -> Option<Instant> {
         self.conn_mut(side).poll_timeout()
+    }
+
+    /// Advances virtual time and drives both endpoints until `timer` fires on `side`.
+    ///
+    /// [`Self::drive`] refuses to step past a point where the only timers still pending
+    /// are idle timers (see `Connection::is_idle`), so it cannot be used to reach an idle
+    /// timeout: the timeout is exactly what `is_idle` discounts. This loop keeps stepping
+    /// to each next wakeup until `timer` is no longer armed.
+    ///
+    /// Note that timers fire in `drive_client`/`drive_server`, not in `advance_time`, so
+    /// every step has to drive both endpoints. A timer that is *cancelled* rather than
+    /// fired also ends the loop; callers should still assert on the event they expect, so
+    /// that a cancellation fails loudly instead of passing silently.
+    ///
+    /// Each step advances the clock *before* driving, so packets that must be sent at the
+    /// current time have to be driven out by a preceding [`Self::drive`]; otherwise they
+    /// are queued until after the first step.
+    ///
+    /// Panics if the timer is still armed after 1024 steps.
+    #[track_caller]
+    pub(super) fn drive_until_timer(&mut self, side: Side, timer: Timer) {
+        let mut steps = 0;
+        while self.conn(side).timer_pending(timer).is_some() {
+            // If `timer` is armed, this endpoint has a wakeup scheduled, so the advance
+            // cannot run out of timers.
+            assert!(
+                self.advance_time(),
+                "{timer:?} is armed but no endpoint has a wakeup scheduled"
+            );
+            self.drive_client();
+            self.drive_server();
+            steps += 1;
+            assert!(steps < 1024, "{timer:?} still armed after {steps} steps");
+        }
     }
 
     pub(super) fn poll(&mut self, side: Side) -> Option<Event> {
@@ -1204,7 +1267,7 @@ impl InboundQueue {
     }
 }
 
-impl std::ops::Index<usize> for InboundQueue {
+impl core::ops::Index<usize> for InboundQueue {
     type Output = Inbound;
     fn index(&self, index: usize) -> &Inbound {
         self.inner
@@ -1429,14 +1492,14 @@ impl TestEndpoint {
     }
 }
 
-impl ::std::ops::Deref for TestEndpoint {
+impl core::ops::Deref for TestEndpoint {
     type Target = Endpoint;
     fn deref(&self) -> &Endpoint {
         &self.endpoint
     }
 }
 
-impl ::std::ops::DerefMut for TestEndpoint {
+impl core::ops::DerefMut for TestEndpoint {
     fn deref_mut(&mut self) -> &mut Endpoint {
         &mut self.endpoint
     }

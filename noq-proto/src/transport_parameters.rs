@@ -6,7 +6,7 @@
 //! contained in this modules should generally only be referred to by custom
 //! implementations of the `crypto::Session` trait.
 
-use std::{
+use core::{
     convert::TryFrom,
     net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6},
     num::NonZeroU8,
@@ -191,7 +191,7 @@ impl TransportParameters {
             ),
             grease_transport_parameter: Some(ReservedTransportParameter::random(rng)),
             write_order: Some({
-                let mut order = std::array::from_fn(|i| i as u8);
+                let mut order = core::array::from_fn(|i| i as u8);
                 order.shuffle(rng);
                 order
             }),
@@ -329,7 +329,7 @@ impl TransportParameters {
     pub fn write<W: BufMut>(&self, w: &mut W) {
         let ids = match &self.write_order {
             Some(order) => order,
-            None => &std::array::from_fn(|i| i as u8),
+            None => &core::array::from_fn(|i| i as u8),
         };
 
         for idx in ids {
@@ -820,6 +820,7 @@ fn decode_cid(len: usize, value: &mut Option<ConnectionId>, r: &mut impl Buf) ->
 
 #[cfg(test)]
 mod test {
+    use alloc::{boxed::Box, vec, vec::Vec};
 
     use super::*;
 
@@ -888,7 +889,7 @@ mod test {
     struct StepRng(u64);
 
     impl rand::TryRng for StepRng {
-        type Error = std::convert::Infallible;
+        type Error = core::convert::Infallible;
 
         #[inline]
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {

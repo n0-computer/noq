@@ -286,6 +286,15 @@ impl<'a, 'b> PacketBuilder<'a, 'b> {
             false => 0,
         };
 
+        let is_mtud_probe =
+            conn.path_data(path_id).mtud.in_flight_mtu_probe() == Some(packet_number);
+        {
+            let path_stats = conn.path_stats.get_mut(path_id);
+            path_stats.sent_packets += 1;
+            path_stats.sent_bytes += size as u64;
+            path_stats.sent_plpmtud_probes += is_mtud_probe as u64;
+        }
+
         let packet = SentPacket {
             path_generation: conn.paths.get_mut(&path_id).unwrap().data.generation(),
             largest_acked: sent.largest_acked,
@@ -410,13 +419,13 @@ pub(super) enum PadDatagram {
     ToMinMtu,
 }
 
-impl std::ops::BitOrAssign for PadDatagram {
+impl core::ops::BitOrAssign for PadDatagram {
     fn bitor_assign(&mut self, rhs: Self) {
         *self = *self | rhs;
     }
 }
 
-impl std::ops::BitOr for PadDatagram {
+impl core::ops::BitOr for PadDatagram {
     type Output = Self;
 
     fn bitor(self, rhs: Self) -> Self::Output {

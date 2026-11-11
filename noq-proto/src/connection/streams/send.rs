@@ -1,6 +1,8 @@
+use alloc::boxed::Box;
 use bytes::Bytes;
 use thiserror::Error;
 
+use super::StreamAffinity;
 use crate::{
     VarInt,
     connection::{send_buffer::SendBuffer, streams::BytesOrSlice},
@@ -13,6 +15,7 @@ pub(super) struct Send {
     pub(super) state: SendState,
     pub(super) pending: SendBuffer,
     pub(super) priority: i32,
+    pub(super) affinity: StreamAffinity,
     /// Whether a frame containing a FIN bit must be transmitted.
     ///
     /// Even if we don't have any new data.
@@ -30,6 +33,7 @@ impl Send {
             state: SendState::Ready,
             pending: SendBuffer::new(),
             priority: 0,
+            affinity: StreamAffinity::Any,
             fin_pending: false,
             connection_blocked: false,
             stop_reason: None,
@@ -182,7 +186,7 @@ impl<'a> BytesSource<'a> for BytesArray<'a> {
             let chunk = &mut self.chunks[self.consumed];
 
             if chunk.len() <= limit {
-                let chunk = std::mem::take(chunk);
+                let chunk = core::mem::take(chunk);
                 self.consumed += 1;
                 chunks_consumed += 1;
                 if chunk.is_empty() {
@@ -319,6 +323,8 @@ pub enum FinishError {
 
 #[cfg(test)]
 mod tests {
+    use alloc::{borrow::ToOwned, vec::Vec};
+
     use super::*;
 
     #[test]

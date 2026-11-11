@@ -1,3 +1,4 @@
+use alloc::vec::Vec;
 #[cfg(all(feature = "aws-lc-rs", not(feature = "ring")))]
 use aws_lc_rs::{aead, hkdf, hmac};
 #[cfg(feature = "ring")]

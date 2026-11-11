@@ -1,4 +1,4 @@
-use std::{fmt::Debug, ops::Range};
+use core::{fmt::Debug, ops::Range};
 
 use crate::{ConnectionId, ResetToken, frame::NewConnectionId};
 
@@ -205,6 +205,8 @@ pub(crate) enum InsertError {
 
 #[cfg(test)]
 mod tests {
+    use std::{dbg, println};
+
     use super::*;
 
     fn cid(sequence: u64, retire_prior_to: u64) -> NewConnectionId {

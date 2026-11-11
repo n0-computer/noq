@@ -8,7 +8,8 @@
 //! Note that usage of any protocol (version) other than TLS 1.3 does not conform to any
 //! published versions of the specification, and will not be supported in QUIC v1.
 
-use std::{any::Any, str};
+use alloc::{boxed::Box, vec::Vec};
+use core::{any::Any, str};
 
 use bytes::BytesMut;
 

@@ -1,4 +1,5 @@
-use std::{
+use alloc::{vec, vec::Vec};
+use core::{
     fmt,
     net::{IpAddr, SocketAddr},
 };
@@ -385,7 +386,7 @@ impl From<[u8; RESET_TOKEN_SIZE]> for ResetToken {
     }
 }
 
-impl std::ops::Deref for ResetToken {
+impl core::ops::Deref for ResetToken {
     type Target = [u8];
     fn deref(&self) -> &[u8] {
         &self.0
@@ -425,7 +426,7 @@ mod test {
         use crate::cid_generator::{ConnectionIdGenerator, RandomConnectionIdGenerator};
         use crate::{Duration, UNIX_EPOCH};
 
-        use std::net::Ipv6Addr;
+        use core::net::Ipv6Addr;
 
         let address_1 = SocketAddr::new(Ipv6Addr::LOCALHOST.into(), 4433);
         let orig_dst_cid_1 = RandomConnectionIdGenerator::new(MAX_CID_SIZE).generate_cid();
@@ -453,7 +454,7 @@ mod test {
     fn validation_token_sanity() {
         use crate::{Duration, UNIX_EPOCH};
 
-        use std::net::Ipv6Addr;
+        use core::net::Ipv6Addr;
 
         let ip_1 = Ipv6Addr::LOCALHOST.into();
         let issued_1 = UNIX_EPOCH + Duration::from_secs(42); // Fractional seconds would be lost

@@ -1,18 +1,22 @@
-use std::{
-    cmp,
+use alloc::{
+    boxed::Box,
     collections::{BTreeMap, BTreeSet, VecDeque},
-    mem,
-    ops::{Bound, Index, IndexMut},
+    vec::Vec,
+};
+use core::{
+    cmp, mem,
+    ops::{Bound, Index, IndexMut, Range},
 };
 
 use rand::{CryptoRng, RngExt};
-use rustc_hash::{FxHashMap, FxHashSet};
 use sorted_index_buffer::SortedIndexBuffer;
 use tracing::trace;
 
 use super::{PathId, paths::PathResponses, paths::PathRetransmits};
 use crate::{
-    Dir, Duration, FourTuple, Instant, StreamId, TransportError, TransportErrorCode, VarInt,
+    Dir, Duration, FourTuple, FxHashMap, FxHashSet, Instant, StreamId, TransportError,
+    TransportErrorCode, VarInt,
+    cid_queue::CidQueue,
     connection::StreamsState,
     frame::{self, AddAddress, RemoveAddress},
     packet::SpaceId,
@@ -146,13 +150,19 @@ impl PacketSpace {
             .number_spaces
             .values()
             .any(|pns| pns.pending_acks.can_send());
-        let space_specific = self.number_spaces.get(&path_id).is_some_and(|s| {
-            s.pending_ping || s.pending_immediate_ack || !s.pending_path_responses.is_empty()
-        });
+        let probing_frames = self
+            .number_spaces
+            .get(&path_id)
+            .is_some_and(|s| !s.pending_path_responses.is_empty());
+        let space_specific = self
+            .number_spaces
+            .get(&path_id)
+            .is_some_and(|s| s.pending_ping || s.pending_immediate_ack);
         let other = !self.pending.is_empty(streams);
         SendableFrames {
             acks,
             close: false,
+            probing_frames,
             space_specific,
             other,
         }
@@ -389,7 +399,7 @@ impl PacketNumberSpace {
     }
 
     /// Checks whether a skipped packet number was ACKed.
-    pub(super) fn check_ack(&self, range: std::ops::Range<u64>) -> Result<(), TransportError> {
+    pub(super) fn check_ack(&self, range: core::ops::Range<u64>) -> Result<(), TransportError> {
         if let Some(ref filter) = self.pn_filter
             && filter
                 .prev_skipped_packet_number
@@ -603,6 +613,28 @@ pub struct Retransmits {
 }
 
 impl Retransmits {
+    /// Queue connection IDs retired on `path_id` for retransmission, bounding how many can be
+    /// queued at once.
+    pub(super) fn retire_cids(
+        &mut self,
+        path_id: PathId,
+        seqs: Range<u64>,
+    ) -> Result<(), TransportError> {
+        /// Ensure `retire_cids` cannot grow without bound. Limit is somewhat arbitrary but very
+        /// permissive.
+        const MAX_PENDING_RETIRED_CIDS: u64 = CidQueue::LEN as u64 * 10;
+        // We don't bother counting in-flight frames because those are bounded by congestion
+        // control.
+        let num = seqs.end.saturating_sub(seqs.start);
+        if (self.retire_cids.len() as u64).saturating_add(num) > MAX_PENDING_RETIRED_CIDS {
+            return Err(TransportError::CONNECTION_ID_LIMIT_ERROR(
+                "queued too many retired CIDs",
+            ));
+        }
+        self.retire_cids.extend(seqs.map(|seq| (path_id, seq)));
+        Ok(())
+    }
+
     pub(super) fn is_empty(&self, streams: &StreamsState) -> bool {
         let Self {
             max_data,
@@ -651,7 +683,7 @@ impl Retransmits {
     }
 }
 
-impl ::std::ops::BitOrAssign for Retransmits {
+impl ::core::ops::BitOrAssign for Retransmits {
     fn bitor_assign(&mut self, rhs: Self) {
         let Self {
             max_data,
@@ -705,7 +737,7 @@ impl ::std::ops::BitOrAssign for Retransmits {
     }
 }
 
-impl ::std::ops::BitOrAssign<ThinRetransmits> for Retransmits {
+impl ::core::ops::BitOrAssign<ThinRetransmits> for Retransmits {
     fn bitor_assign(&mut self, rhs: ThinRetransmits) {
         let ThinRetransmits { retransmits } = rhs;
         if let Some(retransmits) = retransmits {
@@ -714,7 +746,7 @@ impl ::std::ops::BitOrAssign<ThinRetransmits> for Retransmits {
     }
 }
 
-impl ::std::iter::FromIterator<Self> for Retransmits {
+impl ::core::iter::FromIterator<Self> for Retransmits {
     fn from_iter<T>(iter: T) -> Self
     where
         T: IntoIterator<Item = Self>,
@@ -1015,13 +1047,23 @@ pub(super) struct SendableFrames {
     pub(super) acks: bool,
     /// Whether there is a CONNECTION_CLOSE to send, this is not ack-eliciting.
     pub(super) close: bool,
-    /// Whether there are any frames that must be sent on this specific space.
+    /// Whether there are any probing frames to send on this specific space.
+    ///
+    /// A space here in the sense of a QUIC Multipath packet number space: `Initial`,
+    /// `Handshake` and all `Data(PathId)` spaces.
+    ///
+    /// These frames are allowed to be sent on un-validated paths, e.g. PATH_CHALLENGE and
+    /// PATH_RESPONSE. These are ACK-eliciting.
+    ///
+    /// See [`Self::space_specific`] for frames that need to be sent on a validated space.
+    pub(super) probing_frames: bool,
+    /// Whether there are any frames that must be sent on this specific space if validated.
     ///
     /// A space here in the sense of a QUIC Multipath packet number space: `Initial`,
     /// `Handshake` and all `Data(PathId)` spaces.
     ///
     /// These are ack-eliciting. Some frames are scheduled per path, e.g. PING,
-    /// IMMEDIATE_ACK, PATH_CHALLENGE or PATH_RESPONSE.
+    /// IMMEDIATE_ACK. But also STREAM frames for streams that are sticky to a path.
     pub(super) space_specific: bool,
     /// Whether there are any other frames to send, these are ack-eliciting.
     pub(super) other: bool,
@@ -1033,6 +1075,7 @@ impl SendableFrames {
         Self {
             acks: false,
             close: false,
+            probing_frames: false,
             space_specific: false,
             other: false,
         }
@@ -1043,6 +1086,7 @@ impl SendableFrames {
         let Self {
             acks: _,
             close,
+            probing_frames,
             space_specific,
             other,
         } = *self;
@@ -1050,7 +1094,7 @@ impl SendableFrames {
             // No ack-eliciting frames are included with a CONNECTION_CLOSE, only acks.
             return false;
         }
-        space_specific || other
+        probing_frames || space_specific || other
     }
 
     /// Whether no data is sendable.
@@ -1058,24 +1102,27 @@ impl SendableFrames {
         let Self {
             acks,
             close,
+            probing_frames,
             space_specific,
             other,
         } = *self;
-        !acks && !close && !space_specific && !other
+        !acks && !close && !probing_frames && !space_specific && !other
     }
 }
 
-impl ::std::ops::BitOrAssign for SendableFrames {
+impl ::core::ops::BitOrAssign for SendableFrames {
     fn bitor_assign(&mut self, rhs: Self) {
         let Self {
             acks,
             close,
+            probing_frames,
             space_specific,
             other,
         } = rhs;
 
         self.acks |= acks;
         self.close |= close;
+        self.probing_frames |= probing_frames;
         self.space_specific |= space_specific;
         self.other |= other;
     }
@@ -1379,6 +1426,8 @@ const MAX_ACK_BLOCKS: usize = 64;
 
 #[cfg(test)]
 mod test {
+    use alloc::vec;
+
     use rand::Rng;
     use rand::seq::SliceRandom;
 

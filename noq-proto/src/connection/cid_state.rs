@@ -1,10 +1,9 @@
 //! Maintain the state of local connection IDs
-use std::collections::VecDeque;
+use alloc::collections::VecDeque;
 
-use rustc_hash::FxHashSet;
 use tracing::{debug, trace};
 
-use crate::{Duration, Instant, TransportError, shared::IssuedCid};
+use crate::{Duration, FxHashSet, Instant, TransportError, shared::IssuedCid};
 
 /// Local connection ID management
 #[derive(Debug)]

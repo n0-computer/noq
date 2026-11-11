@@ -66,8 +66,8 @@ pub use proto::{
     ConnectionIdGenerator, ConnectionStats, DecryptedInitial, Dir, EcnCodepoint, EndpointConfig,
     FourTuple, FrameStats, FrameType, IdleTimeout, InvalidCid, MtuDiscoveryConfig,
     NetworkChangeHint, NoneTokenLog, NoneTokenStore, PathError, PathEvent, PathId, PathStats,
-    PathStatus, ServerConfig, SetPathStatusError, Side, StdSystemTime, StreamId, TimeSource,
-    TokenLog, TokenMemoryCache, TokenReuseError, TokenStore, Transmit, TransportConfig,
+    PathStatus, ServerConfig, SetPathStatusError, Side, StdSystemTime, StreamAffinity, StreamId,
+    TimeSource, TokenLog, TokenMemoryCache, TokenReuseError, TokenStore, Transmit, TransportConfig,
     TransportErrorCode, UdpStats, ValidationTokenConfig, VarInt, VarIntBoundsExceeded, congestion,
     crypto,
 };
@@ -79,7 +79,7 @@ pub use udp;
 
 pub use crate::connection::{
     AcceptBi, AcceptUni, Closed, Connecting, Connection, OnClosed, OpenBi, OpenUni, ReadDatagram,
-    SendDatagram, SendDatagramError, WeakConnectionHandle, ZeroRttAccepted,
+    ReadManyDatagrams, SendDatagram, SendDatagramError, WeakConnectionHandle, ZeroRttAccepted,
 };
 pub use crate::endpoint::{Accept, Endpoint, EndpointStats};
 pub use crate::event_stream::{Lagged, NatTraversalUpdates, ObservedExternalAddr, PathEvents};

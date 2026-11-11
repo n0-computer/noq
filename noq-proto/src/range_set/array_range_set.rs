@@ -1,7 +1,9 @@
-use std::cmp::Ordering;
-use std::fmt::{self, Write};
-use std::iter::Sum;
-use std::ops::{Add, Range, Sub};
+use core::{
+    cmp::Ordering,
+    fmt::{self, Write},
+    iter::Sum,
+    ops::{Add, Range, Sub},
+};
 
 use tinyvec::TinyVec;
 
