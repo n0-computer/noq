@@ -172,22 +172,6 @@ enum BbrState {
     ProbeRtt,
 }
 
-/// Ack phases used during ProbeBW states
-/// equivalent to BBR.ack_phase states <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-06.html#section-2.14>
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-enum AckPhase {
-    /// equivalent to ACKS_INIT
-    Init,
-    /// equivalent to ACKS_PROBE_STARTING
-    ProbeStarting,
-    /// equivalent to ACKS_PROBE_STOPPING
-    ProbeStopping,
-    /// equivalent to ACKS_REFILLING
-    Refilling,
-    /// equivalent to ACKS_PROBE_FEEDBACK
-    ProbeFeedback,
-}
-
 /// Description of a packet for the purposes of analysis through BBR3
 /// all volumes of data use bytes, all rates of data use bytes/sec
 /// equivalent to P <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-4.1.2.1.2>
@@ -534,10 +518,13 @@ pub struct Bbr3 {
     probe_up_acked_per_inc: u64,
     /// equivalent to BBR.cycle_stamp: timestamp when we start probing down state
     cycle_stamp: Option<Instant>,
-    /// equivalent to BBR.ack_phase: ACK phase during probing states
-    ack_phase: AckPhase,
-    /// equivalent to BBR.is_bw_probe_sample <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-06.html#section-2.14>
-    bw_probe_samples: bool,
+    /// equivalent to BBR.is_bw_probe_stopping: the flow has stopped probing bandwidth but is
+    /// still receiving ACK feedback from the probe.
+    /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-2.14>
+    is_bw_probe_stopping: bool,
+    /// equivalent to BBR.check_probe_loss: losses are checked as feedback from a bandwidth probe.
+    /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-2.14>
+    check_probe_loss: bool,
     /// equivalent to BBR.loss_round_delivered: C.delivered during the first loss of the round
     loss_round_delivered: u64,
     /// equivalent to BBR.loss_in_round: flag set to true when loss occurs during the round
@@ -707,8 +694,8 @@ impl Bbr3 {
             bw_probe_up_acked: 0,
             probe_up_acked_per_inc: 0,
             cycle_stamp: None,
-            ack_phase: AckPhase::Init,
-            bw_probe_samples: false,
+            is_bw_probe_stopping: false,
+            check_probe_loss: false,
             loss_events_in_round: 0,
             last_lost_packet: None,
             recovery_start_time: None,
@@ -1008,7 +995,7 @@ impl Bbr3 {
             BbrState::ProbeBw(ProbeBwSubstate::Cruise) if self.maybe_enter_probe_bw_refill(now) => {
             }
             BbrState::ProbeBw(ProbeBwSubstate::Refill) if self.round_start => {
-                self.bw_probe_samples = true;
+                self.check_probe_loss = true;
                 self.start_probe_bw_up();
             }
             BbrState::ProbeBw(ProbeBwSubstate::Up) if self.maybe_go_down() => {
@@ -1023,12 +1010,9 @@ impl Bbr3 {
     /// The probe's feedback ends once, on the first round after it stops, so later losses are not
     /// taken as probe feedback and later rounds do not age the max-bw window again.
     fn adapt_long_term_model(&mut self, newly_acked: u64) {
-        if self.ack_phase == AckPhase::ProbeStarting && self.round_start {
-            self.ack_phase = AckPhase::ProbeFeedback;
-        }
-        if self.ack_phase == AckPhase::ProbeStopping && self.round_start {
-            self.bw_probe_samples = false;
-            self.ack_phase = AckPhase::Init;
+        if self.is_bw_probe_stopping && self.round_start {
+            self.check_probe_loss = false;
+            self.is_bw_probe_stopping = false;
             if let BbrState::ProbeBw(_) = self.state
                 && let Some(rate_sample) = self.rs
                 && !rate_sample.is_app_limited
@@ -1097,7 +1081,7 @@ impl Bbr3 {
         self.reset_short_term_model();
         self.bw_probe_up_rounds = 0;
         self.bw_probe_up_acked = 0;
-        self.ack_phase = AckPhase::Refilling;
+        self.is_bw_probe_stopping = false;
         self.start_round();
         self.cwnd_gain = self.default_cwnd_gain;
         self.pacing_gain = self.default_pacing_gain;
@@ -1202,11 +1186,8 @@ impl Bbr3 {
             // pays: the round ending its feedback finishes inside ProbeRTT, and the round after
             // exit carries ProbeRTT's app-limited samples. Without this, a flow whose every probe
             // ProbeRTT interrupts keeps a stale maximum forever.
-            if let BbrState::ProbeBw(_) = self.state
-                && matches!(
-                    self.ack_phase,
-                    AckPhase::ProbeStarting | AckPhase::ProbeFeedback | AckPhase::ProbeStopping
-                )
+            if let BbrState::ProbeBw(substate) = self.state
+                && (substate == ProbeBwSubstate::Up || self.is_bw_probe_stopping)
                 && self.rs.is_some_and(|rs| !rs.is_app_limited)
             {
                 self.advance_max_bw_filter();
@@ -1214,7 +1195,7 @@ impl Bbr3 {
             self.enter_probe_rtt();
             self.save_cwnd();
             self.probe_rtt_done_stamp = None;
-            self.ack_phase = AckPhase::ProbeStopping;
+            self.is_bw_probe_stopping = true;
             self.start_round();
         }
         if self.state == BbrState::ProbeRtt {
@@ -1284,7 +1265,6 @@ impl Bbr3 {
 
     /// equivalent to BBRStartProbeBW_UP <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.3.3.6-4>
     fn start_probe_bw_up(&mut self) {
-        self.ack_phase = AckPhase::ProbeStarting;
         self.start_round();
         self.reset_full_bw();
         if let Some(rate_sample) = self.rs {
@@ -1553,7 +1533,7 @@ impl Bbr3 {
         let p = self.packets[space as usize][packet_index];
         self.enter_recovery(now, p.send_time);
         self.note_loss(space, p.packet_number);
-        if !self.bw_probe_samples {
+        if !self.check_probe_loss {
             self.packets[space as usize].remove(packet_index);
             return;
         }
@@ -1627,7 +1607,7 @@ impl Bbr3 {
             // The marked ACK's sample bounds the probe, since the event's own packet can be an
             // untracked ACK-only one. The probe's feedback can still be arriving after the ACK
             // itself ended the probe.
-            _ if self.bw_probe_samples => {
+            _ if self.check_probe_loss => {
                 self.handle_inflight_too_high(now, self.ack_rs);
             }
             _ => {}
@@ -1676,7 +1656,7 @@ impl Bbr3 {
     ///
     /// `rs` is the sample that showed it, if any.
     fn handle_inflight_too_high(&mut self, now: Instant, rs: Option<BbrRateSample>) {
-        self.bw_probe_samples = false;
+        self.check_probe_loss = false;
         if let Some(rate_sample) = rs
             && !rate_sample.is_app_limited
         {
@@ -1709,7 +1689,7 @@ impl Bbr3 {
         self.probe_up_acked_per_inc = u64::MAX;
         self.pick_probe_wait();
         self.cycle_stamp = Some(now);
-        self.ack_phase = AckPhase::ProbeStopping;
+        self.is_bw_probe_stopping = true;
         self.start_round();
         self.pacing_gain = self.probe_bw_down_pacing_gain;
         self.cwnd_gain = self.default_cwnd_gain;
@@ -3148,7 +3128,7 @@ mod test {
     ///     well below cwnd) so every fresh sample is app-limited, and 1-in-`LOSS_PERIOD` packets
     ///     are dropped -> a per-round loss rate (4%) above `BBR.LossThresh` (2%).
     ///
-    /// In PROBE_UP `bw_probe_samples` is true, so each lost packet is fed through
+    /// In PROBE_UP `check_probe_loss` is true, so each lost packet is fed through
     /// `process_lost_packet`; `is_inflight_too_high()` sees the loss exceed
     /// `LOSS_THRESH * tx_in_flight` and calls `handle_inflight_too_high`. Because
     /// the deciding sample is app-limited, the `!is_app_limited` guard in
@@ -7602,7 +7582,7 @@ mod test {
         let mut sim = scripted();
         sim.round(0, 100, 10 * MS);
         sim.bbr.full_bw_reached = true;
-        sim.bbr.bw_probe_samples = true;
+        sim.bbr.check_probe_loss = true;
         sim.bbr.enter_probe_bw(sim.at(10 * MS));
         sim
     }
@@ -7620,7 +7600,7 @@ mod test {
         assert_eq!(sim.bbr.state, BbrState::ProbeBw(ProbeBwSubstate::Cruise));
         assert_eq!(sim.bbr.cycle_count, cycle + 1);
         assert_eq!(sim.bbr.max_bw, 12_000_000.0);
-        assert!(!sim.bbr.bw_probe_samples);
+        assert!(!sim.bbr.check_probe_loss);
 
         // Lose 10% of the next round.
         let first = sim.pn;
@@ -7642,7 +7622,7 @@ mod test {
         sim.starve();
         sim.round(10 * MS, 100, 20 * MS);
         assert!(sim.bbr.rs.unwrap().is_app_limited);
-        assert!(!sim.bbr.bw_probe_samples);
+        assert!(!sim.bbr.check_probe_loss);
 
         for i in 1..5 {
             sim.round(10 * MS + i * 20 * MS, 100, 20 * MS);
@@ -7659,7 +7639,7 @@ mod test {
         let mut sim = probed();
         sim.bbr.start_probe_bw_up();
         sim.round(10 * MS, 100, 10 * MS);
-        assert_eq!(sim.bbr.ack_phase, AckPhase::ProbeFeedback);
+        assert_eq!(sim.bbr.state, BbrState::ProbeBw(ProbeBwSubstate::Up));
         let cycle = sim.bbr.cycle_count;
 
         // The min RTT expires on the next round.
@@ -7677,7 +7657,7 @@ mod test {
         }
         assert_eq!(sim.bbr.state, BbrState::ProbeBw(ProbeBwSubstate::Cruise));
         assert_eq!(sim.bbr.cycle_count, cycle + 1);
-        assert!(!sim.bbr.bw_probe_samples);
+        assert!(!sim.bbr.check_probe_loss);
 
         for i in 0..5 {
             sim.round(now + i * 10 * MS, 100, 10 * MS);
@@ -7816,7 +7796,7 @@ mod test {
         sim.round(0, 10, 10 * MS);
         sim.bbr.full_bw_reached = true;
         sim.bbr.start_probe_bw_up();
-        sim.bbr.bw_probe_samples = true;
+        sim.bbr.check_probe_loss = true;
         sim.bbr.inflight_longterm = 100_000;
         sim.bbr.bdp = 10_000;
         sim.bbr.cwnd = 20_000;
@@ -7887,7 +7867,7 @@ mod test {
         sim.ack(14 * MS, [11], false);
         sim.bbr.start_probe_bw_down(sim.at(14 * MS));
         // The probe's feedback is still arriving, so a loss cuts the bound without a state change.
-        sim.bbr.bw_probe_samples = true;
+        sim.bbr.check_probe_loss = true;
         sim.lose(15 * MS, 10);
         // An ACK from the lost packet's flight cuts the window without ending the loss round.
         sim.ack(16 * MS, [12], false);
