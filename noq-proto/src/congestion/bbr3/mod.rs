@@ -1787,6 +1787,10 @@ impl Bbr3 {
     ) {
         let lost_bytes_64 = lost_bytes as u64;
         self.lost += lost_bytes_64;
+        // C.inflight excludes lost bytes, and the next ACK may come after the next send. Saturate
+        // because the transport also reports losses of packets this count may not include, such
+        // as padded ones that were not ack-eliciting.
+        self.inflight = self.inflight.saturating_sub(lost_bytes_64);
         let p_index_result =
             self.packets[space as usize].binary_search_by_key(&packet_number, |p| p.packet_number);
         if let Ok(p_index) = p_index_result {
@@ -7227,6 +7231,21 @@ mod test {
             assert_eq!(sim.bbr.rs.unwrap().is_app_limited, pn > 0, "packet {pn}");
             sim.starve();
         }
+    }
+
+    /// Losing the last packet in flight leaves the path idle, so the next burst restarts from
+    /// idle before any ACK arrives.
+    #[test]
+    fn losing_the_last_packet_restarts_from_idle() {
+        let mut sim = scripted();
+        sim.send(0, 2);
+        sim.starve();
+        sim.ack(10 * MS, [0], true);
+        sim.lose(20 * MS, 1);
+        sim.starve();
+
+        sim.send(30 * MS, 1);
+        assert!(sim.bbr.idle_restart);
     }
 
     /// An empty poll with the window full is window-limited, not starved.
