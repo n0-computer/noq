@@ -16,7 +16,7 @@ use crate::{
     Side::*,
     TransportConfig,
     cid_queue::CidQueue,
-    congestion::{PacketId, Space},
+    congestion::{Bbr3Config, ControllerFactory, PacketId, Space},
 };
 use crate::{
     ClosePathError, Dir, Event, PathAbandonReason, PathEvent, StreamAffinity, StreamEvent,
@@ -2756,5 +2756,47 @@ fn congestion_callbacks_stay_on_the_sending_path() -> TestResult {
         data_0_acked, 4,
         "every path controller resolves its own Data 0"
     );
+    Ok(())
+}
+
+/// Every path, including one opened after the handshake, paces Startup from its own measured
+/// RTT rather than the 1ms estimate its controller starts with. The transport records each RTT
+/// sample only after the ACK callbacks.
+#[test]
+fn paths_pace_startup_from_measured_rtt() -> TestResult {
+    let _guard = subscribe();
+    let factory = Arc::new(Bbr3Config::default());
+    let mut transport = TransportConfig::default();
+    transport.congestion_controller_factory(factory.clone());
+    let mut pair = ConnPair::builder()
+        .with_transport_cfg(transport)
+        .with_latency(Duration::from_millis(5))
+        .enable_multipath()
+        .connect();
+
+    let server_addr = pair.routes.public_server_addr();
+    let path1 = pair.open_path(
+        Client,
+        FourTuple::from_remote(server_addr),
+        PathStatus::Available,
+    )?;
+    pair.drive();
+
+    // The 10ms RTT gives a tenth of the 1ms placeholder rate. Half leaves room for Startup's
+    // bandwidth growth while staying far from the placeholder.
+    let initial = factory
+        .build(pair.time, 1200)
+        .metrics()
+        .pacing_rate
+        .unwrap();
+    for path in [PathId::ZERO, path1] {
+        let pacing = pair
+            .congestion_state(Client, path)
+            .unwrap()
+            .metrics()
+            .pacing_rate
+            .unwrap();
+        assert!(pacing < initial / 2, "{path:?} paces at {pacing} B/s");
+    }
     Ok(())
 }

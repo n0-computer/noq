@@ -458,6 +458,10 @@ pub struct Bbr3 {
     /// equivalent to BBR.full_bw_reached: A boolean that records whether BBR estimates that it has
     /// ever fully utilized its available bandwidth over the lifetime of the connection.
     full_bw_reached: bool,
+    /// Whether the pacing rate has been re-derived from a measured RTT, as Linux BBR's
+    /// `has_seen_rtt`. The initial rate assumes a 1ms RTT and Startup only raises it, so an
+    /// application-limited flow that never leaves Startup would keep it for its whole life.
+    has_seen_rtt: bool,
     /// equivalent to BBR.full_bw_now: A boolean that records whether BBR estimates that it has
     /// fully utilized its available bandwidth since it most recetly started looking.
     full_bw_now: bool,
@@ -664,6 +668,7 @@ impl Bbr3 {
             extra_acked_delivered: 0,
             extra_acked_filter: MaxFilter::new(EXTRA_ACKED_FILTER_LEN as u64),
             full_bw_reached: false,
+            has_seen_rtt: false,
             full_bw_now: false,
             full_bw: 0.0,
             full_bw_count: 0,
@@ -1452,10 +1457,25 @@ impl Bbr3 {
 
     /// equivalent to BBRSetPacingRateWithGain <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.6.2-7>
     fn set_pacing_rate_with_gain(&mut self, gain: f64) {
+        if !self.has_seen_rtt && self.min_rtt != Duration::from_secs(u64::MAX) {
+            self.init_pacing_rate_from_rtt();
+        }
         let rate = gain * self.bw * (100.0 - self.pacing_margin_percent) / 100.0;
         if self.full_bw_reached || rate > self.pacing_rate {
             self.pacing_rate = rate;
         }
+    }
+
+    /// equivalent to BBRInitPacingRate once an RTT is measured, as Linux BBR's
+    /// `bbr_init_pacing_rate_from_rtt`.
+    ///
+    /// BBR's own first RTT sample stands in for SRTT: the transport updates its estimator only
+    /// after the ACK callbacks, and before that the estimator holds just the configured initial
+    /// RTT. A zero RTT is floored at 1us, as Linux does.
+    fn init_pacing_rate_from_rtt(&mut self) {
+        self.has_seen_rtt = true;
+        let rtt = Ord::max(self.min_rtt, Duration::from_micros(1));
+        self.pacing_rate = self.startup_pacing_gain * self.initial_cwnd as f64 / rtt.as_secs_f64();
     }
 
     /// equivalent to BBRSetSendQuantum <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-06.html#section-5.6.3>
@@ -7296,6 +7316,54 @@ mod test {
         sim.ack(12 * MS, [2, 3, 4], false);
         assert!(sim.bbr.rs.unwrap().is_app_limited);
         assert_eq!(sim.bbr.app_limited, 0);
+    }
+
+    /// The Startup pacing rate a 12 KB initial window takes from its first measured RTT.
+    fn startup_rate(rtt_ns: u64) -> f64 {
+        STARTUP_PACING_GAIN * 12_000.0 / Duration::from_nanos(rtt_ns).as_secs_f64()
+    }
+
+    /// The first measured RTT, above or below 1ms, replaces the 1ms estimate of the initial
+    /// pacing rate, and the send quantum follows. `Sim::ack` leaves the RTT estimator untouched,
+    /// as the transport does until after the ACK callbacks.
+    #[test]
+    fn first_rtt_recalibrates_startup_pacing() {
+        for rtt_ns in [10 * MS, MS / 5] {
+            let mut sim = scripted();
+            sim.round(0, 1, rtt_ns);
+            assert_eq!(sim.bbr.pacing_rate, startup_rate(rtt_ns));
+            let quantum = (sim.bbr.pacing_rate / 1000.0) as u64;
+            assert_eq!(
+                sim.bbr.send_quantum,
+                quantum.clamp(2400, HIGH_PACE_MAX_QUANTUM)
+            );
+        }
+    }
+
+    /// A source that stays application-limited never leaves Startup, yet paces from its
+    /// measured RTT rather than the 1ms estimate.
+    #[test]
+    fn app_limited_startup_paces_from_measured_rtt() {
+        let mut sim = scripted();
+        for i in 0..100 {
+            sim.starve();
+            sim.round(i * 10 * MS, 2, 10 * MS);
+        }
+        assert_eq!(sim.bbr.state, BbrState::Startup);
+        assert_eq!(sim.bbr.pacing_rate, startup_rate(10 * MS));
+    }
+
+    /// Measured bandwidth still raises the recalibrated rate during Startup.
+    #[test]
+    fn startup_pacing_grows_past_measured_rtt() {
+        let mut sim = scripted();
+        for (i, count) in [1, 2, 4, 8, 16, 32].into_iter().enumerate() {
+            sim.round(i as u64 * 10 * MS, count, 10 * MS);
+        }
+        assert_eq!(sim.bbr.state, BbrState::Startup);
+        let rate = STARTUP_PACING_GAIN * sim.bbr.bw * (100.0 - PACING_MARGIN_PERCENT) / 100.0;
+        assert!(rate > startup_rate(10 * MS));
+        assert_eq!(sim.bbr.pacing_rate, rate);
     }
 
     /// A scripted `Sim` in PROBE_DOWN after a loss-free probe measured 12 MB/s over a 10ms RTT,
