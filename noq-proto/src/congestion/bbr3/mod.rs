@@ -535,9 +535,9 @@ pub struct Bbr3 {
     /// round, so the short-term model responds to them as it does to loss
     ce_in_round: bool,
     /// equivalent to BBR.loss_events_in_round: count of discontiguous loss events
-    /// observed in the current round trip, used by the STARTUP high-loss exit
-    /// (BBRStartupFullLossCnt criterion). Reset at each loss-round boundary.
-    /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-06.html#section-5.3.1.3>
+    /// observed in the current loss round, used by the STARTUP high-loss exit
+    /// (BBR.StartupFullLossCnt criterion). Reset at each loss-round boundary.
+    /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.3.1.3>
     loss_events_in_round: u64,
     /// `(space, packet number)` of the most recent packet counted into
     /// `loss_events_in_round`, used to collapse a contiguous run of lost packet numbers into
@@ -549,14 +549,13 @@ pub struct Bbr3 {
     /// losses of packets sent at or before it belong to the episode already underway.
     /// <https://datatracker.ietf.org/doc/html/rfc9002#section-7.3.2>
     recovery_start_time: Option<Instant>,
-    /// `round_count` when `recovery_start_time` was last set, used for the "in fast recovery for
-    /// at least one full packet-timed round trip" criterion of the STARTUP high-loss exit
-    /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-06.html#section-5.3.1.3>
-    recovery_start_round: u64,
-    /// Whether the connection is currently in fast recovery, the first criterion of the STARTUP
-    /// high-loss exit. Cleared once a packet sent after `recovery_start_time` is acknowledged.
-    /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-06.html#section-5.3.1.3>
+    /// Whether the connection is in fast recovery, the draft's InLossRecovery(). Cleared once an
+    /// ACK of a packet sent after `recovery_start_time` has been folded into the model.
+    /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.3.1.3>
     in_recovery: bool,
+    /// Set by an ACK of a packet sent after `recovery_start_time`, which ends the recovery
+    /// episode once the ACK has been processed.
+    ack_ends_recovery: bool,
     /// Whether BBR has responded to CE marks in the current recovery episode. It limits that
     /// response to once per episode, and a marked episode's congestion is real, so its losses
     /// are not undone as spurious.
@@ -701,8 +700,8 @@ impl Bbr3 {
             loss_events_in_round: 0,
             last_lost_packet: None,
             recovery_start_time: None,
-            recovery_start_round: 0,
             in_recovery: false,
+            ack_ends_recovery: false,
             ce_in_recovery: false,
             reno_rounds_bound: RENO_ROUNDS_BOUNDS[0],
             loss_round_delivered: 0,
@@ -890,44 +889,23 @@ impl Bbr3 {
         }
     }
 
-    /// equivalent to BBRCheckStartupHighLoss <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.3.1.3>
+    /// equivalent to BBRCheckStartupHighLoss <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.3.1.3>
+    ///
+    /// The draft's prose asks for a full round in fast recovery, but its pseudocode, like Linux,
+    /// checks only that the connection is in recovery when the loss round ends. In QUIC that ACK
+    /// usually also ends the recovery period, which is why `in_recovery` stays set until the ACK
+    /// has been folded into the model.
     fn check_startup_high_loss(&mut self) {
-        if self.full_bw_reached {
+        if self.full_bw_reached || !self.loss_round_start || !self.in_recovery {
             return;
         }
-
-        // All three criteria of section 5.3.1.3 must hold: at least one full packet-timed round
-        // trip spent in fast recovery, a round-trip loss rate above `LOSS_THRESH`
-        // (`is_inflight_too_high`), and at least `STARTUP_FULL_LOSS_CNT` discontiguous lost
-        // sequence ranges within that round trip.
-        if self.loss_round_start
-            && self.in_recovery_for_a_full_round()
-            && self.loss_events_in_round >= STARTUP_FULL_LOSS_CNT
-            && self.is_inflight_too_high()
-        {
-            let mut new_inflight_hi = self.bdp.max(self.inflight_latest);
-            if let Some(rate_sample) = self.rs
-                && new_inflight_hi < rate_sample.delivered
-            {
-                new_inflight_hi = rate_sample.delivered;
-            }
-            self.undo_state = Some(BbrState::Startup);
-            self.inflight_longterm = new_inflight_hi;
-            self.full_bw_reached = true;
-            self.full_bw_now = true;
+        if self.loss_events_in_round < STARTUP_FULL_LOSS_CNT || !self.is_inflight_too_high() {
+            return;
         }
-
-        if self.loss_round_start {
-            self.loss_events_in_round = 0;
-            self.last_lost_packet = None;
-        }
-    }
-
-    /// First criterion of BBRCheckStartupHighLoss: "the connection has been in fast recovery
-    /// for at least one full packet-timed round trip"
-    /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-06.html#section-5.3.1.3>
-    fn in_recovery_for_a_full_round(&self) -> bool {
-        self.in_recovery && self.round_count > self.recovery_start_round
+        self.undo_state = Some(BbrState::Startup);
+        self.full_bw_reached = true;
+        self.full_bw_now = true;
+        self.inflight_longterm = Ord::max(self.bdp, self.inflight_latest);
     }
 
     /// A packet was declared lost: enter fast recovery, unless that packet was sent at or before
@@ -941,16 +919,17 @@ impl Bbr3 {
         // and Linux's bbr_ssthresh, and would save a model this episode already cut.
         self.save_state_upon_loss();
         self.recovery_start_time = Some(now);
-        self.recovery_start_round = self.round_count;
         self.in_recovery = true;
+        self.ack_ends_recovery = false;
         self.ce_in_recovery = false;
     }
 
-    /// Fast recovery ends when a packet sent after it began is acknowledged.
+    /// Fast recovery ends when a packet sent after it began is acknowledged. The episode stays
+    /// open until the ACK has updated the model, so the model sees the recovery the ACK ends.
     /// <https://datatracker.ietf.org/doc/html/rfc9002#section-7.3.2>
     fn check_recovery_done(&mut self, sent: Instant) {
-        if self.recovery_start_time.is_some_and(|start| sent > start) {
-            self.in_recovery = false;
+        if self.in_recovery && self.recovery_start_time.is_some_and(|start| sent > start) {
+            self.ack_ends_recovery = true;
         }
     }
 
@@ -1255,7 +1234,14 @@ impl Bbr3 {
         {
             self.bw_latest = rate_sample.delivery_rate;
             self.inflight_latest = rate_sample.delivered;
+            self.reset_loss_events();
         }
+    }
+
+    /// Starts counting discontiguous loss events afresh, for a new loss round.
+    fn reset_loss_events(&mut self) {
+        self.loss_events_in_round = 0;
+        self.last_lost_packet = None;
     }
 
     /// equivalent to BBRBoundBWForModel <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.5.10.3-8>
@@ -1707,6 +1693,7 @@ impl Bbr3 {
     fn reset_congestion_signals(&mut self) {
         self.loss_in_round = false;
         self.ce_in_round = false;
+        self.reset_loss_events();
         self.bw_latest = 0.0;
         self.inflight_latest = 0;
     }
@@ -1845,6 +1832,14 @@ impl Bbr3 {
             }
         }
         let newly_acked = core::mem::take(&mut self.newly_acked);
+        self.fold_ack_into_model(newly_acked, now);
+        if core::mem::take(&mut self.ack_ends_recovery) {
+            self.in_recovery = false;
+        }
+    }
+
+    /// Generates this ACK's rate sample and runs the model and control steps with it once.
+    fn fold_ack_into_model(&mut self, newly_acked: u64, now: Instant) {
         // An ACK that delivered no tracked packet has no sample, and a finished one is never
         // folded twice.
         self.ack_rs = None;
@@ -1922,6 +1917,7 @@ impl Bbr3 {
         // packets declared lost. ProbeRTT's exit restores the rest.
         self.bound_cwnd_for_probe_rtt();
         self.loss_in_round = false;
+        self.reset_loss_events();
         self.reset_full_bw();
         self.bw_shortterm = [self.bw_shortterm, self.undo_bw_shortterm]
             .iter()
@@ -7521,6 +7517,44 @@ mod test {
         sim.ack(12 * MS, [2, 3, 4], false);
         assert!(sim.bbr.rs.unwrap().is_app_limited);
         assert_eq!(sim.bbr.app_limited, 0);
+    }
+
+    /// Startup exits on high loss once the loss round that saw it ends, even though the ACK that
+    /// ends the round also ends QUIC's recovery period.
+    ///
+    /// Eight separate holes appear while one round is in flight, and the packets sent after the
+    /// first of them see three of them lost: well over the 2 % loss threshold.
+    /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.3.1.3>
+    #[test]
+    fn startup_exits_on_high_loss_at_the_loss_round_end() {
+        let mut sim = scripted();
+        sim.round(0, 10, 10 * MS);
+        let a = sim.pn;
+        sim.send(20 * MS, 40);
+        let b = sim.pn;
+        sim.send(25 * MS, 20);
+
+        let lost_a: Vec<u64> = (0..5).map(|i| a + 8 * i).collect();
+        sim.ack(30 * MS, (a..b).filter(|pn| !lost_a.contains(pn)), false);
+        for &pn in &lost_a {
+            sim.lose(30 * MS, pn);
+        }
+        let c = sim.pn;
+        sim.send(31 * MS, 10);
+        let lost_b = [b, b + 5, b + 10];
+        sim.ack(35 * MS, (b..c).filter(|pn| !lost_b.contains(pn)), false);
+        for pn in lost_b {
+            sim.lose(35 * MS, pn);
+        }
+        assert_eq!(sim.bbr.state, BbrState::Startup);
+
+        sim.ack(41 * MS, c..c + 10, false);
+        // Nothing is queued, so Drain also ends on this ACK.
+        assert_ne!(sim.bbr.state, BbrState::Startup);
+        assert!(sim.bbr.full_bw_reached);
+        assert_eq!(sim.bbr.undo_state, Some(BbrState::Startup));
+        assert!(sim.bbr.inflight_longterm < u64::MAX);
+        assert!(!sim.bbr.in_recovery);
     }
 
     /// The Startup pacing rate a 12 KB initial window takes from its first measured RTT.
