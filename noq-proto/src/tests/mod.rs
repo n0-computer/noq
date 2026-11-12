@@ -53,6 +53,7 @@ use util::{
     server_config, server_config_with_cert, server_crypto_with_alpn, validate_incoming,
 };
 
+mod bbr3;
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 mod encode_decode;
 mod multipath;
