@@ -146,7 +146,8 @@ pub trait Controller: Send + Sync + core::fmt::Debug {
     /// lost.
     /// `lost_bytes` indicates how many bytes were lost. This value will be 0 for ECN triggers.
     /// `largest_lost` identifies the packet with the highest packet number in the congestion
-    /// event.
+    /// event, and `sent` is its send time. For ECN, that is the largest packet acknowledged by
+    /// the ACK whose CE count increased, and the event fires only on such an increase.
     ///
     /// Defaults to the deprecated [`Self::on_congestion_event`], dropping the space.
     fn on_congestion_event_space(

@@ -514,6 +514,9 @@ pub struct Bbr3 {
     /// equivalent to RS.has_data: true once the ACK being processed has delivered a tracked
     /// packet, so `rs` describes this ACK and is folded into the model when the ACK ends.
     rs_has_data: bool,
+    /// The last ACK's own rate sample, if it delivered a tracked packet. A CE event is reported
+    /// after its ACK ends and after loss detection, which rewrites `rs` per lost packet.
+    ack_rs: Option<BbrRateSample>,
     /// equivalent to RS.newly_acked, accumulated over the ACK being processed. It is passed to
     /// the ACK's model steps rather than kept in `rs`, so no later `set_cwnd` counts it again.
     newly_acked: u64,
@@ -539,6 +542,9 @@ pub struct Bbr3 {
     loss_round_delivered: u64,
     /// equivalent to BBR.loss_in_round: flag set to true when loss occurs during the round
     loss_in_round: bool,
+    /// equivalent to Linux BBRv3's `ecn_in_round`: set when CE marks are reported during the
+    /// round, so the short-term model responds to them as it does to loss
+    ce_in_round: bool,
     /// equivalent to BBR.loss_events_in_round: count of discontiguous loss events
     /// observed in the current round trip, used by the STARTUP high-loss exit
     /// (BBRStartupFullLossCnt criterion). Reset at each loss-round boundary.
@@ -562,6 +568,10 @@ pub struct Bbr3 {
     /// high-loss exit. Cleared once a packet sent after `recovery_start_time` is acknowledged.
     /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-06.html#section-5.3.1.3>
     in_recovery: bool,
+    /// Whether BBR has responded to CE marks in the current recovery episode. It limits that
+    /// response to once per episode, and a marked episode's congestion is real, so its losses
+    /// are not undone as spurious.
+    ce_in_recovery: bool,
     /// equivalent to T_reno_bound: round-trip bound for the Reno-coexistence probe timer,
     /// re-picked from [`RENO_ROUNDS_BOUNDS`] each time the probe wait is randomized
     /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-06.html#section-5.3.3.8.2>
@@ -688,6 +698,7 @@ impl Bbr3 {
             lost: 0,
             rs: None,
             rs_has_data: false,
+            ack_rs: None,
             newly_acked: 0,
             packets: Default::default(),
             rounds_since_bw_probe: 0,
@@ -703,9 +714,11 @@ impl Bbr3 {
             recovery_start_time: None,
             recovery_start_round: 0,
             in_recovery: false,
+            ce_in_recovery: false,
             reno_rounds_bound: RENO_ROUNDS_BOUNDS[0],
             loss_round_delivered: 0,
             loss_in_round: false,
+            ce_in_round: false,
             probe_rtt_done_stamp: None,
             probe_rtt_round_done: false,
             prior_cwnd: 0,
@@ -759,6 +772,7 @@ impl Bbr3 {
         }
         self.adapt_lower_bounds_from_congestion();
         self.loss_in_round = false;
+        self.ce_in_round = false;
     }
 
     /// equivalent to BBRUpdateMaxBw <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.5.5>
@@ -798,7 +812,7 @@ impl Bbr3 {
             | BbrState::ProbeBw(ProbeBwSubstate::Up)
             | BbrState::Startup => {}
             _ => {
-                if self.loss_in_round {
+                if self.loss_in_round || self.ce_in_round {
                     self.init_lower_bounds();
                     self.loss_lower_bounds();
                 }
@@ -940,6 +954,7 @@ impl Bbr3 {
         self.recovery_start_time = Some(now);
         self.recovery_start_round = self.round_count;
         self.in_recovery = true;
+        self.ce_in_recovery = false;
     }
 
     /// Fast recovery ends when a packet sent after it began is acknowledged.
@@ -1544,7 +1559,7 @@ impl Bbr3 {
             if self.is_inflight_too_high() {
                 rate_sample.tx_in_flight = self.inflight_at_loss(p.size as u64);
                 self.rs = Some(rate_sample);
-                self.handle_inflight_too_high(now);
+                self.handle_inflight_too_high(now, self.rs);
             }
         }
         self.packets[space as usize].remove(packet_index);
@@ -1558,9 +1573,7 @@ impl Bbr3 {
     /// number is not the successor of the previous one.
     /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-06.html#section-5.3.1.3>
     fn note_loss(&mut self, space: SpaceKind, packet_number: u64) {
-        if !self.loss_in_round {
-            self.loss_round_delivered = self.delivered;
-        }
+        self.start_congestion_round();
         self.loss_in_round = true;
         let continues_range = self
             .last_lost_packet
@@ -1569,6 +1582,51 @@ impl Bbr3 {
             self.loss_events_in_round = self.loss_events_in_round.saturating_add(1);
         }
         self.last_lost_packet = Some((space, packet_number));
+    }
+
+    /// Opens the loss round on its first congestion signal, loss or CE, as draft-06's NoteLoss
+    /// does for loss.
+    fn start_congestion_round(&mut self) {
+        if !self.loss_in_round && !self.ce_in_round {
+            self.loss_round_delivered = self.delivered;
+        }
+    }
+
+    /// Responds to newly reported CE marks as classic ECN: congestion that the bottleneck
+    /// signalled instead of dropping packets.
+    ///
+    /// Draft-06 section 3.7 requires treating CE as congestion without prescribing BBR's
+    /// response. As RFC 9002 reduces its window once per recovery period, this responds once per
+    /// recovery episode: Startup stops as it does on high loss, a bandwidth probe whose feedback
+    /// is arriving stops as it does when loss shows inflight too high, and every other state
+    /// lowers its short-term model at the end of the round, as it does for loss. A mark loses no
+    /// data, so it adds no lost bytes or loss events, and the transport reports only an increased
+    /// CE count, so old marks never repeat the response.
+    /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-06.html#section-3.7>
+    fn handle_ce(&mut self, now: Instant, sent: Instant) {
+        self.enter_recovery(now, sent);
+        if core::mem::replace(&mut self.ce_in_recovery, true) {
+            return;
+        }
+        self.start_congestion_round();
+        self.ce_in_round = true;
+        match self.state {
+            BbrState::Startup => {
+                // As Linux BBRv3's bbr_handle_queue_too_high_in_startup.
+                self.inflight_longterm = Ord::max(self.get_inflight(1.0), self.inflight_latest);
+                self.full_bw_reached = true;
+                self.full_bw_now = true;
+                self.enter_drain();
+            }
+            // The marked ACK's sample bounds the probe, since the event's own packet can be an
+            // untracked ACK-only one. The probe's feedback can still be arriving after the ACK
+            // itself ended the probe.
+            _ if self.bw_probe_samples => {
+                self.handle_inflight_too_high(now, self.ack_rs);
+            }
+            _ => {}
+        }
+        self.update_control_parameters(0);
     }
 
     /// equivalent to BBRSaveStateUponLoss <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-06.html#section-5.5.11.1>
@@ -1609,9 +1667,11 @@ impl Bbr3 {
     }
 
     /// equivalent to BBRHandleInflightTooHigh <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.5.10.2-1>
-    fn handle_inflight_too_high(&mut self, now: Instant) {
+    ///
+    /// `rs` is the sample that showed it, if any.
+    fn handle_inflight_too_high(&mut self, now: Instant, rs: Option<BbrRateSample>) {
         self.bw_probe_samples = false;
-        if let Some(rate_sample) = self.rs
+        if let Some(rate_sample) = rs
             && !rate_sample.is_app_limited
         {
             self.inflight_longterm = Ord::max(
@@ -1653,6 +1713,7 @@ impl Bbr3 {
     /// equivalent to BBRResetCongestionSignals <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.5.10.3-8>
     fn reset_congestion_signals(&mut self) {
         self.loss_in_round = false;
+        self.ce_in_round = false;
         self.bw_latest = 0.0;
         self.inflight_latest = 0;
     }
@@ -1791,6 +1852,7 @@ impl Bbr3 {
         let newly_acked = core::mem::take(&mut self.newly_acked);
         // An ACK that delivered no tracked packet has no sample, and a finished one is never
         // folded twice.
+        self.ack_rs = None;
         if !core::mem::take(&mut self.rs_has_data) {
             return;
         }
@@ -1809,6 +1871,7 @@ impl Bbr3 {
             rs.delivery_rate = rs.delivered as f64 / rs.interval.as_secs_f64();
         }
         self.rs = Some(rs);
+        self.ack_rs = Some(rs);
         self.update_model_and_state(rs.last_packet, newly_acked, now);
         self.update_control_parameters(newly_acked);
     }
@@ -1816,21 +1879,16 @@ impl Bbr3 {
     fn on_congestion_event(
         &mut self,
         now: Instant,
-        _sent: Instant,
+        sent: Instant,
         is_persistent_congestion: bool,
         is_ecn: bool,
-        lost_bytes: u64,
-        largest_lost_pn: u64,
-        space: SpaceKind,
+        _lost_bytes: u64,
+        _largest_lost_pn: u64,
+        _space: SpaceKind,
     ) {
-        // only process ecn here, regular packet loss is detected per packet in on_packet_lost.
+        // Loss is handled per packet in on_packet_lost, so only CE is handled here.
         if is_ecn {
-            self.lost += lost_bytes;
-            let p_index_result = self.packets[space as usize]
-                .binary_search_by_key(&largest_lost_pn, |p| p.packet_number);
-            if let Ok(p_index) = p_index_result {
-                self.process_lost_packet(p_index, space, now);
-            }
+            self.handle_ce(now, sent);
         }
         if is_persistent_congestion {
             self.cwnd = self.min_pipe_cwnd;
@@ -1858,7 +1916,12 @@ impl Bbr3 {
     }
 
     /// equivalent to BBRHandleSpuriousLossDetection: <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-06.html#section-5.5.11.2>
+    ///
+    /// CE marks in the episode confirm its congestion, so nothing is undone.
     fn on_spurious_congestion_event(&mut self) {
+        if self.ce_in_recovery {
+            return;
+        }
         self.restore_cwnd();
         // No ACK processing may follow to re-bound the window, as when the ACK covers only
         // packets declared lost. ProbeRTT's exit restores the rest.
@@ -2169,12 +2232,15 @@ mod test {
         pn: u64,
         send_ns: u64,
         ack_ns: u64,
+        /// whether the bottleneck marked the packet CE
+        ce: bool,
     }
 
     /// Single-bottleneck FIFO link simulator driving the real BBR
     /// `on_packet_sent`/`on_ack`/`on_end_acks` path against a constant bandwidth
     /// `bw`, constant propagation `rtt_ns`, and an infinite buffer (no loss).
-    /// Packets queue at the bottleneck and are served at `bw`. The sender always
+    /// Packets queue at the bottleneck and are served at `bw`, and are marked CE
+    /// past `ce_above_ns` of queueing delay if set. The sender always
     /// has data, paced at BBR's chosen rate, so it is cwnd-limited (never
     /// application-limited). Shared harness for the constant-link tests
     /// (A.1/A.3/A.5/A.8/A.9/A.10); tests needing loss, app-limiting, a mid-flight
@@ -2195,6 +2261,11 @@ mod test {
         ret_ns: u64,
         // bottleneck serialization time for one MSS-sized packet
         btl_service_ns: u64,
+        /// queueing delay above which the bottleneck marks packets CE, as a classic AQM does;
+        /// `None` never marks
+        ce_above_ns: Option<u64>,
+        /// the longest queueing delay a packet has met at the bottleneck
+        max_queue_ns: u64,
     }
 
     impl Sim {
@@ -2213,6 +2284,8 @@ mod test {
                 fwd_ns: rtt_ns / 2,
                 ret_ns: rtt_ns / 2,
                 btl_service_ns: (mss as f64 / bw * 1e9).round() as u64,
+                ce_above_ns: None,
+                max_queue_ns: 0,
             }
         }
 
@@ -2233,6 +2306,7 @@ mod test {
                     pn: self.pn,
                     send_ns: now_ns,
                     ack_ns: now_ns,
+                    ce: false,
                 });
                 self.pn += 1;
             }
@@ -2262,12 +2336,42 @@ mod test {
                 .on_end_acks(now, self.inflight, app_limited, Some(0), SpaceKind::Data);
         }
 
+        /// Deliver one ACK frame as [`Self::ack`] does, whose ECN counts report new CE marks. The
+        /// transport then reports a congestion event for the largest acknowledged packet.
+        fn ack_ce(&mut self, now_ns: u64, pns: impl IntoIterator<Item = u64>) {
+            let pns: Vec<u64> = pns.into_iter().collect();
+            let largest = *pns.iter().max().unwrap();
+            let sent_ns = self
+                .flight
+                .iter()
+                .find(|p| p.pn == largest)
+                .unwrap()
+                .send_ns;
+            self.ack(now_ns, pns, false);
+            self.bbr.on_congestion_event(
+                self.at(now_ns),
+                self.at(sent_ns),
+                false,
+                true,
+                0,
+                largest,
+                SpaceKind::Data,
+            );
+        }
+
         /// Send `count` packets at `now_ns` and acknowledge them in one ACK `rtt_ns` later: one
         /// round when nothing else is in flight.
         fn round(&mut self, now_ns: u64, count: u64, rtt_ns: u64) {
             let first = self.pn;
             self.send(now_ns, count);
             self.ack(now_ns + rtt_ns, first..self.pn, false);
+        }
+
+        /// [`Self::round`], with the ACK reporting CE marks.
+        fn round_ce(&mut self, now_ns: u64, count: u64, rtt_ns: u64) {
+            let first = self.pn;
+            self.send(now_ns, count);
+            self.ack_ce(now_ns + rtt_ns, first..self.pn);
         }
 
         /// Report an empty transmit poll that nothing held back, as the transport does.
@@ -2316,6 +2420,9 @@ mod test {
                     let finish = service_start + self.btl_service_ns;
                     self.btl_free_ns = finish;
                     let ack_ns = finish + self.ret_ns;
+                    let queue_ns = service_start - arrival;
+                    self.max_queue_ns = self.max_queue_ns.max(queue_ns);
+                    let ce = self.ce_above_ns.is_some_and(|limit| queue_ns > limit);
 
                     self.bbr.on_packet_sent(
                         self.base + Duration::from_nanos(send_ns),
@@ -2328,6 +2435,7 @@ mod test {
                         pn: self.pn,
                         send_ns,
                         ack_ns,
+                        ce,
                     });
 
                     // pace the next send at BBR's chosen pacing rate
@@ -2358,6 +2466,18 @@ mod test {
                     );
                     self.bbr
                         .on_end_acks(now_at, self.inflight, false, Some(p.pn), SpaceKind::Data);
+                    // Each ACK covers one packet, so a marked one raises the CE count.
+                    if p.ce {
+                        self.bbr.on_congestion_event(
+                            now_at,
+                            send_at,
+                            false,
+                            true,
+                            0,
+                            p.pn,
+                            SpaceKind::Data,
+                        );
+                    }
 
                     if on_ack(&mut self.bbr, self.now_ns, self.inflight, p.pn).is_break() {
                         return;
@@ -7857,9 +7977,10 @@ mod test {
         assert_eq!(bbr.last_lost_packet, Some((SpaceKind::Handshake, 0)));
     }
 
-    /// An ECN congestion event names its largest packet by space, like a loss.
+    /// A CE mark loses nothing, so the packet an ECN congestion event names stays tracked,
+    /// where it was once removed as lost.
     #[test]
-    fn ecn_congestion_marks_the_packet_from_its_own_space() {
+    fn ce_keeps_the_marked_packet_tracked() {
         let mut bbr = Bbr3::new(Arc::new(Bbr3Config::default()), PACKET);
         let t0 = Instant::now();
         let at = |ms| t0 + Duration::from_millis(ms);
@@ -7870,11 +7991,281 @@ mod test {
         c.on_packet_space_sent(at(2), PACKET, HANDSHAKE_0);
         c.on_congestion_event_space(at(10), at(2), false, true, 0, HANDSHAKE_0);
 
-        assert_eq!(
-            tracked_send_ms(&bbr, t0),
-            [0, 1],
-            "only Handshake 0, sent at 2ms, is gone"
+        assert_eq!(tracked_send_ms(&bbr, t0), [0, 1, 2]);
+        assert_eq!(bbr.lost, 0);
+    }
+
+    /// Rounds of 1, 2, 4, ..., 128 packets, 20ms apart, each acknowledged 10ms after it is sent,
+    /// with every ACK reporting CE marks or none.
+    fn doubling(ce: bool) -> Sim {
+        let mut sim = scripted();
+        for i in 0..8 {
+            let (now, count) = (i * 20 * MS, 1 << i);
+            match ce {
+                true => sim.round_ce(now, count, 10 * MS),
+                false => sim.round(now, count, 10 * MS),
+            }
+        }
+        sim
+    }
+
+    /// CE marks stop Startup and cut the sending load while the unmarked control keeps
+    /// doubling. Before, both stayed in Startup with the same window and pacing rate.
+    #[test]
+    fn startup_stops_on_ce() {
+        let control = doubling(false);
+        assert_eq!(control.bbr.state, BbrState::Startup);
+        assert_eq!(control.bbr.window(), 318_000);
+        assert!(control.bbr.recovery_start_time.is_none());
+
+        // The scripted sender ignores the window, so the model still sees the doubled flight.
+        let marked = doubling(true);
+        assert!(marked.bbr.full_bw_reached);
+        assert_eq!(marked.bbr.state, BbrState::ProbeBw(ProbeBwSubstate::Cruise));
+        assert!(marked.bbr.window() * 2 < control.bbr.window());
+        assert!(marked.bbr.pacing_rate * 2.0 < control.bbr.pacing_rate);
+        // A mark is not a loss.
+        assert_eq!(marked.bbr.lost, 0);
+        assert_eq!(marked.bbr.loss_events_in_round, 0);
+    }
+
+    /// The first CE-bearing ACK in Startup drains at once, without waiting for the next ACK.
+    #[test]
+    fn startup_drains_on_first_ce() {
+        let mut sim = scripted();
+        sim.round(0, 10, 10 * MS);
+        let pacing = sim.bbr.pacing_rate;
+        sim.round_ce(10 * MS, 20, 10 * MS);
+        assert_eq!(sim.bbr.state, BbrState::Drain);
+        assert!(sim.bbr.pacing_rate < pacing);
+        let bdp = sim.bbr.get_inflight(1.0);
+        assert_eq!(sim.bbr.inflight_longterm, bdp);
+    }
+
+    /// CE ends a bandwidth probe as too much loss does, bounding inflight by the flight that drew
+    /// the marks; the unmarked control keeps probing.
+    #[test]
+    fn probe_up_stops_on_ce() {
+        let mut control = probing_up();
+        control.ack(20 * MS, 10..20, false);
+        assert_eq!(control.bbr.state, BbrState::ProbeBw(ProbeBwSubstate::Up));
+
+        let mut marked = probing_up();
+        marked.ack_ce(20 * MS, 10..20);
+        assert_eq!(marked.bbr.state, BbrState::ProbeBw(ProbeBwSubstate::Down));
+        // Packet 19 was sent with ten packets in flight.
+        assert_eq!(marked.bbr.inflight_longterm, 12_000);
+        assert!(marked.bbr.window() <= 12_000);
+        assert!(marked.bbr.window() < control.bbr.window());
+        assert!(marked.bbr.pacing_rate < control.bbr.pacing_rate);
+    }
+
+    /// The transport names the ACK's largest packet, which can be an ACK-only packet BBR never
+    /// tracked; the probe is still bounded, by the ACK's rate sample.
+    #[test]
+    fn probe_up_ce_on_an_untracked_packet_bounds_inflight() {
+        let mut sim = probing_up();
+        sim.ack(20 * MS, 10..20, false);
+        let now = sim.at(20 * MS);
+        sim.bbr
+            .on_congestion_event(now, now, false, true, 0, 1000, SpaceKind::Data);
+        assert_eq!(sim.bbr.state, BbrState::ProbeBw(ProbeBwSubstate::Down));
+        assert_eq!(sim.bbr.inflight_longterm, 12_000);
+    }
+
+    /// CE on the ACK that itself ends the probe still bounds it, as the probe's feedback is
+    /// still arriving.
+    #[test]
+    fn ce_on_the_probe_ending_ack_bounds_inflight() {
+        let mut sim = probing_up();
+        // This ACK finds the bandwidth plateau and leaves ProbeUp before its CE is reported.
+        sim.bbr.full_bw_now = true;
+        sim.ack_ce(20 * MS, 10..20);
+        assert_eq!(sim.bbr.state, BbrState::ProbeBw(ProbeBwSubstate::Down));
+        assert_eq!(sim.bbr.inflight_longterm, 12_000);
+    }
+
+    /// CE on an ACK of only untracked packets stops the probe without bounding it by an older
+    /// ACK's sample.
+    #[test]
+    fn ce_without_a_sample_keeps_the_bound() {
+        let mut sim = probing_up();
+        let now = sim.at(20 * MS);
+        sim.bbr
+            .on_end_acks(now, sim.inflight, false, Some(1000), SpaceKind::Data);
+        sim.bbr
+            .on_congestion_event(now, now, false, true, 0, 1000, SpaceKind::Data);
+        assert_eq!(sim.bbr.state, BbrState::ProbeBw(ProbeBwSubstate::Down));
+        assert_eq!(sim.bbr.inflight_longterm, 100_000);
+    }
+
+    /// The transport detects losses between an ACK and its CE event. A loss too small to show
+    /// inflight too high rewrites `rs` with the lost packet's flight, and CE still bounds the
+    /// probe by the marked ACK's own sample.
+    #[test]
+    fn ce_after_loss_detection_bounds_by_the_ack_sample() {
+        let mut sim = probing_up();
+        // Packet 109 is sent with 100 packets in flight, so losing it alone stays under
+        // LOSS_THRESH.
+        sim.send(10 * MS, 90);
+        sim.ack(20 * MS, 10..20, false);
+        sim.lose(20 * MS, 109);
+        assert_eq!(sim.bbr.state, BbrState::ProbeBw(ProbeBwSubstate::Up));
+        let now = sim.at(20 * MS);
+        sim.bbr
+            .on_congestion_event(now, sim.at(10 * MS), false, true, 0, 19, SpaceKind::Data);
+        assert_eq!(sim.bbr.state, BbrState::ProbeBw(ProbeBwSubstate::Down));
+        // Packet 19 was sent with ten packets in flight.
+        assert_eq!(sim.bbr.inflight_longterm, 12_000);
+    }
+
+    /// A scripted `Sim` cruising after a loss-free probe of 12 MB/s over a 10ms RTT.
+    fn cruising() -> Sim {
+        let mut sim = probed();
+        for i in 0..5 {
+            sim.round(10 * MS + i * 20 * MS, 100, 20 * MS);
+        }
+        assert_eq!(sim.bbr.state, BbrState::ProbeBw(ProbeBwSubstate::Cruise));
+        sim
+    }
+
+    /// CE while cruising lowers the short-term model when the round ends, as loss does.
+    #[test]
+    fn cruise_lowers_short_term_model_on_ce() {
+        let mut control = cruising();
+        control.round(110 * MS, 100, 20 * MS);
+        control.round(130 * MS, 100, 20 * MS);
+        assert_eq!(control.bbr.inflight_shortterm, u64::MAX);
+
+        let mut marked = cruising();
+        marked.round_ce(110 * MS, 100, 20 * MS);
+        marked.round(130 * MS, 100, 20 * MS);
+        assert_eq!(marked.bbr.state, BbrState::ProbeBw(ProbeBwSubstate::Cruise));
+        assert!(marked.bbr.inflight_shortterm < u64::MAX);
+        assert!(marked.bbr.window() < control.bbr.window());
+    }
+
+    /// Several ACKs reporting CE in one recovery episode respond as one does, even once the
+    /// first has ended the probe; a mark on a packet sent after the episode began responds
+    /// again.
+    #[test]
+    fn ce_responds_once_per_recovery_episode() {
+        let mut once = probing_up();
+        let mut several = probing_up();
+        once.ack_ce(20 * MS, 10..15);
+        several.ack_ce(20 * MS, 10..15);
+        once.ack(21 * MS, 15..20, false);
+        several.ack_ce(21 * MS, 15..20);
+        for sim in [&mut once, &mut several] {
+            sim.round(21 * MS, 10, 10 * MS);
+            sim.round(31 * MS, 10, 10 * MS);
+        }
+        assert_eq!(several.bbr.inflight_shortterm, once.bbr.inflight_shortterm);
+        assert_eq!(several.bbr.window(), once.bbr.window());
+
+        // The next marked round is a new episode.
+        let cut = several.bbr.inflight_shortterm;
+        several.round_ce(41 * MS, 10, 10 * MS);
+        several.round(51 * MS, 10, 10 * MS);
+        assert!(several.bbr.inflight_shortterm < cut);
+    }
+
+    /// CE during ProbeRTT neither raises its window nor delays its exit.
+    #[test]
+    fn probe_rtt_holds_on_ce() {
+        let run = |ce: bool| {
+            let mut sim = probing_rtt();
+            let window = sim.bbr.window();
+            match ce {
+                true => sim.round_ce(20 * MS, 4, 10 * MS),
+                false => sim.round(20 * MS, 4, 10 * MS),
+            }
+            assert!(sim.bbr.window() <= window);
+            let mut now = 30 * MS;
+            while sim.bbr.state == BbrState::ProbeRtt {
+                sim.round(now, 4, 10 * MS);
+                now += 10 * MS;
+                assert!(now < 1000 * MS, "ProbeRTT never ended");
+            }
+            assert_eq!(sim.bbr.state, BbrState::ProbeBw(ProbeBwSubstate::Cruise));
+            now
+        };
+        assert_eq!(run(true), run(false));
+    }
+
+    /// CE on the ACK that ends a loss's round still stops Startup, though the loss began the
+    /// recovery episode, and declaring that loss spurious undoes neither. The mark adds no lost
+    /// bytes.
+    #[test]
+    fn ce_with_loss_survives_spurious_undo() {
+        let mut sim = scripted();
+        sim.round(0, 10, 10 * MS);
+        let first = sim.pn;
+        sim.send(10 * MS, 20);
+        sim.lose(15 * MS, first);
+        sim.ack_ce(20 * MS, first + 1..sim.pn);
+        assert_ne!(sim.bbr.state, BbrState::Startup);
+        assert_eq!(sim.bbr.lost, PACKET as u64);
+        let (window, bound) = (sim.bbr.window(), sim.bbr.inflight_longterm);
+
+        sim.bbr.on_spurious_congestion_event();
+        assert_ne!(sim.bbr.state, BbrState::Startup);
+        assert!(sim.bbr.full_bw_reached);
+        assert_eq!(sim.bbr.window(), window);
+        assert_eq!(sim.bbr.inflight_longterm, bound);
+    }
+
+    /// A 10 Mbit/s link with a 20ms RTT, a 25,000-byte BDP.
+    const LINK_BW: f64 = 1_250_000.0;
+    const LINK_RTT: u64 = 20 * MS;
+
+    /// Runs `sim` until `until_ns`, returning the bytes delivered meanwhile.
+    fn run_until(sim: &mut Sim, until_ns: u64) -> u64 {
+        let start = sim.bbr.delivered;
+        sim.run(
+            10_000_000,
+            |_| ControlFlow::Continue(()),
+            |_, now_ns, _, _| match now_ns >= until_ns {
+                true => ControlFlow::Break(()),
+                false => ControlFlow::Continue(()),
+            },
         );
+        sim.bbr.delivered - start
+    }
+
+    /// A bottleneck that marks CE above 5ms of queue, a quarter of the RTT, holds a shorter
+    /// queue than the unmarked control at nearly the same goodput. Once marking stops, the flow
+    /// regains the control's rate.
+    #[test]
+    fn sustained_ce_bounds_the_queue_and_recovers() {
+        const SEC: u64 = 1_000_000_000;
+        let config = || Bbr3Config {
+            probe_rng_seed: Some([7; 16]),
+            ..Bbr3Config::default()
+        };
+        let mut control = Sim::new(config(), 1200, LINK_BW, LINK_RTT);
+        let mut marked = Sim::new(config(), 1200, LINK_BW, LINK_RTT);
+        marked.ce_above_ns = Some(5 * MS);
+
+        // Startup and its drain.
+        run_until(&mut control, SEC);
+        run_until(&mut marked, SEC);
+        control.max_queue_ns = 0;
+        marked.max_queue_ns = 0;
+
+        let control_bytes = run_until(&mut control, 11 * SEC);
+        let marked_bytes = run_until(&mut marked, 11 * SEC);
+        // Measured at 19ms for the control and 11ms marked.
+        assert!(control.bbr.recovery_start_time.is_none());
+        assert!(marked.bbr.recovery_start_time.is_some());
+        assert!(marked.max_queue_ns * 4 < control.max_queue_ns * 3);
+        assert!(marked_bytes as f64 > 0.9 * control_bytes as f64);
+
+        marked.ce_above_ns = None;
+        run_until(&mut control, 21 * SEC);
+        run_until(&mut marked, 21 * SEC);
+        assert!(marked.bbr.max_bw > 0.9 * control.bbr.max_bw);
+        assert_eq!(marked.bbr.inflight_shortterm, u64::MAX);
     }
 
     /// A controller that wraps BBR and forwards the deprecated pn-only callbacks still drives it:

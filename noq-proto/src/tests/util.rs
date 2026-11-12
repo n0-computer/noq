@@ -58,6 +58,9 @@ pub(super) struct Pair {
     pub(super) mtu: usize,
     /// Simulates explicit congestion notification
     pub(super) congestion_experienced: bool,
+    /// Replaces the ECN codepoint of every delivered datagram after any marking, as a path that
+    /// bleaches the field (`Some(None)`) or re-marks it
+    pub(super) rewrite_ecn: Option<Option<EcnCodepoint>>,
     /// Number of spin bit flips
     pub(super) spins: u64,
     /// The routing table used for resolving addresses observed for incoming packets
@@ -115,6 +118,7 @@ impl Pair {
             spins: 0,
             last_spin: false,
             congestion_experienced: false,
+            rewrite_ecn: None,
             routes: BasicRouting {
                 client_addr,
                 server_addr,
@@ -150,6 +154,7 @@ impl Pair {
             spins: 0,
             last_spin: false,
             congestion_experienced: false,
+            rewrite_ecn: None,
             routes: BasicRouting {
                 client_addr: Self::CLIENT_ADDR,
                 server_addr: Self::SERVER_ADDR,
@@ -228,10 +233,12 @@ impl Pair {
                     recv_time,
                     congestion_experienced,
                 } => {
-                    let ecn = set_congestion_experienced(
-                        packet.ecn,
-                        self.congestion_experienced || congestion_experienced,
-                    );
+                    let ecn = self.rewrite_ecn.unwrap_or_else(|| {
+                        set_congestion_experienced(
+                            packet.ecn,
+                            self.congestion_experienced || congestion_experienced,
+                        )
+                    });
                     self.server.inbound.push(
                         recv_time,
                         Inbound {
@@ -266,10 +273,12 @@ impl Pair {
                     recv_time,
                     congestion_experienced,
                 } => {
-                    let ecn = set_congestion_experienced(
-                        packet.ecn,
-                        self.congestion_experienced || congestion_experienced,
-                    );
+                    let ecn = self.rewrite_ecn.unwrap_or_else(|| {
+                        set_congestion_experienced(
+                            packet.ecn,
+                            self.congestion_experienced || congestion_experienced,
+                        )
+                    });
                     self.client.inbound.push(
                         recv_time,
                         Inbound {
@@ -1718,7 +1727,7 @@ pub(super) enum Routing {
     Basic(BasicRouting),
     SimpleFirewall(SimpleFirewallRouting),
     ManyToMany(ManyToManyRouting),
-    BwLimited(BwLimitedRouting),
+    BwLimited(Box<BwLimitedRouting>),
 }
 
 impl Routing {
@@ -1764,6 +1773,13 @@ impl Routing {
         match self {
             Self::Basic(inner) => inner,
             _ => panic!("cast to BasicRouting failed, a different routing table is set"),
+        }
+    }
+
+    pub(super) fn as_bw_limited(&self) -> &BwLimitedRouting {
+        match self {
+            Self::BwLimited(inner) => inner,
+            _ => panic!("cast to BwLimitedRouting failed, a different routing table is set"),
         }
     }
 
@@ -2362,13 +2378,15 @@ pub(super) struct BwLimitConfig {
     ///
     /// Once the queue exceeds this, packets are tail-dropped.
     pub(super) buffer_size: u32,
+    /// Whether packets are marked CE once the queue is half full, as a classic AQM does.
+    pub(super) marks_ce: bool,
     /// The one-way latency of the simulated link, applied to both directions.
     pub(super) latency: Duration,
 }
 
 impl From<BwLimitedRouting> for Routing {
     fn from(value: BwLimitedRouting) -> Self {
-        Self::BwLimited(value)
+        Self::BwLimited(Box::new(value))
     }
 }
 
@@ -2382,15 +2400,21 @@ impl BwLimitedRouting {
         let BwLimitConfig {
             bytes_per_second,
             buffer_size,
+            marks_ce,
             latency,
         } = config;
         Self {
             client_addr,
             server_addr,
-            limiter_client_to_server: Limiter::new(bytes_per_second, buffer_size, now),
-            limiter_server_to_client: Limiter::new(bytes_per_second, buffer_size, now),
+            limiter_client_to_server: Limiter::new(bytes_per_second, buffer_size, marks_ce, now),
+            limiter_server_to_client: Limiter::new(bytes_per_second, buffer_size, marks_ce, now),
             latency,
         }
+    }
+
+    /// What the client-to-server queue has seen.
+    pub(super) fn client_to_server(&self) -> &QueueStats {
+        &self.limiter_client_to_server.stats
     }
 
     pub(super) fn set_latency(&mut self, latency: Duration) {
@@ -2444,15 +2468,42 @@ impl BwLimitedRouting {
     }
 }
 
+/// What a [`BwLimitedRouting`] queue has seen.
+#[derive(Debug, Default, Clone)]
+pub(super) struct QueueStats {
+    /// Packets tail-dropped
+    pub(super) dropped: u64,
+    /// Packets marked CE
+    pub(super) marked: u64,
+    /// Packets queued for delivery
+    pub(super) queued: u32,
+    /// The queueing delay delivered packets met, summed
+    pub(super) total_delay: Duration,
+    /// The longest queueing delay a delivered packet met
+    pub(super) max_delay: Duration,
+    /// How long the link spent serving packets that queued past half full, the marking
+    /// threshold, so how long the sender took to answer congestion, summed over the run
+    pub(super) congested: Duration,
+}
+
+impl QueueStats {
+    /// The mean queueing delay delivered packets met.
+    pub(super) fn mean_delay(&self) -> Duration {
+        self.total_delay / self.queued.max(1)
+    }
+}
+
 #[derive(Debug)]
 struct Limiter {
     time_per_byte: Duration,
     finished_sending_at: Instant,
     max_queue: Duration,
+    marks_ce: bool,
+    stats: QueueStats,
 }
 
 impl Limiter {
-    fn new(bytes_per_second: u64, buffer_size: u32, now: Instant) -> Self {
+    fn new(bytes_per_second: u64, buffer_size: u32, marks_ce: bool, now: Instant) -> Self {
         const ONE_SEC_IN_NANOS: u64 = 1_000_000_000;
         let time_per_byte = Duration::from_nanos(ONE_SEC_IN_NANOS / bytes_per_second);
         let max_queue = buffer_size * time_per_byte;
@@ -2460,19 +2511,31 @@ impl Limiter {
             time_per_byte,
             max_queue,
             finished_sending_at: now,
+            marks_ce,
+            stats: QueueStats::default(),
         }
     }
 
     fn time_of_send(&mut self, now: Instant, num_bytes: usize) -> Option<(Instant, bool)> {
-        if self.finished_sending_at > now + self.max_queue {
+        let delay = self.finished_sending_at.saturating_duration_since(now);
+        if delay > self.max_queue {
+            self.stats.dropped += 1;
             return None;
         }
+        let service = num_bytes as u32 * self.time_per_byte;
+        self.stats.queued += 1;
+        self.stats.total_delay += delay;
+        self.stats.max_delay = self.stats.max_delay.max(delay);
+        if delay > self.max_queue / 2 {
+            self.stats.congested += service;
+        }
 
-        self.finished_sending_at =
-            cmp::max(now, self.finished_sending_at) + num_bytes as u32 * self.time_per_byte;
+        self.finished_sending_at = cmp::max(now, self.finished_sending_at) + service;
 
         // We mark the CE bit once the queue is 50% full
-        let experienced_congestion = self.finished_sending_at > now + self.max_queue / 2;
+        let experienced_congestion =
+            self.marks_ce && self.finished_sending_at > now + self.max_queue / 2;
+        self.stats.marked += experienced_congestion as u64;
 
         Some((self.finished_sending_at, experienced_congestion))
     }

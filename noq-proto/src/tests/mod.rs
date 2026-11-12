@@ -36,7 +36,7 @@ use crate::{
     StreamEvent, Transmit, TransportConfig, TransportError, TransportErrorCode, VarInt, WriteError,
     cid_generator::{ConnectionIdGenerator, RandomConnectionIdGenerator},
     coding::{Decodable, Encodable},
-    congestion::{Controller, ControllerFactory, ControllerMetrics, PacketId, Space},
+    congestion::{Bbr3Config, Controller, ControllerFactory, ControllerMetrics, PacketId, Space},
     crypto::rustls::{QuicServerConfig, configured_provider},
     frame::{self, Frame, FrameStruct},
     packet::{FixedLengthConnectionIdParser, Header, InitialHeader, PacketNumber, PartialDecode},
@@ -5348,6 +5348,64 @@ fn recorded_pair(factory: PacketRecorderFactory) -> (Pair, ConnectionHandle, Pac
     (pair, client_ch, log)
 }
 
+/// Counts the congestion events one controller's log reports for CE marks.
+fn ce_events(log: &PacketLog) -> usize {
+    log.lock()
+        .unwrap()
+        .iter()
+        .filter(|e| matches!(e, PacketEvent::Congestion { ecn: true, .. }))
+        .count()
+}
+
+/// ACKs keep carrying the CE count after the marks stop, but only an increase is a congestion
+/// event, so a controller never answers the same marks twice.
+#[test]
+fn old_ce_marks_report_no_new_congestion() {
+    let _guard = subscribe();
+    let (mut pair, client_ch, log) = recorded_pair(Default::default());
+    let s = pair.client_streams(client_ch).open(Dir::Uni).unwrap();
+    pair.client_send(client_ch, s)
+        .write(&[42; 8 * 1024])
+        .unwrap();
+    pair.congestion_experienced = true;
+    pair.drive_client();
+    pair.congestion_experienced = false;
+    pair.drive();
+    let marked = ce_events(&log);
+    assert!(marked > 0);
+
+    pair.client_send(client_ch, s)
+        .write(&[42; 64 * 1024])
+        .unwrap();
+    pair.drive();
+    assert_eq!(ce_events(&log), marked);
+    assert!(pair.client_conn_mut(client_ch).using_ecn());
+}
+
+/// A path that starts bleaching the ECN field or re-marking it ECT(1) reports no CE, though the
+/// bottleneck marks every packet, and re-marking fails validation, so the sender stops using
+/// ECN. Bleaching is only caught once an ACK's count increase falls short of its ACK ranges,
+/// which may not happen within this transfer.
+#[test]
+fn invalid_ecn_feedback_reports_no_congestion() {
+    let _guard = subscribe();
+    for rewrite in [None, Some(EcnCodepoint::Ect1)] {
+        let (mut pair, client_ch, log) = recorded_pair(Default::default());
+        assert!(pair.client_conn_mut(client_ch).using_ecn());
+        pair.congestion_experienced = true;
+        pair.rewrite_ecn = Some(rewrite);
+        let s = pair.client_streams(client_ch).open(Dir::Uni).unwrap();
+        pair.client_send(client_ch, s)
+            .write(&[42; 16 * 1024])
+            .unwrap();
+        pair.drive();
+        assert_eq!(ce_events(&log), 0, "{rewrite:?}");
+        if rewrite.is_some() {
+            assert!(!pair.client_conn_mut(client_ch).using_ecn());
+        }
+    }
+}
+
 /// Sends with `send`, lets it deliver, then sends again after an idle gap. With nothing in
 /// flight no ACK arrives during the gap, so the empty poll that follows the last ACK must tell
 /// the controller of starvation before the resumed send.
@@ -5629,12 +5687,87 @@ fn throughput() -> TestResult {
             BwLimitConfig {
                 bytes_per_second: BPS_LIMIT,
                 buffer_size: 50 * 1500, // buffer that fits ~50 full packets
+                marks_ce: true,
                 latency: Duration::from_millis(3),
             },
         ))
         .connect();
 
-    let mut bytes_to_send = TOTAL_BYTES;
+    let time = upload(&mut pair, TOTAL_BYTES)?;
+    let bytes_per_second = TOTAL_BYTES as f64 / time.as_secs_f64();
+    info!(?time, bytes_per_second);
+
+    let expected_bps = BPS_LIMIT as f64;
+    // Less than 2% deviation from the BPS limit
+    assert!(
+        (bytes_per_second - expected_bps).abs() / expected_bps < 0.05,
+        "deviated too far from expected throughput limit"
+    );
+
+    Ok(())
+}
+
+/// A 1 MB/s bottleneck with a 20ms RTT and a one-BDP buffer carries a BBR upload, once marking
+/// CE at half full and once only tail-dropping when full. BBR answers the marks, so the marking
+/// run holds a shorter queue without drops at the dropping run's goodput.
+#[test]
+fn bbr_marking_versus_dropping() -> TestResult {
+    const TOTAL_BYTES: usize = 4_000_000;
+    const BPS_LIMIT: u64 = 1_000_000;
+
+    let _guard = subscribe();
+    let run = |marks_ce| -> TestResult<_> {
+        let mut transport = TransportConfig::default();
+        transport.congestion_controller_factory(Arc::new(Bbr3Config::default()));
+        let mut pair = ConnPair::builder()
+            .with_transport_cfg(transport)
+            .with_routes(BwLimitedRouting::new(
+                Pair::CLIENT_ADDR,
+                Pair::SERVER_ADDR,
+                Instant::now(),
+                BwLimitConfig {
+                    bytes_per_second: BPS_LIMIT,
+                    buffer_size: 20_000,
+                    marks_ce,
+                    latency: Duration::from_millis(10),
+                },
+            ))
+            .connect();
+        let time = upload(&mut pair, TOTAL_BYTES)?;
+        let goodput = TOTAL_BYTES as f64 / time.as_secs_f64();
+        let ecn = pair.conn(Client).using_ecn();
+        let queue = pair.routes.as_bw_limited().client_to_server();
+        info!(
+            marks_ce,
+            ecn,
+            goodput,
+            mean_delay = ?queue.mean_delay(),
+            max_delay = ?queue.max_delay,
+            dropped = queue.dropped,
+            marked = queue.marked,
+            congested = ?queue.congested,
+        );
+        assert!(ecn);
+        Ok((goodput, queue.clone()))
+    };
+
+    let (marking_goodput, marking) = run(true)?;
+    let (dropping_goodput, dropping) = run(false)?;
+    // Measured at 3.6ms mean delay for marking and 5.9ms for dropping, 0.68s and 1.22s past the
+    // marking threshold, and 25 drops when dropping. The controller before classic ECN dropped
+    // 44 packets when marking, at 7.4ms and 1.6s.
+    assert!(marking.marked > 0);
+    assert_eq!(marking.dropped, 0);
+    assert!(dropping.dropped > 0);
+    assert!(marking.mean_delay() * 3 < dropping.mean_delay() * 2);
+    assert!(marking.congested * 3 < dropping.congested * 2);
+    assert!(marking_goodput > 0.9 * dropping_goodput);
+    Ok(())
+}
+
+/// Uploads `total` bytes from client to server, returning how long it took.
+fn upload(pair: &mut ConnPair, total: usize) -> TestResult<Duration> {
+    let mut bytes_to_send = total;
     let mut bytes_received = 0;
 
     let start = pair.time;
@@ -5661,20 +5794,8 @@ fn throughput() -> TestResult {
     }
 
     assert_eq!(bytes_to_send, 0);
-    assert_eq!(bytes_received, TOTAL_BYTES);
-
-    let time = pair.time.saturating_duration_since(start);
-    let bytes_per_second = TOTAL_BYTES as f64 / time.as_secs_f64();
-    info!(bytes_received, ?time, bytes_per_second);
-
-    let expected_bps = BPS_LIMIT as f64;
-    // Less than 2% deviation from the BPS limit
-    assert!(
-        (bytes_per_second - expected_bps).abs() / expected_bps < 0.05,
-        "deviated too far from expected throughput limit"
-    );
-
-    Ok(())
+    assert_eq!(bytes_received, total);
+    Ok(pair.time.saturating_duration_since(start))
 }
 
 const ZEROES: [u8; 10_000] = [0u8; 10_000];
