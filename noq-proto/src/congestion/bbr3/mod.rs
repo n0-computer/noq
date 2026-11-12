@@ -7496,4 +7496,63 @@ mod test {
         assert_eq!(bbr.delivered, 1200);
         assert_eq!(bbr.lost, 1200);
     }
+
+    /// A bulk flow keeps its bandwidth estimate through ProbeBW_CRUISE.
+    ///
+    /// CRUISE paces at `max_bw` less the 1% margin, so its samples sit just below the estimate.
+    /// The max-bw filter spans two probe cycles and advances once per cycle, so those samples
+    /// must not pull `max_bw` down before the next probe.
+    /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.5.6>
+    #[test]
+    fn bulk_max_bw_holds_through_probe_cruise() {
+        const MSS: u64 = 1200;
+        /// 100 Mbit/s
+        const BW: f64 = 12_500_000.0;
+        const RTT_NS: u64 = 40_000_000;
+
+        let config = Bbr3Config {
+            probe_rng_seed: Some([7; 16]),
+            ..Bbr3Config::default()
+        };
+        let mut sim = Sim::new(config, MSS, BW, RTT_NS);
+        let mut probed_up = false;
+        let mut cruise_entry_cycle = None;
+        let mut lowest_cruise_max_bw = f64::INFINITY;
+        let mut cruise_acks = 0u64;
+        sim.run(
+            2_000_000,
+            |_| ControlFlow::Continue(()),
+            |bbr, _now_ns, _inflight, _pn| {
+                match bbr.state {
+                    BbrState::ProbeBw(ProbeBwSubstate::Up) => probed_up = true,
+                    BbrState::ProbeBw(ProbeBwSubstate::Cruise) if probed_up => {
+                        cruise_entry_cycle.get_or_insert(bbr.cycle_count);
+                        lowest_cruise_max_bw = lowest_cruise_max_bw.min(bbr.max_bw);
+                        cruise_acks += 1;
+                    }
+                    _ if cruise_entry_cycle.is_some() => return ControlFlow::Break(()),
+                    _ => {}
+                }
+                ControlFlow::Continue(())
+            },
+        );
+
+        let entry_cycle = cruise_entry_cycle.expect("never cruised after a probe");
+        assert!(
+            cruise_acks > 1000,
+            "cruise too short to test: {cruise_acks} ACKs"
+        );
+        assert!(
+            sim.bbr.cycle_count <= entry_cycle + 1,
+            "max-bw filter advanced {} times in one CRUISE (max_bw fell to {:.3} of the \
+             bottleneck)",
+            sim.bbr.cycle_count - entry_cycle,
+            lowest_cruise_max_bw / BW
+        );
+        assert!(
+            lowest_cruise_max_bw >= 0.98 * BW,
+            "max_bw decayed to {lowest_cruise_max_bw} ({:.3} of the bottleneck) in CRUISE",
+            lowest_cruise_max_bw / BW
+        );
+    }
 }
