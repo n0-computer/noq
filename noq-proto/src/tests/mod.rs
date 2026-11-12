@@ -5062,6 +5062,7 @@ enum PacketEvent {
     EndAcks {
         in_flight: u64,
     },
+    Spurious,
 }
 
 type PacketLog = Arc<Mutex<Vec<PacketEvent>>>;
@@ -5129,6 +5130,10 @@ impl Controller for PacketRecorder {
         _largest_packet_num_acked: Option<u64>,
     ) {
         self.push(PacketEvent::EndAcks { in_flight });
+    }
+
+    fn on_spurious_congestion_event(&mut self) {
+        self.push(PacketEvent::Spurious);
     }
 
     fn on_mtu_update(&mut self, _new_mtu: u16) {}
@@ -5223,7 +5228,9 @@ fn check_packet_identity(log: &PacketLog) -> Vec<PacketEvent> {
                     "{largest:?} congested but not lost"
                 );
             }
-            PacketEvent::AppLimited { .. } | PacketEvent::EndAcks { .. } => {}
+            PacketEvent::AppLimited { .. }
+            | PacketEvent::EndAcks { .. }
+            | PacketEvent::Spurious => {}
         }
     }
     events
@@ -5492,6 +5499,66 @@ fn ack_losses_precede_the_end_of_the_ack() {
             .expect("the ACK ended");
     // Nothing else is in flight once the lost packet no longer counts.
     assert_matches!(events[end], PacketEvent::EndAcks { in_flight: 0 });
+}
+
+/// A late ACK-only packet does not raise a spurious congestion event.
+///
+/// An ACK-only packet carries no congestion signal when it is lost, so the transport raises no
+/// congestion event for it. Its late arrival must not declare a spurious one either, which would
+/// make a controller undo an older, real episode.
+#[test]
+fn late_ack_only_packet_is_not_a_spurious_loss() {
+    let _guard = subscribe();
+    let factory = Arc::new(PacketRecorderFactory::default());
+    let mut transport = TransportConfig::default();
+    transport.congestion_controller_factory(factory.clone());
+    let transport = Arc::new(transport);
+    let mut server_cfg = server_config();
+    server_cfg.transport = transport.clone();
+    let mut pair = Pair::new(Default::default(), server_cfg);
+    let mut client_cfg = client_config();
+    client_cfg.transport = transport;
+    let (client_ch, server_ch) = pair.connect_with(client_cfg);
+    let log = factory.logs.lock().unwrap()[0].clone();
+    pair.drive();
+
+    // The client acknowledges the server's data with an ACK-only packet, which is held back.
+    let s = pair.server_streams(server_ch).open(Dir::Uni).unwrap();
+    pair.server_send(server_ch, s).write(&[42; 100]).unwrap();
+    pair.drive_server();
+    pair.drive_client();
+    pair.time += Duration::from_millis(100);
+    pair.drive_client();
+    let (_, ack_only) = pair
+        .server
+        .inbound
+        .pop_last()
+        .expect("the client sent an ACK");
+    let before = log.lock().unwrap().len();
+
+    // Later data from the client is acknowledged, so the ACK-only packet is declared lost.
+    let s = pair.client_streams(client_ch).open(Dir::Uni).unwrap();
+    for _ in 0..4 {
+        pair.client_send(client_ch, s).write(&[42; 1000]).unwrap();
+        pair.drive_client();
+    }
+    pair.drive();
+    assert!(
+        pair.client_conn_mut(client_ch).stats().lost_packets > 0,
+        "the ACK-only packet was not declared lost"
+    );
+
+    // It arrives after all, and the server's next ACK covers it.
+    let now = pair.time;
+    pair.server.inbound.push(now, ack_only);
+    pair.client_send(client_ch, s).write(&[42; 1000]).unwrap();
+    pair.drive();
+
+    let events = log.lock().unwrap()[before..].to_vec();
+    assert!(
+        !events.iter().any(|e| matches!(e, PacketEvent::Spurious)),
+        "a late ACK-only packet raised a spurious congestion event: {events:?}"
+    );
 }
 
 #[test]

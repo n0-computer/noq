@@ -3550,12 +3550,17 @@ impl Connection {
                 };
                 path.congestion.on_packet_space_lost(info.size, lost, now);
 
-                self.spaces[pn_space].for_path(path_id).lost_packets.insert(
-                    packet,
-                    LostPacket {
-                        time_sent: info.time_sent,
-                    },
-                );
+                // Only a loss that counted as congestion can later turn out to be spurious. An
+                // ACK-only packet is not in flight and raises no congestion event when lost, so
+                // its late ACK must not declare an earlier, real episode spurious.
+                if info.size != 0 {
+                    self.spaces[pn_space].for_path(path_id).lost_packets.insert(
+                        packet,
+                        LostPacket {
+                            time_sent: info.time_sent,
+                        },
+                    );
+                }
             }
 
             let path = self.path_data_mut(path_id);

@@ -460,6 +460,10 @@ pub struct Bbr3 {
     /// (Part of the short-term model.) saved state in case a loss episode is later declared
     /// spurious
     undo_inflight_shortterm: u64,
+    /// Whether the undo snapshot belongs to a recovery episode not yet undone. A spurious event
+    /// uses it once, so a second one, or one for a loss that started no episode, cannot restore
+    /// a model that later congestion has cut.
+    undo_pending: bool,
     /// equivalent to BBR.bw_latest: a 1-round-trip max of delivered bandwidth (RS.delivery_rate).
     bw_latest: f64,
     /// equivalent to BBR.inflight_latest: a 1-round-trip max of delivered volume of data
@@ -703,6 +707,7 @@ impl Bbr3 {
             undo_inflight_longterm: u64::MAX,
             inflight_shortterm: u64::MAX,
             undo_inflight_shortterm: u64::MAX,
+            undo_pending: false,
             bw_latest: 0.0,
             inflight_latest: 0,
             max_bw_filter: MaxBwFilter::default(),
@@ -1682,6 +1687,7 @@ impl Bbr3 {
         self.undo_bw_shortterm = self.bw_shortterm;
         self.undo_inflight_shortterm = self.inflight_shortterm;
         self.undo_inflight_longterm = self.inflight_longterm;
+        self.undo_pending = true;
     }
 
     /// equivalent to IsInflightTooHigh for the last ACK's rate sample
@@ -1984,7 +1990,7 @@ impl Bbr3 {
     ///
     /// CE marks in the episode confirm its congestion, so nothing is undone.
     fn on_spurious_congestion_event(&mut self) {
-        if self.ce_in_recovery {
+        if self.ce_in_recovery || !core::mem::take(&mut self.undo_pending) {
             return;
         }
         self.restore_cwnd();
@@ -8857,5 +8863,27 @@ mod test {
             "max_bw decayed to {lowest_cruise_max_bw} ({:.3} of the bottleneck) in CRUISE",
             lowest_cruise_max_bw / BW
         );
+    }
+    /// A recovery episode is undone at most once, and a spurious event with no episode to undo
+    /// restores nothing.
+    #[test]
+    fn undo_restores_an_episode_once() {
+        let mut sim = probed();
+        sim.bbr.start_probe_bw_up();
+        sim.bbr.check_probe_loss = true;
+        sim.bbr.inflight_longterm = 200 * 1200;
+        let first = sim.pn;
+        sim.send(20 * MS, 100);
+        sim.ack_with_losses(40 * MS, first + 3..first + 100, first..first + 3, false);
+        assert!(sim.bbr.inflight_longterm < 200 * 1200);
+
+        sim.bbr.on_spurious_congestion_event();
+        assert_eq!(sim.bbr.inflight_longterm, 200 * 1200);
+
+        // Later congestion cuts the bound without a new episode; a stray spurious event must
+        // not bring back the snapshot.
+        sim.bbr.inflight_longterm = 7000;
+        sim.bbr.on_spurious_congestion_event();
+        assert_eq!(sim.bbr.inflight_longterm, 7000);
     }
 }
