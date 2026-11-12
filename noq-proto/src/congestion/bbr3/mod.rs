@@ -1940,17 +1940,18 @@ impl Bbr3 {
         space: SpaceKind,
         now: Instant,
     ) {
-        let lost_bytes_64 = lost_bytes as u64;
-        self.lost += lost_bytes_64;
-        // C.inflight excludes lost bytes, and the next ACK may come after the next send. Saturate
-        // because the transport also reports losses of packets this count may not include, such
-        // as padded ones that were not ack-eliciting.
-        self.inflight = self.inflight.saturating_sub(lost_bytes_64);
-        let p_index_result =
-            self.packets[space as usize].binary_search_by_key(&packet_number, |p| p.packet_number);
-        if let Ok(p_index) = p_index_result {
-            self.process_lost_packet(p_index, space, now);
-        }
+        // The transport reports every lost packet, but C.lost and C.inflight count only the data
+        // packets reported through `on_packet_sent`, so a lost ACK-only packet changes neither.
+        let Ok(p_index) =
+            self.packets[space as usize].binary_search_by_key(&packet_number, |p| p.packet_number)
+        else {
+            return;
+        };
+        let lost_bytes = u64::from(lost_bytes);
+        self.lost += lost_bytes;
+        // C.inflight excludes lost bytes, and the next ACK may come after the next send.
+        self.inflight = self.inflight.saturating_sub(lost_bytes);
+        self.process_lost_packet(p_index, space, now);
     }
 
     /// equivalent to BBRHandleSpuriousLossDetection: <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-06.html#section-5.5.11.2>
@@ -7659,6 +7660,20 @@ mod test {
         assert!(sim.bbr.prev_probe_too_high);
         assert!(!sim.bbr.check_probe_loss);
         assert!(sim.bbr.inflight_longterm < u64::MAX);
+    }
+
+    /// A lost packet BBR never tracked, such as an ACK-only one, adds nothing to `C.lost`, so it
+    /// cannot inflate later samples' loss rate.
+    /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-2.1>
+    #[test]
+    fn untracked_loss_is_not_counted() {
+        let mut sim = scripted();
+        sim.send(0, 2);
+        sim.bbr
+            .on_packet_lost(60, 1000, SpaceKind::Data, sim.at(5 * MS));
+        assert_eq!(sim.bbr.lost, 0);
+        assert_eq!(sim.bbr.inflight, 2400);
+        assert!(!sim.bbr.loss_in_round);
     }
 
     /// The Startup pacing rate a 12 KB initial window takes from its first measured RTT.
