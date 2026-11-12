@@ -1092,9 +1092,18 @@ impl Bbr3 {
         true
     }
 
-    /// equivalent to BBRInflight <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.6.4.2-2>
+    /// equivalent to BBRInflight(BBR.max_bw, gain), as the draft's IsTimeToCruise uses it
+    /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.3.3.9>
+    ///
+    /// Drain and Cruise compare inflight against the BDP at `max_bw`, as Linux's `bbr_check_drain`
+    /// and `bbr_is_time_to_cruise` do, while cwnd follows `bw`. So this leaves `bdp` alone.
     fn get_inflight(&mut self, gain: f64) -> u64 {
-        let inflight_cap = self.bdp_multiple(self.max_bw, gain);
+        let inflight_cap = if self.min_rtt == Duration::from_secs(u64::MAX) {
+            self.initial_cwnd
+        } else {
+            let bdp = (self.max_bw * self.min_rtt.as_secs_f64()).round();
+            (gain * bdp) as u64
+        };
         self.quantization_budget(inflight_cap)
     }
 
@@ -1152,7 +1161,7 @@ impl Bbr3 {
         if self.min_rtt_expired {
             // Taken before the expired min RTT is replaced, so ProbeRTT drains to half the BDP the
             // last window measured rather than half of one that a queue may have inflated.
-            self.probe_rtt_cwnd_cap = self.bdp_multiple(self.bw, self.probe_rtt_cwnd_gain);
+            self.probe_rtt_cwnd_cap = self.bdp_multiple(self.probe_rtt_cwnd_gain);
         }
         if let Some(rate_sample) = self.rs
             && (rate_sample.rtt < self.min_rtt || self.min_rtt_expired)
@@ -1370,9 +1379,9 @@ impl Bbr3 {
         self.bound_cwnd_for_model();
     }
 
-    /// equivalent to BBRUpdateMaxInflight <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.6.4.2-2>
+    /// equivalent to BBRUpdateMaxInflight <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.6.4.2>
     fn update_max_inflight(&mut self) {
-        let mut inflight_cap = self.bdp_multiple(self.max_bw, self.cwnd_gain);
+        let mut inflight_cap = self.bdp_multiple(self.cwnd_gain);
         inflight_cap += self.extra_acked;
         self.max_inflight = self.quantization_budget(inflight_cap);
     }
@@ -1416,17 +1425,20 @@ impl Bbr3 {
     /// equivalent to BBRProbeRTTCwnd <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.6.4.5>
     fn probe_rtt_cwnd(&mut self) -> u64 {
         let probe_rtt_cwnd = self
-            .bdp_multiple(self.bw, self.probe_rtt_cwnd_gain)
+            .bdp_multiple(self.probe_rtt_cwnd_gain)
             .min(self.probe_rtt_cwnd_cap);
         Ord::max(probe_rtt_cwnd, self.min_pipe_cwnd)
     }
 
-    /// equivalent to BBRBDPMultiple <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.6.4.2-2>
-    fn bdp_multiple(&mut self, bw: f64, gain: f64) -> u64 {
+    /// equivalent to BBRBDPMultiple <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.6.4.2>
+    ///
+    /// Uses `bw`, the minimum of `max_bw` and `bw_shortterm`, so a loss cut to the short-term
+    /// model lowers the cwnd target as well as the pacing rate.
+    fn bdp_multiple(&mut self, gain: f64) -> u64 {
         if self.min_rtt == Duration::from_secs(u64::MAX) {
             return self.initial_cwnd;
         }
-        self.bdp = (bw * self.min_rtt.as_secs_f64()).round() as u64;
+        self.bdp = (self.bw * self.min_rtt.as_secs_f64()).round() as u64;
         (gain * self.bdp as f64) as u64
     }
 
@@ -8309,6 +8321,31 @@ mod test {
         let sim = probing_past_inflight_longterm(false);
         assert_eq!(sim.bbr.state, BbrState::ProbeBw(ProbeBwSubstate::Up));
         assert!(!sim.bbr.prev_probe_precautionary);
+    }
+
+    /// A loss round in CRUISE lowers the cwnd target with the short-term bandwidth, not only the
+    /// pacing rate.
+    /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.6.4.2>
+    #[test]
+    fn cruise_loss_sizes_cwnd_from_short_term_bw() {
+        let mut sim = cruising();
+        let first = sim.pn;
+        sim.send(110 * MS, 100);
+        for pn in first..first + 10 {
+            sim.lose(120 * MS, pn);
+        }
+        sim.ack(130 * MS, first + 10..first + 100, false);
+        sim.round(140 * MS, 100, 20 * MS);
+        assert!(sim.bbr.bw_shortterm < sim.bbr.max_bw);
+        assert_eq!(sim.bbr.bw, sim.bbr.bw_shortterm);
+
+        let bdp = (sim.bbr.bw * sim.bbr.min_rtt.as_secs_f64()).round() as u64;
+        assert_eq!(sim.bbr.bdp, bdp);
+        let expected = Ord::max(
+            2 * bdp + sim.bbr.extra_acked,
+            Ord::max(sim.bbr.offload_budget, sim.bbr.min_pipe_cwnd),
+        );
+        assert_eq!(sim.bbr.max_inflight, expected);
     }
 
     /// CE while cruising lowers the short-term model when the round ends, as loss does.
