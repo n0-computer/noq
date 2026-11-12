@@ -17,10 +17,12 @@ use crate::{Duration, Instant};
 /// equivalent to BBR.ExtraAckedFilterLen <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-2.11>
 const EXTRA_ACKED_FILTER_LEN: usize = 10;
 
-/// safety mechanism to flag packets as stale within our tracking VecDeque. rounds refer to <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.5.1>.
-/// The value of 10 rounds is picked because normally after max(kTimeThreshold * max(smoothed_rtt, latest_rtt), kGranularity) <https://datatracker.ietf.org/doc/html/rfc9002#section-6.1.2>
-/// the packet should have been declared lost already, this is just to guarantee that the VecDeque
-/// doesn't grow indefinitely.
+/// Number of rounds after which BBR stops tracking a packet that was neither acknowledged nor
+/// declared lost.
+///
+/// QUIC declares a packet lost within about one RTT
+/// <https://datatracker.ietf.org/doc/html/rfc9002#section-6.1.2>, so this only keeps the tracking
+/// queue from growing without bound if the transport never reports a packet's fate.
 const ROUND_COUNT_WINDOW: u64 = 10;
 
 /// the minimum for the maximum datagram size <https://datatracker.ietf.org/doc/html/rfc9000#section-14>
@@ -195,14 +197,11 @@ struct BbrPacket {
     size: u16,
     /// equivalent to P.lost: C.lost when the packet was sent
     lost: u64,
-    /// used to flag acknowledgement within our VecDeque, a packet can be flagged lost after having
-    /// been flagged acknowledged hence the necessity of this flag being set before we remove
-    /// it from packets.
+    /// Whether the packet was acknowledged. It stays in the queue until every older packet has
+    /// been acknowledged or declared lost, so the queue stays ordered for binary search.
     acknowledged: bool,
-    /// once a packet has been acknowledged on a given round it is marked for removal on the next
-    /// round.
-    stale: bool,
-    /// used to mark packets stale if they're far from the current round <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.5.1>
+    /// `BBR.round_count` when the packet was sent, to stop tracking packets whose fate the
+    /// transport never reports after [`ROUND_COUNT_WINDOW`] rounds.
     round_count: u64,
 }
 
@@ -1783,7 +1782,6 @@ impl Bbr3 {
             size: bytes,
             lost: self.lost,
             acknowledged: false,
-            stale: false,
             round_count: self.round_count,
         });
     }
@@ -1871,13 +1869,14 @@ impl Bbr3 {
             if self.app_limited != 0 && self.delivered > self.app_limited {
                 self.app_limited = 0;
             }
+            // Packets are sent in order, so acknowledged and expired ones collect at the front.
+            // Popping only those keeps each ACK's cost to what it resolved, not what is tracked.
             let round_count = self.round_count;
             for packets in self.packets.iter_mut() {
-                packets.retain(|&p| !p.stale);
-                for p in packets.iter_mut() {
-                    if p.acknowledged || round_count - p.round_count > ROUND_COUNT_WINDOW {
-                        p.stale = true;
-                    }
+                while packets.front().is_some_and(|p| {
+                    p.acknowledged || round_count - p.round_count > ROUND_COUNT_WINDOW
+                }) {
+                    packets.pop_front();
                 }
             }
         }
@@ -7738,6 +7737,24 @@ mod test {
             "cwnd {} after recovery, {before} before",
             sim.bbr.cwnd
         );
+    }
+
+    /// Acknowledged packets leave the tracking queue as soon as nothing older is outstanding, so
+    /// it holds about the packets in flight plus the tail an out-of-order ACK leaves behind.
+    #[test]
+    fn tracking_queue_follows_inflight() {
+        let mut sim = scripted();
+        let queue = |sim: &Sim| sim.bbr.packets[SpaceKind::Data as usize].len();
+        sim.send(0, 100);
+        sim.ack(10 * MS, 0..100, false);
+        assert_eq!(queue(&sim), 0);
+
+        // Packet 100 is still outstanding, so the 99 acknowledged after it wait behind it.
+        sim.send(20 * MS, 100);
+        sim.ack(30 * MS, 101..200, false);
+        assert_eq!(queue(&sim), 100);
+        sim.ack(31 * MS, [100], false);
+        assert_eq!(queue(&sim), 0);
     }
 
     /// The ACK that declares persistent congestion does not also end the recovery it cuts the
