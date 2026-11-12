@@ -7,15 +7,12 @@ use rand::{RngExt, SeedableRng};
 use rand_pcg::Pcg32;
 
 use crate::RttEstimator;
-use crate::congestion::bbr3::max_filter::MaxFilter;
+use crate::congestion::bbr3::max_filter::{MaxBwFilter, MaxFilter};
 use crate::congestion::{
     BASE_DATAGRAM_SIZE, Controller, ControllerFactory, ControllerMetrics, PacketId,
 };
 use crate::connection::SpaceKind;
 use crate::{Duration, Instant};
-
-/// equivalent to BBR.MaxBwFilterLen <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-2.10>
-const MAX_BW_FILTER_LEN: usize = 2;
 
 /// equivalent to BBR.ExtraAckedFilterLen <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-2.11>
 const EXTRA_ACKED_FILTER_LEN: usize = 10;
@@ -283,8 +280,7 @@ pub struct Bbr3 {
     /// cleared when the round advances.
     cwnd_limited_this_round: bool,
     /// equivalent to BBR.cycle_count: The virtual time used by the BBR.max_bw filter window.
-    /// since the BBR.max_bw_filter only needs to track samples from two time slots: the previous
-    /// ProbeBW cycle and the current ProbeBW cycle.
+    /// `max_bw_filter` keeps one slot per cycle, so this only counts advances.
     cycle_count: u64,
     /// equivalent to C.cwnd: The transport sender's congestion window. When transmitting data, the
     /// sending connection ensures that C.inflight does not exceed C.cwnd.
@@ -428,8 +424,8 @@ pub struct Bbr3 {
     /// (RS.delivered).
     inflight_latest: u64,
     /// equivalent to BBR.max_bw_filter: A windowed max filter for RS.delivery_rate samples, for
-    /// estimating BBR.max_bw.
-    max_bw_filter: MaxFilter,
+    /// estimating BBR.max_bw over the current and the previous ProbeBW cycle.
+    max_bw_filter: MaxBwFilter,
     /// equivalent to BBR.extra_acked_interval_start: The start of the time interval for estimating
     /// the excess amount of data acknowledged due to aggregation effects.
     extra_acked_interval_start: Option<Instant>,
@@ -663,7 +659,7 @@ impl Bbr3 {
             undo_inflight_shortterm: u64::MAX,
             bw_latest: 0.0,
             inflight_latest: 0,
-            max_bw_filter: MaxFilter::new(MAX_BW_FILTER_LEN as u64),
+            max_bw_filter: MaxBwFilter::default(),
             extra_acked_interval_start: None,
             extra_acked_delivered: 0,
             extra_acked_filter: MaxFilter::new(EXTRA_ACKED_FILTER_LEN as u64),
@@ -771,8 +767,7 @@ impl Bbr3 {
             && (rate_sample.delivery_rate >= self.max_bw || !rate_sample.is_app_limited)
         {
             self.max_bw_filter
-                .update_max(self.cycle_count, rate_sample.delivery_rate.round() as u64);
-
+                .update_max(rate_sample.delivery_rate.round() as u64);
             self.max_bw = self.max_bw_filter.get_max() as f64;
         }
     }
@@ -1027,9 +1022,11 @@ impl Bbr3 {
         false
     }
 
-    /// equivalent to BBRAdvanceMaxBwFilter <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.5.6>
+    /// equivalent to BBRAdvanceMaxBwFilter <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.5.6>
     fn advance_max_bw_filter(&mut self) {
         self.cycle_count = self.cycle_count.saturating_add(1);
+        self.max_bw_filter.advance();
+        self.max_bw = self.max_bw_filter.get_max() as f64;
     }
 
     /// equivalent to BBRIsTimeToProbeBW <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.3.3.5.3-6>
@@ -5434,11 +5431,11 @@ mod test {
     ///     resets `bw_shortterm` and re-seeds it from the still-stale-high `max_bw`, so per cycle
     ///     it only steps down ~one `BETA`; the full collapse to the new rate is the filter's job,
     ///     below.)
-    ///  2. The long-term `max_bw` is a max filter over `RS.delivery_rate` keyed on `cycle_count`
-    ///     with a window of `MAX_BW_FILTER_LEN` (2). The stale high sample only expires once
-    ///     `cycle_count` has advanced past the window, i.e. after ~2 PROBE_BW cycles
-    ///     (`advance_max_bw_filter` ticks once per cycle at `ProbeStopping`). Then `get_max()`
-    ///     returns the recent ~low-rate samples and `max_bw` drops to the new 10 Mbit/s limit.
+    ///  2. The long-term `max_bw` is a max filter over `RS.delivery_rate` with one slot for each
+    ///     of the last two PROBE_BW cycles. The stale high sample only expires once the filter
+    ///     has advanced twice (`advance_max_bw_filter` runs once per cycle, when the probe's
+    ///     feedback ends). Then `get_max()` returns the recent ~low-rate samples and `max_bw`
+    ///     drops to the new 10 Mbit/s limit.
     ///
     /// Same bespoke single-bottleneck FIFO loop as A.15 (bandwidth changes mid-flight, which the
     /// shared `Sim` can't express), inverted: start at 100 Mbit/s, then cut to 10 Mbit/s. A finite
@@ -5454,7 +5451,7 @@ mod test {
     ///  - `bw_shortterm` adapts down rapidly after the cut: its post-cut minimum falls at least one
     ///    `BETA` step below `BW_HI`, throttling the flow within the cycle;
     ///  - `max_bw` collapses to the new `BW_LO` (within ~15%) once the filter window expires, and
-    ///    does so within a small number of PROBE_BW cycles (`MAX_BW_FILTER_LEN` + headroom).
+    ///    does so within a small number of PROBE_BW cycles (the filter's two + headroom).
     #[test]
     fn max_bw_adapts_down_after_10x_decrease() {
         /// packet size in bytes
@@ -5598,7 +5595,7 @@ mod test {
                         min_shortterm_after = min_shortterm_after.min(bbr.bw_shortterm);
                     }
                     // max_bw collapses to the new rate once the stale high sample ages out of the
-                    // MAX_BW_FILTER_LEN-wide window (keyed on cycle_count).
+                    // two-cycle window.
                     if adapt_cycles.is_none() && bbr.max_bw <= 1.15 * BW_LO {
                         adapt_cycles = Some(bbr.cycle_count - cut_cycle);
                         break;
@@ -5629,12 +5626,12 @@ mod test {
         );
 
         // max_bw collapsed to the new 10 Mbit/s limit (matching the path delivery rate) once the
-        // filter window expired, and within a small number of PROBE_BW cycles (MAX_BW_FILTER_LEN
-        // is 2; the bound leaves headroom for the cycle in which the cut was recorded).
+        // filter window expired, and within a small number of PROBE_BW cycles (the window is 2;
+        // the bound leaves headroom for the cycle in which the cut was recorded).
         let adapt_cycles = adapt_cycles.expect("max_bw never collapsed to the new BW_LO");
         assert!(
-            adapt_cycles <= (MAX_BW_FILTER_LEN as u64) + 2,
-            "expected max_bw to adapt within ~MAX_BW_FILTER_LEN PROBE_BW cycles, took {adapt_cycles}"
+            adapt_cycles <= 2 + 2,
+            "expected max_bw to adapt within ~2 PROBE_BW cycles, took {adapt_cycles}"
         );
         // The break fired on max_bw <= 1.15*BW_LO, so only the lower bound informs here:
         // confirm the estimate collapsed to (not below) the new rate.
@@ -7284,10 +7281,8 @@ mod test {
     #[test]
     fn app_limited_sample_keeps_its_label() {
         let mut sim = scripted();
-        // A 10 MB/s maximum whose filter window has passed.
-        sim.bbr.max_bw_filter.update_max(0, 10_000_000);
+        // A 10 MB/s maximum whose filter window has passed: the next admitted sample replaces it.
         sim.bbr.max_bw = 10_000_000.0;
-        sim.bbr.cycle_count = MAX_BW_FILTER_LEN as u64 + 1;
         // The application ran dry before packet 0.
         sim.bbr.app_limited = 1;
 
@@ -7752,7 +7747,8 @@ mod test {
         sim.round(10 * MS, 100, 10 * MS);
         sim.bbr.min_rtt_filter_len = Duration::from_secs(MIN_RTT_FILTER_LEN_SEC);
         assert_eq!(sim.bbr.state, BbrState::ProbeRtt);
-        sim.bbr.cycle_count += MAX_BW_FILTER_LEN as u64 + 1;
+        // Age the window: the next admitted sample replaces the maximum.
+        sim.bbr.max_bw_filter = MaxBwFilter::default();
         sim
     }
 

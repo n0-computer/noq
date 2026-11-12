@@ -96,6 +96,41 @@ impl Default for MaxFilter {
     }
 }
 
+/// Tracks the maximum delivery rate over the current and the previous ProbeBW cycle.
+///
+/// equivalent to the BBR.max_bw filter: "two time slots: the previous ProbeBW cycle and the
+/// current ProbeBW cycle". One slot per cycle, as Linux BBRv3 keeps `bw_hi[2]`, holds exactly two
+/// cycles, where [`MaxFilter`] with a window of 2 keeps samples for up to three.
+/// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.5.6>
+#[derive(Copy, Clone, Debug, Default)]
+pub(super) struct MaxBwFilter {
+    /// The previous cycle's maximum, then the current cycle's.
+    slots: [u64; 2],
+}
+
+impl MaxBwFilter {
+    /// Returns the maximum over both cycles.
+    pub(super) fn get_max(&self) -> u64 {
+        Ord::max(self.slots[0], self.slots[1])
+    }
+
+    /// Adds a sample to the current cycle.
+    pub(super) fn update_max(&mut self, sample: u64) {
+        self.slots[1] = Ord::max(self.slots[1], sample);
+    }
+
+    /// Starts a new cycle and forgets the oldest one.
+    ///
+    /// Does nothing while the current cycle has no sample, as in Linux, so a cycle that measured
+    /// nothing cannot erase the one before it.
+    pub(super) fn advance(&mut self) {
+        if self.slots[1] == 0 {
+            return;
+        }
+        self.slots = [self.slots[1], 0];
+    }
+}
+
 #[derive(Debug, Copy, Clone, Default)]
 struct MaxSample {
     /// `round` count, not a timestamp as per <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.5.1>
@@ -151,5 +186,28 @@ mod test {
         assert_eq!(100, max_filter.get_max());
         max_filter.update_max(round + 18, 130);
         assert_eq!(130, max_filter.get_max());
+    }
+
+    #[test]
+    fn max_bw_filter_keeps_two_cycles() {
+        let mut filter = MaxBwFilter::default();
+        filter.update_max(100);
+        filter.advance();
+        filter.update_max(50);
+        assert_eq!(filter.get_max(), 100);
+        // The 100 sample's cycle is now two cycles old.
+        filter.advance();
+        filter.update_max(10);
+        assert_eq!(filter.get_max(), 50);
+    }
+
+    #[test]
+    fn max_bw_filter_advance_without_a_sample_keeps_the_window() {
+        let mut filter = MaxBwFilter::default();
+        filter.update_max(100);
+        filter.advance();
+        filter.advance();
+        filter.advance();
+        assert_eq!(filter.get_max(), 100);
     }
 }
