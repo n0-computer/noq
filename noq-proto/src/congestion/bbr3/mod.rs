@@ -78,10 +78,6 @@ const PROBE_RTT_CWND_GAIN: f64 = 0.5;
 /// ProbeRTT state holds C.inflight to BBR.MinPipeCwnd or fewer packets: 200 ms.
 const PROBE_RTT_DURATION_MS: u64 = 200;
 
-/// equivalent to BBR.ProbeRTTInterval: A constant specifying the minimum time interval between
-/// ProbeRTT states: 5 secs.
-const PROBE_RTT_INTERVAL_SEC: u64 = 5;
-
 /// equivalent to BBR.LossThresh: A constant specifying the maximum tolerated per-round-trip packet
 /// loss rate when probing for bandwidth (the default is 2%).
 const LOSS_THRESH: f64 = 0.02;
@@ -97,8 +93,9 @@ const BETA: f64 = 0.7;
 const HEADROOM: f64 = 0.15;
 
 /// equivalent to BBR.MinRTTFilterLen: A constant specifying the length of the BBR.min_rtt min
-/// filter window, BBR.MinRTTFilterLen is 10 secs.
-const MIN_RTT_FILTER_LEN: u64 = 10;
+/// filter window, BBR.MinRTTFilterLen is 10 secs. Its expiry also schedules ProbeRTT.
+/// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-2.16.1>
+const MIN_RTT_FILTER_LEN_SEC: u64 = 10;
 
 /// multiplier used to check growth when validating if the full bandwidth has been reached
 /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.3.1.2-6>
@@ -256,10 +253,11 @@ struct BbrRateSample {
 /// Experimental! Use at your own risk.
 ///
 /// Aims for reduced buffer bloat and improved performance over high bandwidth-delay product
-/// networks. Based on <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html>
-/// equivalent to a combination of BBR and C states
-/// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-2.4>
-/// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-2.1>
+/// networks. Follows <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html>, and Linux
+/// BBRv3 where the draft leaves a choice; the comments name each deviation. Links to older
+/// draft versions cite where a constant or step was first defined.
+///
+/// The fields are the draft's BBR and C state.
 #[derive(Debug, Clone)]
 pub struct Bbr3 {
     /// equivalent to C.SMSS The Sender Maximum Send Size in bytes. <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-2.1>
@@ -463,19 +461,15 @@ pub struct Bbr3 {
     /// equivalent to BBR.ProbeRTTDuration: A constant specifying the minimum duration for which
     /// ProbeRTT state holds C.inflight to BBR.MinPipeCwnd or fewer packets: 200 ms.
     probe_rtt_duration: Duration,
-    /// equivalent to BBR.ProbeRTTInterval: A constant specifying the minimum time interval between
-    /// ProbeRTT states: 5 secs.
-    probe_rtt_interval: Duration,
-    /// equivalent to BBR.probe_rtt_min_delay: The minimum RTT sample recorded in the last
-    /// ProbeRTTInterval.
-    probe_rtt_min_delay: Duration,
-    /// equivalent to BBR.probe_rtt_min_stamp: The wall clock time at which the current
-    /// BBR.probe_rtt_min_delay sample was obtained.
-    probe_rtt_min_stamp: Option<Instant>,
-    /// equivalent to BBR.probe_rtt_expired: A boolean recording whether the
-    /// BBR.probe_rtt_min_delay has expired and is due for a refresh with an application idle
-    /// period or a transition into ProbeRTT state.
-    probe_rtt_expired: bool,
+    /// equivalent to BBR.MinRTTFilterLen, [`MIN_RTT_FILTER_LEN_SEC`] outside of tests.
+    min_rtt_filter_len: Duration,
+    /// equivalent to BBR.min_rtt_expired: whether BBR.min_rtt is older than BBR.MinRTTFilterLen
+    /// and due for a refresh, through an application idle period or ProbeRTT.
+    min_rtt_expired: bool,
+    /// equivalent to BBR.probe_rtt_cwnd: the ProbeRTT cwnd cap, `0.5 * BDP` from the min RTT that
+    /// was current when it expired.
+    /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-2.16.2>
+    probe_rtt_cwnd_cap: u64,
     /// equivalent to C.delivered_time: The wall clock time when C.delivered was last updated. <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-4.1.1.2.1>
     delivered_time: Option<Instant>,
     /// equivalent to C.first_send_time: If packets are in flight, then this holds the send time of
@@ -682,11 +676,9 @@ impl Bbr3 {
             min_rtt_stamp: None,
             probe_rtt_cwnd_gain,
             probe_rtt_duration: Duration::from_millis(PROBE_RTT_DURATION_MS),
-            probe_rtt_interval: Duration::from_secs(PROBE_RTT_INTERVAL_SEC),
-            // Infinity, as for `min_rtt`: a min filter zero-initialized is never lowered.
-            probe_rtt_min_delay: Duration::from_secs(u64::MAX),
-            probe_rtt_min_stamp: None,
-            probe_rtt_expired: false,
+            min_rtt_filter_len: Duration::from_secs(MIN_RTT_FILTER_LEN_SEC),
+            min_rtt_expired: false,
+            probe_rtt_cwnd_cap: u64::MAX,
             delivered_time: None,
             first_send_time: None,
             app_limited: 0,
@@ -1167,48 +1159,33 @@ impl Bbr3 {
         }
     }
 
-    /// equivalent to BBRUpdateMinRTT <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-06.html#section-5.3.4.3>
+    /// equivalent to BBRUpdateMinRTT <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.3.4.3>
     ///
-    /// The draft stamps `probe_rtt_min_stamp` at connection init, so the first ProbeRTT falls due
-    /// one `probe_rtt_interval` later. Before the first ack there is no RTT sample to stamp, so an
-    /// unset stamp counts as not yet expired and the first sample starts the interval. Counting it
-    /// as expired instead would dip every connection into ProbeRTT on its very first ack, and so
-    /// into `min_pipe_cwnd`, since `bw` is still 0.
+    /// The draft stamps `min_rtt_stamp` at connection init, so the first ProbeRTT falls due one
+    /// `MinRTTFilterLen` later. Before the first ACK there is no RTT sample to stamp, so an unset
+    /// stamp counts as not yet expired and the first sample starts the window. Counting it as
+    /// expired instead would dip every connection into ProbeRTT on its very first ACK, and so into
+    /// `min_pipe_cwnd`, since `bw` is still 0.
     fn update_min_rtt(&mut self, now: Instant) {
-        self.probe_rtt_expired = match self.probe_rtt_min_stamp {
-            Some(probe_rtt_min_stamp) => {
-                now > probe_rtt_min_stamp
-                    .checked_add(self.probe_rtt_interval)
-                    .unwrap_or(probe_rtt_min_stamp)
-            }
-            None => false,
-        };
+        self.min_rtt_expired = self
+            .min_rtt_stamp
+            .is_some_and(|stamp| now > stamp.checked_add(self.min_rtt_filter_len).unwrap_or(stamp));
+        if self.min_rtt_expired {
+            // Taken before the expired min RTT is replaced, so ProbeRTT drains to half the BDP the
+            // last window measured rather than half of one that a queue may have inflated.
+            self.probe_rtt_cwnd_cap = self.bdp_multiple(self.bw, self.probe_rtt_cwnd_gain);
+        }
         if let Some(rate_sample) = self.rs
-            && rate_sample.rtt >= Duration::from_secs(0)
-            && (rate_sample.rtt < self.probe_rtt_min_delay || self.probe_rtt_expired)
+            && (rate_sample.rtt < self.min_rtt || self.min_rtt_expired)
         {
-            self.probe_rtt_min_delay = rate_sample.rtt;
-            self.probe_rtt_min_stamp = Some(now);
-        }
-
-        let min_rtt_expired;
-        if let Some(min_rtt_stamp) = self.min_rtt_stamp {
-            min_rtt_expired = now
-                > min_rtt_stamp
-                    .checked_add(Duration::from_secs(MIN_RTT_FILTER_LEN))
-                    .unwrap_or(min_rtt_stamp);
-        } else {
-            min_rtt_expired = true;
-        }
-        if self.probe_rtt_min_delay < self.min_rtt || min_rtt_expired {
-            self.min_rtt = self.probe_rtt_min_delay;
-            self.min_rtt_stamp = self.probe_rtt_min_stamp;
+            self.min_rtt = rate_sample.rtt;
+            self.min_rtt_stamp = Some(now);
         }
     }
 
-    /// equivalent to BBRCheckProbeRTT <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.3.4.3-4>
+    /// equivalent to BBRCheckProbeRTT <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.3.4.3>
     fn check_probe_rtt(&mut self, now: Instant) {
-        if self.state != BbrState::ProbeRtt && self.probe_rtt_expired && !self.idle_restart {
+        if self.state != BbrState::ProbeRtt && self.min_rtt_expired && !self.idle_restart {
             // A probe cut short here still owes its max-bw window advance, which the draft never
             // pays: the round ending its feedback finishes inside ProbeRTT, and the round after
             // exit carries ProbeRTT's app-limited samples. Without this, a flow whose every probe
@@ -1345,12 +1322,13 @@ impl Bbr3 {
         }
     }
 
-    /// equivalent to BBRCheckProbeRTTDone <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.3.4.3-4>
+    /// equivalent to BBRCheckProbeRTTDone <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.3.4.3>
     fn check_probe_rtt_done(&mut self, now: Instant) {
         if let Some(probe_rtt_done_stamp) = self.probe_rtt_done_stamp
             && now > probe_rtt_done_stamp
         {
-            self.probe_rtt_min_stamp = Some(now);
+            // Schedules the next ProbeRTT.
+            self.min_rtt_stamp = Some(now);
             self.restore_cwnd();
             self.exit_probe_rtt(now);
         }
@@ -1449,11 +1427,12 @@ impl Bbr3 {
         }
     }
 
-    /// equivalent to BBRProbeRTTCwnd <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.6.4.5-1>
+    /// equivalent to BBRProbeRTTCwnd <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.6.4.5>
     fn probe_rtt_cwnd(&mut self) -> u64 {
-        let mut probe_rtt_cwnd = self.bdp_multiple(self.bw, self.probe_rtt_cwnd_gain);
-        probe_rtt_cwnd = Ord::max(probe_rtt_cwnd, self.min_pipe_cwnd);
-        probe_rtt_cwnd
+        let probe_rtt_cwnd = self
+            .bdp_multiple(self.bw, self.probe_rtt_cwnd_gain)
+            .min(self.probe_rtt_cwnd_cap);
+        Ord::max(probe_rtt_cwnd, self.min_pipe_cwnd)
     }
 
     /// equivalent to BBRBDPMultiple <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.6.4.2-2>
@@ -2552,11 +2531,8 @@ mod test {
         const MSS: u64 = 1200;
         /// simulated bottleneck bandwidth: 100 Mbit/s in bytes/sec
         const BW: f64 = 12_500_000.0;
-        /// Simulated propagation RTT. Kept large (100ms) so the transient
-        /// ProbeRTT BBR enters on the first ack (its `probe_rtt_min_stamp`
-        /// starts unset, initializing `min_rtt`) spans fewer than
-        /// `MAX_FULL_BW_COUNT` rounds and cannot falsely complete the plateau
-        /// there; the flow bounces back to STARTUP and ramps cleanly.
+        /// Simulated propagation RTT (100ms), long enough that STARTUP finishes
+        /// well before the first `min_rtt_filter_len` expires.
         const RTT_NS: u64 = 100_000_000;
 
         // Drive the production default configuration.
@@ -3366,8 +3342,8 @@ mod test {
     /// escape never fires either. Both STARTUP -> DRAIN triggers are closed.
     ///
     /// The one state change that still occurs is the scheduled min-RTT refresh:
-    /// with a constant RTT the min-RTT filter expires every `probe_rtt_interval`
-    /// (5s) and `check_probe_rtt` moves STARTUP -> PROBE_RTT. This is orthogonal to
+    /// with a constant RTT the min-RTT filter expires every `min_rtt_filter_len`
+    /// (10 s) and `check_probe_rtt` moves STARTUP -> PROBE_RTT. This is orthogonal to
     /// the app-limited/loss exits A.7 concerns, and because `full_bw_reached` is
     /// still false, `exit_probe_rtt` routes back to STARTUP (`enter_startup`)
     /// rather than on to PROBE_BW. So the flow oscillates STARTUP <-> PROBE_RTT and
@@ -3377,8 +3353,8 @@ mod test {
     /// small fixed window (`APP_WINDOW`, well below cwnd) from the first packet so
     /// every sample is app-limited, and no packet is ever dropped.
     ///
-    /// Runs long enough (`ROUNDS_TO_OBSERVE`, several `probe_rtt_interval`s) to
-    /// cover multiple PROBE_RTT interludes, and asserts that: the flow only ever
+    /// Runs long enough (`ROUNDS_TO_OBSERVE`, more than one `min_rtt_filter_len`) to
+    /// cover a PROBE_RTT interlude, and asserts that: the flow only ever
     /// occupies STARTUP or PROBE_RTT (never DRAIN/PROBE_BW), at least one
     /// PROBE_RTT interlude was exercised and returned to STARTUP, every observed
     /// sample was application-limited, `full_bw_reached`/`full_bw_now` were never
@@ -3400,8 +3376,8 @@ mod test {
         /// (4*MSS).
         const APP_WINDOW: u64 = 20 * MSS;
         /// rounds to observe before declaring "indefinitely". Each round is ~1 RTT
-        /// (100ms), so this spans ~16s (several `probe_rtt_interval`s of 5s) and
-        /// covers multiple STARTUP <-> PROBE_RTT oscillations.
+        /// (100ms), so this spans ~16s, more than one `min_rtt_filter_len` of 10 s,
+        /// and covers a STARTUP <-> PROBE_RTT oscillation.
         const ROUNDS_TO_OBSERVE: u64 = 160;
 
         // bottleneck serialization time for one MSS-sized packet
@@ -3754,7 +3730,7 @@ mod test {
     /// binding cruise threshold.)
     ///
     /// From that state it isolates the elapsed-time exit: it refreshes
-    /// `probe_rtt_min_stamp` so the periodic min-RTT re-probe (PROBE_RTT, cf. A.10)
+    /// `min_rtt_stamp` so the periodic min-RTT re-probe (PROBE_RTT, cf. A.10)
     /// cannot preempt, advances `now` just past `cycle_stamp + bw_probe_wait`, and
     /// drives `update_probe_bw_cycle_phase`. Because that function checks
     /// `BBRIsTimeToProbeBW` (the timer) *before* `BBRIsTimeToCruise`, and `C.inflight`
@@ -3857,11 +3833,11 @@ mod test {
             bbr.reno_rounds_bound
         );
 
-        // Isolate the elapsed-time exit. Refresh probe_rtt_min_stamp so the periodic
+        // Isolate the elapsed-time exit. Refresh min_rtt_stamp so the periodic
         // min-RTT re-probe (PROBE_RTT, cf. A.10) cannot preempt, then advance now just
         // past cycle_stamp + bw_probe_wait (has_elapsed_in_phase is a strict `>`) and
         // drive one cycle-phase step.
-        bbr.probe_rtt_min_stamp = Some(fire_at);
+        bbr.min_rtt_stamp = Some(fire_at);
         bbr.update_probe_bw_cycle_phase(0, fire_at);
 
         // A single cycle step took PROBE_DOWN straight to PROBE_REFILL, bypassing
@@ -3881,23 +3857,23 @@ mod test {
 
     /// A.10: Entering and exiting PROBE_RTT.
     /// equivalent to BBRCheckProbeRTT / BBRHandleProbeRTT / BBRExitProbeRTT:
-    /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.3.4.3>
+    /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.3.4.3>
     ///
     /// Same infinite-buffer FIFO simulator as A.1/A.8 (constant link rate,
     /// constant propagation delay), driven STARTUP -> DRAIN -> PROBE_BW and then
-    /// left to run for more than `BBR.ProbeRTTInterval` (5 s). This is the
-    /// periodic min-RTT re-probe: once `BBR.probe_rtt_min_delay` has not been
-    /// lowered for a full ProbeRTTInterval, `update_min_rtt` flips
-    /// `BBR.probe_rtt_expired` true and `check_probe_rtt` enters PROBE_RTT.
+    /// left to run for more than `BBR.MinRTTFilterLen` (10 s). This is the
+    /// periodic min-RTT re-probe: once `BBR.min_rtt` has not been
+    /// lowered for a full MinRTTFilterLen, `update_min_rtt` flips
+    /// `BBR.min_rtt_expired` true and `check_probe_rtt` enters PROBE_RTT.
     ///
-    /// Why `probe_rtt_min_delay` stays put for the whole 5 s: with a constant link
+    /// Why `min_rtt` stays put for the whole 10 s: with a constant link
     /// rate and propagation delay, the smallest achievable RTT is the fixed floor
     /// `FWD + service + RET`, hit whenever the bottleneck queue is empty (every
     /// PROBE_DOWN drains to it). `update_min_rtt` only refreshes
-    /// `probe_rtt_min_stamp` on a *strictly* lower sample (`rtt < probe_rtt_min_delay`),
+    /// `min_rtt_stamp` on a *strictly* lower sample (`rtt < min_rtt`),
     /// so repeated floor-equal samples never move the stamp. The first ack stamps the
-    /// floor (~t=100 ms via the `probe_rtt_expired`-on-None branch); nothing beats it
-    /// afterward, so the stamp is frozen and expiry fires ~5 s later, comfortably
+    /// floor (~t=100 ms); nothing beats it afterward, so the stamp is frozen and
+    /// expiry fires ~10 s later, comfortably
     /// after STARTUP/DRAIN have handed off to PROBE_BW with `full_bw_reached` true.
     ///
     /// On entry `check_probe_rtt` calls `enter_probe_rtt` (state -> ProbeRtt,
@@ -3914,7 +3890,7 @@ mod test {
     /// cwnd cap so the sender resumes.
     ///
     /// Asserts that: the flow reached PROBE_BW with `full_bw_reached` true before any
-    /// PROBE_RTT entry; PROBE_RTT was entered only after ProbeRTTInterval (5 s) had
+    /// PROBE_RTT entry; PROBE_RTT was entered only after MinRTTFilterLen (10 s) had
     /// elapsed, with `cwnd_gain == ProbeRTTCwndGain` (0.5); the exit came at least
     /// ProbeRTTDuration (200 ms) *and* one round after `probe_rtt_done_stamp` was
     /// armed; and the flow transitioned back to PROBE_BW (Cruise) with
@@ -3970,12 +3946,8 @@ mod test {
                     reached_probe_bw = true;
                 }
 
-                // Entry edge into PROBE_RTT: the periodic min-RTT re-probe we care
-                // about, i.e. the one after PROBE_BW. (A transient PROBE_RTT also
-                // fires on the very first ack, because probe_rtt_min_stamp starts
-                // unset so probe_rtt_expired is true at t=0; that one happens during
-                // STARTUP, exits straight back to STARTUP via !full_bw_reached, and
-                // is filtered out by the reached_probe_bw guard.)
+                // Entry edge into PROBE_RTT: the periodic min-RTT re-probe after
+                // PROBE_BW.
                 if reached_probe_bw && probe_rtt_entry.is_none() && bbr.state == BbrState::ProbeRtt
                 {
                     probe_rtt_entry = Some((now_ns, bbr.cwnd_gain, bbr.round_count));
@@ -4011,15 +3983,15 @@ mod test {
             "BBR never reached PROBE_BW with full_bw_reached before PROBE_RTT"
         );
 
-        // Entered PROBE_RTT, and only after ProbeRTTInterval (5 s) elapsed with
-        // probe_rtt_min_delay never lowered.
+        // Entered PROBE_RTT, and only after MinRTTFilterLen (10 s) elapsed with
+        // min_rtt never lowered.
         let (entry_ns, entry_cwnd_gain, entry_round) =
             probe_rtt_entry.expect("BBR never entered PROBE_RTT");
         assert!(
-            entry_ns >= PROBE_RTT_INTERVAL_SEC * 1_000_000_000,
-            "PROBE_RTT entered before ProbeRTTInterval elapsed \
+            entry_ns >= MIN_RTT_FILTER_LEN_SEC * 1_000_000_000,
+            "PROBE_RTT entered before MinRTTFilterLen elapsed \
              (entry {entry_ns} ns vs interval {}s)",
-            PROBE_RTT_INTERVAL_SEC
+            MIN_RTT_FILTER_LEN_SEC
         );
         // cwnd_gain was set to ProbeRTTCwndGain (0.5) on entry.
         assert_eq!(
@@ -4080,8 +4052,8 @@ mod test {
     /// propagation delay), driven STARTUP -> DRAIN -> PROBE_BW. Then the
     /// application stops offering data: every in-flight packet is acked with no new
     /// sends, so `C.inflight` drains to 0 and the connection goes idle. Virtual time is
-    /// then advanced past `BBR.ProbeRTTInterval` (5 s) with nothing in flight, long
-    /// enough that the periodic min-RTT re-probe is due (`probe_rtt_expired` becomes
+    /// then advanced past `BBR.MinRTTFilterLen` (10 s) with nothing in flight, long
+    /// enough that the periodic min-RTT re-probe is due (`min_rtt_expired` becomes
     /// true on the next `update_min_rtt`), exactly the condition that drove the PROBE_RTT
     /// entry in A.10.
     ///
@@ -4089,16 +4061,16 @@ mod test {
     /// first packet, `on_packet_sent` calls `handle_restart_from_idle`: because
     /// `C.inflight` was 0 and the connection is application-limited (`C.app_limited != 0`),
     /// it sets `BBR.idle_restart = true`. On the resulting ack, `check_probe_rtt` sees
-    /// `probe_rtt_expired` true but refuses to `enter_probe_rtt` because of the
+    /// `min_rtt_expired` true but refuses to `enter_probe_rtt` because of the
     /// `!idle_restart` guard: an idle period is itself deemed a sufficient drain of the
     /// bottleneck queue, so a formal PROBE_RTT is unnecessary. `idle_restart` is then
-    /// cleared once a delivering ack arrives, and the refreshed `probe_rtt_min_stamp`
+    /// cleared once a delivering ack arrives, and the refreshed `min_rtt_stamp`
     /// keeps expiry from re-firing on the following acks.
     ///
     /// Asserts that: the flow reached PROBE_BW with `full_bw_reached` and then drained to
-    /// idle (`C.inflight == 0`) while still in PROBE_BW; more than ProbeRTTInterval (5 s)
+    /// idle (`C.inflight == 0`) while still in PROBE_BW; more than MinRTTFilterLen (10 s)
     /// elapsed during the idle gap; the first send after idle set `BBR.idle_restart`; and
-    /// although the min-RTT re-probe was due at that point (`probe_rtt_expired` true), the
+    /// although the min-RTT re-probe was due at that point (`min_rtt_expired` true), the
     /// connection never entered PROBE_RTT over the subsequent rounds.
     #[test]
     fn probe_bw_skips_probe_rtt_on_restart_from_idle() {
@@ -4222,14 +4194,14 @@ mod test {
         );
         let idle_start_ns = now_ns;
 
-        // Phase 3: stay idle past BBR.ProbeRTTInterval (5 s), so the periodic min-RTT
+        // Phase 3: stay idle past BBR.MinRTTFilterLen (10 s), so the periodic min-RTT
         // re-probe becomes due. Nothing is in flight, so no BBR callbacks fire; time just
         // advances. With no data to send during the gap, the connection is app-limited.
-        now_ns = idle_start_ns + PROBE_RTT_INTERVAL_SEC * 1_000_000_000 + 2 * RTT_NS;
+        now_ns = idle_start_ns + MIN_RTT_FILTER_LEN_SEC * 1_000_000_000 + 2 * RTT_NS;
         bbr.app_limited = Ord::max(bbr.delivered + bbr.inflight, 1);
         assert!(
-            now_ns - idle_start_ns >= PROBE_RTT_INTERVAL_SEC * 1_000_000_000,
-            "idle gap must exceed ProbeRTTInterval (5 s)"
+            now_ns - idle_start_ns >= MIN_RTT_FILTER_LEN_SEC * 1_000_000_000,
+            "idle gap must exceed MinRTTFilterLen (10 s)"
         );
 
         // Phase 4: the application resumes and sends one packet. handle_restart_from_idle
@@ -4261,9 +4233,9 @@ mod test {
         );
 
         // Phase 5: keep sending/acking. On the resume packet's ack the min-RTT re-probe is
-        // due (probe_rtt_expired true), yet PROBE_RTT must be skipped because idle_restart
+        // due (min_rtt_expired true), yet PROBE_RTT must be skipped because idle_restart
         // is set. Run enough rounds to prove it stays skipped.
-        let mut probe_rtt_expired_at_resume: Option<bool> = None;
+        let mut min_rtt_expired_at_resume: Option<bool> = None;
         let mut entered_probe_rtt = false;
         let mut acks_after_resume: u64 = 0;
         for _ in 0..2_000_000 {
@@ -4309,8 +4281,8 @@ mod test {
 
                 if p.pn == resume_pn {
                     // Snapshot right after the restarting packet's ack: the re-probe was
-                    // due (probe_rtt_expired) so only idle_restart could suppress entry.
-                    probe_rtt_expired_at_resume = Some(bbr.probe_rtt_expired);
+                    // due (min_rtt_expired) so only idle_restart could suppress entry.
+                    min_rtt_expired_at_resume = Some(bbr.min_rtt_expired);
                 }
                 acks_after_resume += 1;
 
@@ -4329,9 +4301,9 @@ mod test {
         // The min-RTT re-probe was due at resume (the same trigger that entered
         // PROBE_RTT in A.10), so idle_restart is the only thing that could suppress entry.
         assert_eq!(
-            probe_rtt_expired_at_resume,
+            min_rtt_expired_at_resume,
             Some(true),
-            "probe_rtt_expired should be true at resume (5 s elapsed), making the \
+            "min_rtt_expired should be true at resume (10 s elapsed), making the \
              PROBE_RTT skip attributable to idle_restart"
         );
         // The connection skipped PROBE_RTT: idleness was a sufficient queue drain.
@@ -6451,7 +6423,7 @@ mod test {
 
     /// A.20: Entering and exiting PROBE_RTT during STARTUP.
     /// equivalent to BBRCheckProbeRTT / BBRHandleProbeRTT / BBRExitProbeRTT:
-    /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.3.4.3>
+    /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.3.4.3>
     ///
     /// A.10 covers the PROBE_RTT interlude that fires *after* PROBE_BW, where
     /// `full_bw_reached` is true and `exit_probe_rtt` therefore routes on to
@@ -6468,16 +6440,12 @@ mod test {
     /// every sample is application-limited and `check_full_bw_reached` bails on its
     /// `is_app_limited` guard, `full_bw_reached` never arms and STARTUP persists.
     /// With a constant RTT the min-RTT floor never drops, so `update_min_rtt`
-    /// freezes `probe_rtt_min_stamp` and flips `BBR.probe_rtt_expired` true one
-    /// `BBR.ProbeRTTInterval` (5 s) after it was last stamped; `check_probe_rtt`
+    /// freezes `min_rtt_stamp` and flips `BBR.min_rtt_expired` true one
+    /// `BBR.MinRTTFilterLen` (10 s) after it was last stamped; `check_probe_rtt`
     /// then enters PROBE_RTT, all while `full_bw_reached` is still false.
     ///
-    /// A transient PROBE_RTT also fires on the very first ack (`probe_rtt_min_stamp`
-    /// starts unset, so `probe_rtt_expired` is true at t~0); its exit re-stamps
-    /// `probe_rtt_min_stamp`, so the *next* expiry (the one this test targets)
-    /// lands a full ProbeRTTInterval later, ~5 s into the still-running STARTUP.
-    /// The t~0 transient is filtered out by requiring the entry at
-    /// >= ProbeRTTInterval.
+    /// The first ack stamps `min_rtt_stamp`, so the expiry lands a full
+    /// MinRTTFilterLen later, ~10 s into the still-running STARTUP.
     ///
     /// On entry `check_probe_rtt` runs `enter_probe_rtt` (state -> ProbeRtt,
     /// `cwnd_gain` -> ProbeRTTCwndGain 0.5) and clears `probe_rtt_done_stamp`;
@@ -6492,7 +6460,7 @@ mod test {
     ///
     /// Asserts that: the flow only ever occupied STARTUP or PROBE_RTT (never
     /// advanced to DRAIN/PROBE_BW) and `full_bw_reached` was never set; the targeted
-    /// PROBE_RTT was entered only after ProbeRTTInterval (5 s) had elapsed, with
+    /// PROBE_RTT was entered only after MinRTTFilterLen (10 s) had elapsed, with
     /// `cwnd_gain == ProbeRTTCwndGain` (0.5) and `full_bw_reached` still false;
     /// `probe_rtt_done_stamp` armed once inflight drained below the cap; the
     /// interlude held for at least ProbeRTTDuration (200 ms) *and* one round after
@@ -6513,7 +6481,7 @@ mod test {
         /// keeping `full_bw_reached` false and STARTUP alive (cf. A.7). Comfortably
         /// above `min_pipe_cwnd` (4*MSS).
         const APP_WINDOW: u64 = 20 * MSS;
-        /// round cap (~1 RTT each, so ~12 s): more than one ProbeRTTInterval (5 s)
+        /// round cap (~1 RTT each, so ~12 s): more than one MinRTTFilterLen (10 s)
         /// plus a ProbeRTTDuration (200 ms), enough to capture the interval-expiry
         /// interlude and its exit if the loop does not break earlier.
         const ROUNDS_CAP: u64 = 120;
@@ -6543,9 +6511,8 @@ mod test {
         let mut inflight: u64 = 0;
         let mut pn: u64 = 0;
 
-        // Captured on the targeted PROBE_RTT entry edge (first entry at or after
-        // ProbeRTTInterval, i.e. the genuine interval-expiry interlude, not the t~0
-        // transient): (now_ns, cwnd_gain, full_bw_reached).
+        // Captured on the PROBE_RTT entry edge, which must come at or after
+        // MinRTTFilterLen: (now_ns, cwnd_gain, full_bw_reached).
         let mut entry: Option<(u64, f64, bool)> = None;
         // Captured when probe_rtt_done_stamp is first armed inside that interlude
         // (C.inflight has drained below the ProbeRTT cwnd cap): (now_ns, round).
@@ -6621,9 +6588,9 @@ mod test {
                         }
                     }
                     BbrState::ProbeRtt => {
-                        // Target only the interval-expiry interlude (>= ProbeRTTInterval),
-                        // skipping the t~0 unset-stamp transient.
-                        if entry.is_none() && now_ns >= PROBE_RTT_INTERVAL_SEC * 1_000_000_000 {
+                        // An entry before MinRTTFilterLen leaves `entry` unset and fails
+                        // the test below.
+                        if entry.is_none() && now_ns >= MIN_RTT_FILTER_LEN_SEC * 1_000_000_000 {
                             entry = Some((now_ns, bbr.cwnd_gain, bbr.full_bw_reached));
                         }
                         // The moment probe_rtt_done_stamp is armed inside that interlude:
@@ -6668,8 +6635,8 @@ mod test {
             "full_bw_reached must never be set on application-limited samples"
         );
 
-        // Entered PROBE_RTT only after ProbeRTTInterval (5 s), still in STARTUP. `entry`
-        // is only set inside the `>= ProbeRTTInterval` guard above, so a successful
+        // Entered PROBE_RTT only after MinRTTFilterLen (10 s), still in STARTUP. `entry`
+        // is only set inside the `>= MinRTTFilterLen` guard above, so a successful
         // `expect` already pins the interval-expiry timing.
         let (entry_ns, entry_cwnd_gain, entry_full_bw) =
             entry.expect("BBR never entered the interval-expiry PROBE_RTT during STARTUP");
@@ -7660,6 +7627,44 @@ mod test {
         assert_eq!(sim.bbr.max_bw, 12_000_000.0);
     }
 
+    /// ProbeRTT drains to half the BDP that the expired window measured, not half of one an
+    /// inflated RTT sample at expiry implies.
+    /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.6.4.5>
+    #[test]
+    fn probe_rtt_cwnd_uses_the_expired_min_rtt() {
+        let mut sim = probed();
+        // 100 packets in 10 ms: 12 MB/s over a 10 ms min RTT is a 120 kB BDP.
+        assert_eq!(sim.bbr.min_rtt, Duration::from_millis(10));
+        sim.bbr.min_rtt_filter_len = Duration::from_millis(50);
+
+        // The window expires on an ACK whose RTT a 20 ms queue inflates.
+        sim.round(100 * MS, 100, 30 * MS);
+        assert_eq!(sim.bbr.state, BbrState::ProbeRtt);
+        assert_eq!(sim.bbr.min_rtt, Duration::from_millis(30));
+        assert_eq!(sim.bbr.probe_rtt_cwnd(), 60_000);
+        assert!(sim.bbr.cwnd <= 60_000, "cwnd {}", sim.bbr.cwnd);
+    }
+
+    /// A flow that idles between frames refreshes its min RTT from the idle restarts and never
+    /// pays for ProbeRTT, even across several expiries of the min-RTT window.
+    /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.3.4.2>
+    #[test]
+    fn idle_between_frames_never_enters_probe_rtt() {
+        let mut sim = scripted();
+        for frame in 0..300 {
+            let sent_ns = frame * 100 * MS;
+            let first = sim.pn;
+            sim.send(sent_ns, 2);
+            sim.starve();
+            sim.ack(sent_ns + 40 * MS, first..sim.pn, true);
+            sim.starve();
+            assert_ne!(sim.bbr.state, BbrState::ProbeRtt, "frame {frame}");
+        }
+        // The window expired at least twice, and each expiry refreshed it.
+        let stamp = sim.bbr.min_rtt_stamp.expect("min RTT measured");
+        assert!(stamp > sim.at(20_000 * MS));
+    }
+
     /// ProbeRTT entered mid-probe ends the probe's feedback: the window ages once, on entry, and
     /// neither ProbeRTT's protected rounds nor later cruise rounds age it again.
     #[test]
@@ -7671,9 +7676,9 @@ mod test {
         let cycle = sim.bbr.cycle_count;
 
         // The min RTT expires on the next round.
-        sim.bbr.probe_rtt_interval = Duration::ZERO;
+        sim.bbr.min_rtt_filter_len = Duration::ZERO;
         sim.round(20 * MS, 100, 10 * MS);
-        sim.bbr.probe_rtt_interval = Duration::from_secs(PROBE_RTT_INTERVAL_SEC);
+        sim.bbr.min_rtt_filter_len = Duration::from_secs(MIN_RTT_FILTER_LEN_SEC);
         assert_eq!(sim.bbr.state, BbrState::ProbeRtt);
         assert_eq!(sim.bbr.cycle_count, cycle + 1);
 
@@ -7697,9 +7702,9 @@ mod test {
     /// with a max-bw window that has since aged, so any unprotected sample replaces the maximum.
     fn probing_rtt() -> Sim {
         let mut sim = probed();
-        sim.bbr.probe_rtt_interval = Duration::ZERO;
+        sim.bbr.min_rtt_filter_len = Duration::ZERO;
         sim.round(10 * MS, 100, 10 * MS);
-        sim.bbr.probe_rtt_interval = Duration::from_secs(PROBE_RTT_INTERVAL_SEC);
+        sim.bbr.min_rtt_filter_len = Duration::from_secs(MIN_RTT_FILTER_LEN_SEC);
         assert_eq!(sim.bbr.state, BbrState::ProbeRtt);
         sim.bbr.cycle_count += MAX_BW_FILTER_LEN as u64 + 1;
         sim
@@ -7773,9 +7778,9 @@ mod test {
         let mut sim = probed();
         let first = sim.pn;
         sim.send(10 * MS, 100);
-        sim.bbr.probe_rtt_interval = Duration::ZERO;
+        sim.bbr.min_rtt_filter_len = Duration::ZERO;
         sim.ack(20 * MS, first..first + 40, false);
-        sim.bbr.probe_rtt_interval = Duration::from_secs(PROBE_RTT_INTERVAL_SEC);
+        sim.bbr.min_rtt_filter_len = Duration::from_secs(MIN_RTT_FILTER_LEN_SEC);
         assert_eq!(sim.bbr.state, BbrState::ProbeRtt);
 
         // Inflight reaches the ProbeRTT window, which the sender then fills.
@@ -7919,9 +7924,9 @@ mod test {
         sim.ack(20 * MS, [11], false);
         assert!(sim.bbr.cwnd < 20_000);
         // The min RTT expires on the following ACK.
-        sim.bbr.probe_rtt_interval = Duration::ZERO;
+        sim.bbr.min_rtt_filter_len = Duration::ZERO;
         sim.ack(21 * MS, 12..20, false);
-        sim.bbr.probe_rtt_interval = Duration::from_secs(PROBE_RTT_INTERVAL_SEC);
+        sim.bbr.min_rtt_filter_len = Duration::from_secs(MIN_RTT_FILTER_LEN_SEC);
         assert_eq!(sim.bbr.state, BbrState::ProbeRtt);
         assert!(sim.bbr.in_recovery);
         let bound = sim.bbr.probe_rtt_cwnd();
@@ -7942,7 +7947,7 @@ mod test {
     #[test]
     fn probe_rtt_episode_keeps_the_saved_window() {
         let mut sim = probing_up();
-        sim.bbr.probe_rtt_interval = Duration::ZERO;
+        sim.bbr.min_rtt_filter_len = Duration::ZERO;
         sim.ack(20 * MS, 10..20, false);
         assert_eq!(sim.bbr.state, BbrState::ProbeRtt);
         let saved = sim.bbr.prior_cwnd;
@@ -7971,9 +7976,9 @@ mod test {
         assert_ne!(sim.bbr.state, BbrState::Startup);
 
         // The min RTT expires on the next round.
-        sim.bbr.probe_rtt_interval = Duration::ZERO;
+        sim.bbr.min_rtt_filter_len = Duration::ZERO;
         sim.round(20 * MS, 100, 10 * MS);
-        sim.bbr.probe_rtt_interval = Duration::from_secs(PROBE_RTT_INTERVAL_SEC);
+        sim.bbr.min_rtt_filter_len = Duration::from_secs(MIN_RTT_FILTER_LEN_SEC);
         assert_eq!(sim.bbr.state, BbrState::ProbeRtt);
 
         sim.bbr.on_spurious_congestion_event();
