@@ -113,6 +113,11 @@ pub trait Controller: Send + Sync + core::fmt::Debug {
 
     /// Packets are acked in batches, all with the same `now` argument. This indicates one of those
     /// batches has completed.
+    ///
+    /// It is called after the loss detection that the ACK triggered, so the losses the ACK
+    /// revealed have already been reported through [`Self::on_packet_space_lost`] and
+    /// [`Self::on_congestion_event_space`], and `in_flight` no longer counts the lost packets.
+    /// CE marks the ACK reported arrive after it.
     #[allow(unused_variables)]
     fn on_end_acks(
         &mut self,

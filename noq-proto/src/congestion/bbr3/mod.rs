@@ -1534,9 +1534,10 @@ impl Bbr3 {
     /// equivalent to BBRInitPacingRate once an RTT is measured, as Linux BBR's
     /// `bbr_init_pacing_rate_from_rtt`.
     ///
-    /// BBR's own first RTT sample stands in for SRTT: the transport updates its estimator only
-    /// after the ACK callbacks, and before that the estimator holds just the configured initial
-    /// RTT. A zero RTT is floored at 1us, as Linux does.
+    /// BBR's own first RTT sample stands in for SRTT, so the recalibration does not depend on
+    /// when the transport updates its estimator: after the per-packet `on_ack` calls, which
+    /// otherwise see only the configured initial RTT. A zero RTT is floored at 1us, as Linux
+    /// does.
     fn init_pacing_rate_from_rtt(&mut self) {
         self.has_seen_rtt = true;
         let rtt = Ord::max(self.min_rtt, Duration::from_micros(1));
@@ -1816,6 +1817,9 @@ impl Bbr3 {
         let Ok(index) = packets.binary_search_by_key(&packet_number, |p| p.packet_number) else {
             return;
         };
+        // C.inflight drops as each packet is acknowledged, so losses the same ACK reveals, which
+        // the transport reports before `on_end_acks`, see the inflight without it.
+        self.inflight = self.inflight.saturating_sub(bytes);
         packets[index].acknowledged = true;
         let p = packets[index];
         // The first packet of each ACK starts its sample even if older than the last ACK's newest,
@@ -1890,6 +1894,11 @@ impl Bbr3 {
         };
         rs.interval = Ord::max(rs.send_elapsed, rs.ack_elapsed);
         rs.delivered = self.delivered.saturating_sub(rs.prior_delivered);
+        // RS.lost counts every loss declared since the packet was sent, including the ones this
+        // ACK revealed, which the transport reports before the ACK ends. Linux computes it in
+        // tcp_rate_gen, after the ACK's losses are marked, for the same reason: a sample that
+        // missed them would read as a safe loss rate and raise inflight_longterm back up.
+        rs.lost = self.lost.saturating_sub(rs.last_packet.lost);
         // An interval shorter than the min RTT is not a reliable rate, so the sample carries no
         // bandwidth, but it still advances rounds and the state machine as in the draft's
         // UpdateOnACK. The min RTT includes this ACK's own sample, as the transport's does in the
@@ -2345,6 +2354,19 @@ mod test {
         /// Deliver one ACK frame at `now_ns` covering `pns`, as the transport does: one `on_ack`
         /// per packet, then `on_end_acks` with the post-ACK inflight.
         fn ack(&mut self, now_ns: u64, pns: impl IntoIterator<Item = u64>, app_limited: bool) {
+            self.ack_with_losses(now_ns, pns, [], app_limited);
+        }
+
+        /// Deliver one ACK frame at `now_ns` covering `pns` that also reveals the loss of `lost`,
+        /// in the transport's order: one `on_ack` per acknowledged packet, then one
+        /// `on_packet_lost` per lost packet, then `on_end_acks` with the inflight after both.
+        fn ack_with_losses(
+            &mut self,
+            now_ns: u64,
+            pns: impl IntoIterator<Item = u64>,
+            lost: impl IntoIterator<Item = u64>,
+            app_limited: bool,
+        ) {
             let now = self.at(now_ns);
             for pn in pns {
                 let i = self.flight.iter().position(|p| p.pn == pn).unwrap();
@@ -2360,6 +2382,13 @@ mod test {
                     app_limited,
                     &self.rtt_est,
                 );
+            }
+            for pn in lost {
+                let i = self.flight.iter().position(|p| p.pn == pn).unwrap();
+                self.flight.remove(i);
+                self.inflight -= self.mss;
+                self.bbr
+                    .on_packet_lost(self.mss as u16, pn, SpaceKind::Data, now);
             }
             // The transport reports the largest packet ever acked; only its presence matters.
             self.bbr
@@ -7581,17 +7610,13 @@ mod test {
         sim.send(25 * MS, 20);
 
         let lost_a: Vec<u64> = (0..5).map(|i| a + 8 * i).collect();
-        sim.ack(30 * MS, (a..b).filter(|pn| !lost_a.contains(pn)), false);
-        for &pn in &lost_a {
-            sim.lose(30 * MS, pn);
-        }
+        let acked_a: Vec<u64> = (a..b).filter(|pn| !lost_a.contains(pn)).collect();
+        sim.ack_with_losses(30 * MS, acked_a, lost_a, false);
         let c = sim.pn;
         sim.send(31 * MS, 10);
         let lost_b = [b, b + 5, b + 10];
-        sim.ack(35 * MS, (b..c).filter(|pn| !lost_b.contains(pn)), false);
-        for pn in lost_b {
-            sim.lose(35 * MS, pn);
-        }
+        let acked_b: Vec<u64> = (b..c).filter(|pn| !lost_b.contains(pn)).collect();
+        sim.ack_with_losses(35 * MS, acked_b, lost_b, false);
         assert_eq!(sim.bbr.state, BbrState::Startup);
 
         sim.ack(41 * MS, c..c + 10, false);
@@ -7643,7 +7668,7 @@ mod test {
 
     /// The first measured RTT, above or below 1ms, replaces the 1ms estimate of the initial
     /// pacing rate, and the send quantum follows. `Sim::ack` leaves the RTT estimator untouched,
-    /// as the transport does until after the ACK callbacks.
+    /// as the transport does until after the per-packet ACK callbacks.
     #[test]
     fn first_rtt_recalibrates_startup_pacing() {
         for rtt_ns in [10 * MS, MS / 5] {
@@ -7710,15 +7735,43 @@ mod test {
         assert_eq!(sim.bbr.max_bw, 12_000_000.0);
         assert!(!sim.bbr.check_probe_loss);
 
-        // Lose 10% of the next round.
+        // Lose 10% of the next round, revealed by the ACK of the rest.
         let first = sim.pn;
         sim.send(110 * MS, 100);
-        for pn in first..first + 10 {
-            sim.lose(130 * MS, pn);
-        }
-        sim.ack(130 * MS, first + 10..sim.pn, false);
+        sim.ack_with_losses(130 * MS, first + 10..sim.pn, first..first + 10, false);
+        // The loss round restarts after this ACK's deliveries, so the short-term model takes
+        // the cut when the next round ends.
+        sim.round(130 * MS, 100, 20 * MS);
         assert_eq!(sim.bbr.inflight_longterm, u64::MAX);
         assert!(sim.bbr.bw_shortterm < f64::INFINITY);
+    }
+
+    /// The ACK that reveals a probe's loss keeps the loss's cut to `inflight_longterm`.
+    ///
+    /// The ACK that declares a packet lost acknowledges packets sent after it, at the probe's
+    /// peak. Its rate sample must count the losses it revealed, or it reads as a safe loss rate
+    /// and raises `inflight_longterm` back to that peak.
+    /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.5.10.2>
+    #[test]
+    fn ack_revealing_a_probe_loss_keeps_the_cut() {
+        let mut sim = probed();
+        sim.bbr.start_probe_bw_up();
+        sim.bbr.check_probe_loss = true;
+        sim.bbr.inflight_longterm = 200 * 1200;
+
+        let first = sim.pn;
+        sim.send(20 * MS, 100);
+        // 3 of 100 lost: more than the 2 % threshold.
+        sim.ack_with_losses(40 * MS, first + 3..first + 100, first..first + 3, false);
+        // The probe ended; with nothing left in flight it is already past DOWN.
+        assert_ne!(sim.bbr.state, BbrState::ProbeBw(ProbeBwSubstate::Up));
+        assert!(sim.bbr.prev_probe_too_high);
+        assert!(
+            sim.bbr.inflight_longterm < 100 * 1200,
+            "inflight_longterm {} back at the probe's peak",
+            sim.bbr.inflight_longterm
+        );
+        assert_eq!(sim.bbr.rs.unwrap().lost, 3 * 1200);
     }
 
     /// Probe feedback that ends on an application-limited round finishes without aging the
@@ -8300,17 +8353,16 @@ mod test {
         assert_eq!(sim.bbr.inflight_longterm, 100_000);
     }
 
-    /// The transport detects losses between an ACK and its CE event. A loss too small to show
-    /// inflight too high rewrites `rs` with the lost packet's flight, and CE still bounds the
-    /// probe by the marked ACK's own sample.
+    /// The transport reports an ACK's losses before its CE event. A loss too small to show
+    /// inflight too high leaves the probe running, and CE then bounds the probe by the marked
+    /// ACK's own sample.
     #[test]
     fn ce_after_loss_detection_bounds_by_the_ack_sample() {
         let mut sim = probing_up();
         // Packet 109 is sent with 100 packets in flight, so losing it alone stays under
         // LOSS_THRESH.
         sim.send(10 * MS, 90);
-        sim.ack(20 * MS, 10..20, false);
-        sim.lose(20 * MS, 109);
+        sim.ack_with_losses(20 * MS, 10..20, [109], false);
         assert_eq!(sim.bbr.state, BbrState::ProbeBw(ProbeBwSubstate::Up));
         let now = sim.at(20 * MS);
         sim.bbr
@@ -8370,10 +8422,7 @@ mod test {
         assert!(sim.bbr.prev_probe_precautionary);
 
         let first = sim.pn - 43;
-        for pn in first..first + 5 {
-            sim.lose(251 * MS, pn);
-        }
-        sim.ack(252 * MS, first + 5..sim.pn, false);
+        sim.ack_with_losses(252 * MS, first + 5..sim.pn, first..first + 5, false);
         assert!(sim.bbr.prev_probe_too_high);
         sim.round(260 * MS, 10, 20 * MS);
         assert!(matches!(

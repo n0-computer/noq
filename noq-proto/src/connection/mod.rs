@@ -3049,15 +3049,6 @@ impl Connection {
             }
         }
 
-        let largest_ackd = self.spaces[space].for_path(path).largest_acked_packet_pn;
-        let path_data = self.path_data_mut(path);
-        let app_limited = path_data.app_limited;
-        let in_flight = path_data.in_flight.bytes;
-
-        path_data
-            .congestion
-            .on_end_acks(now, in_flight, app_limited, largest_ackd);
-
         if new_largest_pn.is_some() && ack_eliciting_acked {
             let ack_delay = if space != SpaceId::Data {
                 Duration::from_micros(0)
@@ -3084,6 +3075,17 @@ impl Connection {
 
         // Must be called before crypto/pto_count are clobbered
         self.detect_lost_packets(now, space, path, true);
+
+        // The ACK ends after the losses it revealed, so the controller's per-ACK update counts
+        // them and sees the in-flight without the lost packets, as Linux runs its congestion
+        // control after marking losses.
+        let largest_ackd = self.spaces[space].for_path(path).largest_acked_packet_pn;
+        let path_data = self.path_data_mut(path);
+        let app_limited = path_data.app_limited;
+        let in_flight = path_data.in_flight.bytes;
+        path_data
+            .congestion
+            .on_end_acks(now, in_flight, app_limited, largest_ackd);
 
         // If the peer did not complete the handshake address validation the ACK could be
         // spoofed, e.g. in the Initial space. Setting the pto_count back to 0 removes the

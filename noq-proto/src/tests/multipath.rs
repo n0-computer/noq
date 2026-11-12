@@ -2761,7 +2761,7 @@ fn congestion_callbacks_stay_on_the_sending_path() -> TestResult {
 
 /// Every path, including one opened after the handshake, paces Startup from its own measured
 /// RTT rather than the 1ms estimate its controller starts with. The transport records each RTT
-/// sample only after the ACK callbacks.
+/// sample only after the per-packet ACK callbacks.
 #[test]
 fn paths_pace_startup_from_measured_rtt() -> TestResult {
     let _guard = subscribe();

@@ -5059,6 +5059,9 @@ enum PacketEvent {
     AppLimited {
         in_flight: u64,
     },
+    EndAcks {
+        in_flight: u64,
+    },
 }
 
 type PacketLog = Arc<Mutex<Vec<PacketEvent>>>;
@@ -5116,6 +5119,16 @@ impl Controller for PacketRecorder {
 
     fn on_app_limited(&mut self, in_flight: u64) {
         self.push(PacketEvent::AppLimited { in_flight });
+    }
+
+    fn on_end_acks(
+        &mut self,
+        _now: Instant,
+        in_flight: u64,
+        _app_limited: bool,
+        _largest_packet_num_acked: Option<u64>,
+    ) {
+        self.push(PacketEvent::EndAcks { in_flight });
     }
 
     fn on_mtu_update(&mut self, _new_mtu: u16) {}
@@ -5210,7 +5223,7 @@ fn check_packet_identity(log: &PacketLog) -> Vec<PacketEvent> {
                     "{largest:?} congested but not lost"
                 );
             }
-            PacketEvent::AppLimited { .. } => {}
+            PacketEvent::AppLimited { .. } | PacketEvent::EndAcks { .. } => {}
         }
     }
     events
@@ -5441,6 +5454,44 @@ fn stream_starvation_reported_before_resumed_send() {
         let s = pair.client_streams(ch).open(Dir::Uni).unwrap();
         pair.client_send(ch, s).write(&[42; 1000]).unwrap();
     });
+}
+
+/// The losses an ACK reveals reach the controller before that ACK ends, so its per-ACK model
+/// update sees them, and the in-flight it reports no longer counts the lost packets.
+#[test]
+fn ack_losses_precede_the_end_of_the_ack() {
+    let _guard = subscribe();
+    let (mut pair, client_ch, log) = recorded_pair(PacketRecorderFactory::default());
+    let s = pair.client_streams(client_ch).open(Dir::Uni).unwrap();
+    pair.client_send(client_ch, s).write(&[42; 12_000]).unwrap();
+    pair.drive_client();
+    // The first datagram of the burst is lost; the later ones reveal it.
+    assert!(pair.server.inbound.pop_first().is_some());
+    pair.drive();
+
+    let events = check_packet_identity(&log);
+    let lost = events
+        .iter()
+        .position(|e| matches!(e, PacketEvent::Lost { .. }))
+        .expect("a loss was declared");
+    let acked = events[..lost]
+        .iter()
+        .rposition(|e| matches!(e, PacketEvent::Acked { .. }))
+        .expect("an ACK revealed the loss");
+    assert!(
+        !events[acked..lost]
+            .iter()
+            .any(|e| matches!(e, PacketEvent::EndAcks { .. })),
+        "the ACK ended before its losses were reported: {:?}",
+        &events[acked..]
+    );
+    let end = lost
+        + events[lost..]
+            .iter()
+            .position(|e| matches!(e, PacketEvent::EndAcks { .. }))
+            .expect("the ACK ended");
+    // Nothing else is in flight once the lost packet no longer counts.
+    assert_matches!(events[end], PacketEvent::EndAcks { in_flight: 0 });
 }
 
 #[test]
