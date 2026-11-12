@@ -1828,16 +1828,18 @@ impl Bbr3 {
         &mut self,
         now: Instant,
         in_flight: u64,
-        app_limited: bool,
+        _app_limited: bool,
         largest_packet_num_acked: Option<u64>,
         _space: SpaceKind,
     ) {
         self.inflight = in_flight;
         if largest_packet_num_acked.is_some() {
+            // GenerateRateSample only ends a limited phase. Starting one is
+            // CheckIfApplicationLimited's job, which `on_app_limited` does on the next empty poll
+            // with the current inflight. The transport's `app_limited` verdict comes from the poll
+            // before this ACK, which may have found the window full.
             if self.app_limited != 0 && self.delivered > self.app_limited {
                 self.app_limited = 0;
-            } else if app_limited {
-                self.app_limited = Ord::max(self.delivered + self.inflight, 1);
             }
             let round_count = self.round_count;
             for packets in self.packets.iter_mut() {
@@ -7401,6 +7403,8 @@ mod test {
         sim.send(0, 1);
         sim.ack(10 * MS, [0], true);
         assert_eq!(sim.bbr.max_bw, 120_000.0);
+        // The poll after the ACK finds nothing to send.
+        sim.starve();
 
         sim.send(1000 * MS, 10);
         assert!(sim.bbr.idle_restart);
@@ -7451,6 +7455,36 @@ mod test {
         sim.send(0, sim.bbr.cwnd.div_ceil(1200));
         sim.starve();
         assert_eq!(sim.bbr.app_limited, 0);
+    }
+
+    /// An ACK does not mark the connection application-limited on the strength of the poll
+    /// before it.
+    ///
+    /// A sender that fills the window exactly and then runs dry is window-limited at that poll,
+    /// so the starvation report is ignored. The transport still passes that poll's verdict to the
+    /// ACKs that follow, and the window being full is what CheckIfApplicationLimited rejects. The
+    /// next empty poll after the ACK decides with the current inflight instead.
+    #[test]
+    fn ack_does_not_mark_app_limited_from_a_stale_poll() {
+        let mut sim = scripted();
+        let window = sim.bbr.cwnd.div_ceil(1200);
+        sim.send(0, window);
+        sim.starve();
+        assert_eq!(sim.bbr.app_limited, 0);
+
+        sim.ack(10 * MS, [0], true);
+        assert_eq!(
+            sim.bbr.app_limited, 0,
+            "the ACK marked a window-limited flight"
+        );
+        // The application writes more, and those packets measure the network.
+        sim.send(11 * MS, 1);
+        assert!(
+            !sim.bbr.packets[SpaceKind::Data as usize]
+                .back()
+                .unwrap()
+                .is_app_limited
+        );
     }
 
     /// Starvation with data in flight marks only packets sent after it, and the limited phase
