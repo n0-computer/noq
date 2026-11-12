@@ -1437,6 +1437,12 @@ impl Connection {
 
         path.app_limited = last_packet_number.is_none() && !send_blocked;
 
+        if path.app_limited {
+            // Tell the controller now: once nothing is in flight, no ACK arrives to carry the
+            // flag before the next send.
+            let in_flight = path.in_flight.bytes;
+            path.congestion.on_app_limited(in_flight);
+        }
         if cwnd_blocked {
             path.congestion.on_cwnd_limited();
         }

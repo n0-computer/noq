@@ -5036,7 +5036,7 @@ fn send_quantum_bounds_the_gso_batch() {
     );
 }
 
-/// A per-packet congestion callback, as the transport reported it.
+/// A congestion callback, as the transport reported it.
 #[derive(Debug, Clone, Copy)]
 enum PacketEvent {
     Sent {
@@ -5055,14 +5055,19 @@ enum PacketEvent {
         largest: PacketId,
         ecn: bool,
     },
+    AppLimited {
+        in_flight: u64,
+    },
 }
 
 type PacketLog = Arc<Mutex<Vec<PacketEvent>>>;
 
-/// Records the per-packet congestion callbacks.
+/// Records the per-packet congestion and starvation callbacks.
 #[derive(Debug, Clone)]
 struct PacketRecorder {
     log: PacketLog,
+    window: u64,
+    pacing_rate: Option<u64>,
 }
 
 impl PacketRecorder {
@@ -5108,10 +5113,23 @@ impl Controller for PacketRecorder {
         });
     }
 
+    fn on_app_limited(&mut self, in_flight: u64) {
+        self.push(PacketEvent::AppLimited { in_flight });
+    }
+
     fn on_mtu_update(&mut self, _new_mtu: u16) {}
 
     fn window(&self) -> u64 {
-        u64::MAX / 2
+        self.window
+    }
+
+    fn metrics(&self) -> ControllerMetrics {
+        ControllerMetrics {
+            congestion_window: self.window,
+            ssthresh: None,
+            pacing_rate: self.pacing_rate,
+            ..Default::default()
+        }
     }
 
     fn clone_box(&self) -> Box<dyn Controller> {
@@ -5119,7 +5137,7 @@ impl Controller for PacketRecorder {
     }
 
     fn initial_window(&self) -> u64 {
-        u64::MAX / 2
+        self.window
     }
 
     fn into_any(self: Box<Self>) -> Box<dyn Any> {
@@ -5131,13 +5149,21 @@ impl Controller for PacketRecorder {
 #[derive(Default)]
 struct PacketRecorderFactory {
     logs: Mutex<Vec<PacketLog>>,
+    /// The congestion window every controller reports; effectively unlimited if unset
+    window: Option<u64>,
+    /// The pacing rate in bytes/sec every controller reports; derived from the window if unset
+    pacing_rate: Option<u64>,
 }
 
 impl ControllerFactory for PacketRecorderFactory {
     fn build(self: Arc<Self>, _now: Instant, _current_mtu: u16) -> Box<dyn Controller> {
         let log = PacketLog::default();
         self.logs.lock().unwrap().push(log.clone());
-        Box::new(PacketRecorder { log })
+        Box::new(PacketRecorder {
+            log,
+            window: self.window.unwrap_or(u64::MAX / 2),
+            pacing_rate: self.pacing_rate,
+        })
     }
 }
 
@@ -5183,6 +5209,7 @@ fn check_packet_identity(log: &PacketLog) -> Vec<PacketEvent> {
                     "{largest:?} congested but not lost"
                 );
             }
+            PacketEvent::AppLimited { .. } => {}
         }
     }
     events
@@ -5300,6 +5327,114 @@ fn congestion_callbacks_identify_the_initial_a_retry_acks() {
             .any(|e| matches!(e, PacketEvent::Acked { packet, .. } if *packet == initial_0)),
         "the Retry did not ack Initial 0"
     );
+}
+
+/// Connects a pair whose controllers record their callbacks, returning the client's log.
+fn recorded_pair(factory: PacketRecorderFactory) -> (Pair, ConnectionHandle, PacketLog) {
+    let factory = Arc::new(factory);
+    let mut transport = TransportConfig::default();
+    transport.congestion_controller_factory(factory.clone());
+    let transport = Arc::new(transport);
+
+    let mut server_cfg = server_config();
+    server_cfg.transport = transport.clone();
+    let mut pair = Pair::new(Default::default(), server_cfg);
+    let mut client_cfg = client_config();
+    client_cfg.transport = transport;
+    let (client_ch, _) = pair.connect_with(client_cfg);
+
+    // The client builds its controller before the server hears of it.
+    let log = factory.logs.lock().unwrap()[0].clone();
+    (pair, client_ch, log)
+}
+
+/// Sends with `send`, lets it deliver, then sends again after an idle gap. With nothing in
+/// flight no ACK arrives during the gap, so the empty poll that follows the last ACK must tell
+/// the controller of starvation before the resumed send.
+fn check_starvation_reported_before_resumed_send(send: impl Fn(&mut Pair, ConnectionHandle)) {
+    let _guard = subscribe();
+    let (mut pair, client_ch, log) = recorded_pair(Default::default());
+    send(&mut pair, client_ch);
+    pair.drive();
+
+    pair.time += Duration::from_millis(20);
+    let resumed_at = pair.time;
+    send(&mut pair, client_ch);
+    pair.drive_client();
+
+    let events = check_packet_identity(&log);
+    let resumed = events
+        .iter()
+        .position(|e| matches!(e, PacketEvent::Sent { at, .. } if *at >= resumed_at))
+        .expect("resumed send");
+    let last_signal = events[..resumed].iter().rfind(|e| {
+        matches!(
+            e,
+            PacketEvent::Acked { .. } | PacketEvent::AppLimited { .. }
+        )
+    });
+    assert_matches!(last_signal, Some(PacketEvent::AppLimited { in_flight: 0 }));
+}
+
+#[test]
+fn stream_starvation_reported_before_resumed_send() {
+    check_starvation_reported_before_resumed_send(|pair, ch| {
+        let s = pair.client_streams(ch).open(Dir::Uni).unwrap();
+        pair.client_send(ch, s).write(&[42; 1000]).unwrap();
+    });
+}
+
+#[test]
+fn datagram_starvation_reported_before_resumed_send() {
+    check_starvation_reported_before_resumed_send(|pair, ch| {
+        pair.client_datagrams(ch)
+            .send(Bytes::from_static(&[42; 1000]), true)
+            .unwrap();
+    });
+}
+
+/// Writes a backlog that `factory`'s controllers hold back, and checks it never reports
+/// starvation.
+fn check_blocked_backlog_is_not_app_limited(factory: PacketRecorderFactory) {
+    let _guard = subscribe();
+    let (mut pair, client_ch, log) = recorded_pair(factory);
+    // The handshake can drain the pacer, and how far depends on its random sizes. Refill it so
+    // the backlog always starts sending before it is held back.
+    pair.time += Duration::from_millis(100);
+    pair.drive();
+    let before = log.lock().unwrap().len();
+
+    let s = pair.client_streams(client_ch).open(Dir::Uni).unwrap();
+    pair.client_send(client_ch, s)
+        .write(&[42; 64 * 1024])
+        .unwrap();
+    pair.drive_client();
+
+    let events = log.lock().unwrap()[before..].to_vec();
+    assert!(events.iter().any(|e| matches!(e, PacketEvent::Sent { .. })));
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, PacketEvent::AppLimited { .. })),
+        "a blocked backlog reported starvation"
+    );
+}
+
+#[test]
+fn window_blocked_backlog_is_not_app_limited() {
+    check_blocked_backlog_is_not_app_limited(PacketRecorderFactory {
+        window: Some(12_000),
+        ..Default::default()
+    });
+}
+
+#[test]
+fn pacing_blocked_backlog_is_not_app_limited() {
+    // 1 Mbit/s holds the backlog back long before the unlimited window fills.
+    check_blocked_backlog_is_not_app_limited(PacketRecorderFactory {
+        pacing_rate: Some(125_000),
+        ..Default::default()
+    });
 }
 
 /// This test used to fail due to incorrectly encoding frame::MaybeFrame::None

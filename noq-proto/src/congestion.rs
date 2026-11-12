@@ -68,6 +68,16 @@ pub trait Controller: Send + Sync + core::fmt::Debug {
     /// the congestion window at this point in the current round trip.
     fn on_cwnd_limited(&mut self) {}
 
+    /// The connection had nothing to send, and neither the controller nor the path held it back
+    ///
+    /// Reported on every such transmit poll, so a controller learns of starvation before the next
+    /// send rather than at the next ACK. `in_flight` is the path's bytes in flight at that point.
+    /// Data blocked on the peer's flow control credit counts as nothing to send. A controller
+    /// should ignore the report when `in_flight` fills its window, since the connection is then
+    /// window-limited rather than starved.
+    #[allow(unused_variables)]
+    fn on_app_limited(&mut self, in_flight: u64) {}
+
     /// Packet deliveries were confirmed
     #[deprecated(note = "implement `on_packet_space_acked`, which also names the packet's space")]
     #[allow(unused_variables)]
