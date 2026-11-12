@@ -595,6 +595,10 @@ pub struct Bbr3 {
     /// Set by an ACK of a packet sent after `recovery_start_time`, which ends the recovery
     /// episode once the ACK has been processed.
     ack_ends_recovery: bool,
+    /// Whether the recovery episode is the one persistent congestion started, the analogue of
+    /// TCP's RTO recovery. Like Linux in `CA_Loss`, BBR then treats later losses as part of it
+    /// until it ends, so a lost retransmission cannot save the cut window as the one to restore.
+    rto_recovery: bool,
     /// Whether BBR has responded to CE marks in the current recovery episode. It limits that
     /// response to once per episode, and a marked episode's congestion is real, so its losses
     /// are not undone as spurious.
@@ -741,6 +745,7 @@ impl Bbr3 {
             recovery_start_time: None,
             in_recovery: false,
             ack_ends_recovery: false,
+            rto_recovery: false,
             ce_in_recovery: false,
             reno_rounds_bound: RENO_ROUNDS_BOUNDS[0],
             loss_round_delivered: 0,
@@ -950,7 +955,9 @@ impl Bbr3 {
     /// the start of the episode already underway and so belongs to it.
     /// <https://datatracker.ietf.org/doc/html/rfc9002#section-7.3.2>
     fn enter_recovery(&mut self, now: Instant, sent: Instant) {
-        if self.recovery_start_time.is_some_and(|start| sent <= start) {
+        if self.recovery_start_time.is_some_and(|start| sent <= start)
+            || (self.rto_recovery && self.in_recovery)
+        {
             return;
         }
         // Not also per loss round, as draft-06's NoteLoss does: that contradicts its own prose
@@ -1267,9 +1274,9 @@ impl Bbr3 {
         self.cwnd_gain = self.probe_rtt_cwnd_gain;
     }
 
-    /// equivalent to BBRSaveCwnd <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.6.4.4-13>
+    /// equivalent to BBRSaveCwnd <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.6.4.4>
     fn save_cwnd(&mut self) {
-        if !self.loss_in_round && self.state != BbrState::ProbeRtt {
+        if !self.in_recovery && self.state != BbrState::ProbeRtt {
             self.prior_cwnd = self.cwnd;
         } else {
             self.prior_cwnd = Ord::max(self.prior_cwnd, self.cwnd);
@@ -1878,6 +1885,13 @@ impl Bbr3 {
         self.fold_ack_into_model(newly_acked, now);
         if core::mem::take(&mut self.ack_ends_recovery) {
             self.in_recovery = false;
+            self.rto_recovery = false;
+            // Leaving loss recovery restores the cwnd it started with, bounded by the model as
+            // the end of ACK processing bounds it in the draft.
+            // <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.6.4.4>
+            self.restore_cwnd();
+            self.bound_cwnd_for_probe_rtt();
+            self.bound_cwnd_for_model();
         }
     }
 
@@ -1929,7 +1943,20 @@ impl Bbr3 {
             self.handle_ce(now, sent);
         }
         if is_persistent_congestion {
-            self.cwnd = self.min_pipe_cwnd;
+            // equivalent to OnEnterRTO, QUIC's persistent congestion being the closest analogue.
+            // The losses that showed it already started or continued a recovery episode, which
+            // saved the model for undo, so only the cwnd is saved here. The window allows one
+            // more packet, floored at MinPipeCwnd as SetCwnd floors it on the next ACK.
+            // <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.6.4.4>
+            self.save_cwnd();
+            self.cwnd = Ord::max(self.inflight + self.smss, self.min_pipe_cwnd);
+            // TCP's recovery after an RTO lasts until the lost data is repaired. Restart the
+            // episode here, so the ACK that declared persistent congestion, or a later ACK of
+            // data sent before it, does not end recovery and restore the window just cut.
+            self.recovery_start_time = Some(now);
+            self.in_recovery = true;
+            self.ack_ends_recovery = false;
+            self.rto_recovery = true;
         }
     }
 
@@ -7674,6 +7701,124 @@ mod test {
         assert_eq!(sim.bbr.lost, 0);
         assert_eq!(sim.bbr.inflight, 2400);
         assert!(!sim.bbr.loss_in_round);
+    }
+
+    /// Persistent congestion cuts cwnd as the draft's RTO does, and leaving the recovery episode
+    /// restores the window it started with.
+    /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.6.4.4>
+    #[test]
+    fn persistent_congestion_cuts_cwnd_until_recovery_ends() {
+        let mut sim = scripted();
+        sim.round(0, 30, 10 * MS);
+        let before = sim.bbr.cwnd;
+        assert!(before > 8 * 1200);
+
+        let first = sim.pn;
+        sim.send(20 * MS, 10);
+        for pn in first..first + 10 {
+            sim.lose(500 * MS, pn);
+        }
+        sim.bbr.on_congestion_event(
+            sim.at(500 * MS),
+            sim.at(20 * MS),
+            true,
+            false,
+            12_000,
+            first + 9,
+            SpaceKind::Data,
+        );
+        assert_eq!(sim.bbr.cwnd, sim.bbr.min_pipe_cwnd);
+        assert!(sim.bbr.in_recovery);
+
+        // A packet sent after the episode began is acknowledged, which ends it.
+        sim.round(510 * MS, 1, 10 * MS);
+        assert!(!sim.bbr.in_recovery);
+        assert!(
+            sim.bbr.cwnd >= before,
+            "cwnd {} after recovery, {before} before",
+            sim.bbr.cwnd
+        );
+    }
+
+    /// The ACK that declares persistent congestion does not also end the recovery it cuts the
+    /// window for, even when it acknowledges packets sent after the episode began. A
+    /// retransmission lost within that recovery does not replace the window it restores.
+    #[test]
+    fn persistent_congestion_outlasts_its_own_ack() {
+        let mut sim = scripted();
+        sim.round(0, 30, 10 * MS);
+        let before = sim.bbr.cwnd;
+
+        let first = sim.pn;
+        sim.send(20 * MS, 10);
+        // The first loss opens the recovery episode at 100 ms.
+        sim.lose(100 * MS, first);
+        let late = sim.pn;
+        sim.send(200 * MS, 6);
+
+        // At 900 ms one ACK delivers the late packets and shows the rest lost for long enough to
+        // be persistent congestion, in the transport's order.
+        let now = sim.at(900 * MS);
+        for pn in late..late + 6 {
+            sim.bbr.on_ack(
+                now,
+                sim.at(200 * MS),
+                1200,
+                pn,
+                SpaceKind::Data,
+                false,
+                &sim.rtt_est,
+            );
+        }
+        for pn in first + 1..first + 10 {
+            sim.bbr.on_packet_lost(1200, pn, SpaceKind::Data, now);
+        }
+        sim.bbr.on_congestion_event(
+            now,
+            sim.at(20 * MS),
+            true,
+            false,
+            10_800,
+            first + 9,
+            SpaceKind::Data,
+        );
+        // Nothing is left in flight, so the window allows one packet, floored at the pipe.
+        assert_eq!(sim.bbr.cwnd, sim.bbr.min_pipe_cwnd);
+        sim.bbr
+            .on_end_acks(now, 0, false, Some(late + 5), SpaceKind::Data);
+        assert!(sim.bbr.in_recovery);
+        assert!(
+            sim.bbr.cwnd < before,
+            "cwnd {} restored at once",
+            sim.bbr.cwnd
+        );
+
+        // A retransmission sent after the declaration is lost too, and the ACK that shows it
+        // acknowledges a newer packet, which ends the recovery.
+        let (rtx, newer) = (late + 6, late + 7);
+        sim.bbr
+            .on_packet_sent(sim.at(910 * MS), 1200, rtx, SpaceKind::Data);
+        sim.bbr
+            .on_packet_sent(sim.at(911 * MS), 1200, newer, SpaceKind::Data);
+        let now = sim.at(950 * MS);
+        sim.bbr.on_ack(
+            now,
+            sim.at(911 * MS),
+            1200,
+            newer,
+            SpaceKind::Data,
+            false,
+            &sim.rtt_est,
+        );
+        sim.bbr.on_packet_lost(1200, rtx, SpaceKind::Data, now);
+        sim.bbr
+            .on_end_acks(now, 0, false, Some(newer), SpaceKind::Data);
+        assert!(!sim.bbr.in_recovery);
+        assert!(
+            sim.bbr.cwnd >= before,
+            "cwnd {} after recovery, {before} before",
+            sim.bbr.cwnd
+        );
     }
 
     /// The Startup pacing rate a 12 KB initial window takes from its first measured RTT.
