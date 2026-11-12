@@ -247,6 +247,49 @@ struct BbrRateSample {
     last_packet: BbrPacket,
 }
 
+/// The part of a rate sample that judges whether inflight went too high.
+///
+/// An ACK's sample takes it from the newest packet the ACK delivered. A loss takes it from the
+/// lost packet alone, as Linux's `bbr_skb_marked_lost` does, so judging a loss leaves the ACK's
+/// sample as it was.
+#[derive(Debug, Clone, Copy)]
+struct InflightSample {
+    /// equivalent to RS.tx_in_flight: C.inflight just after the packet was sent.
+    tx_in_flight: u64,
+    /// equivalent to RS.lost: the bytes declared lost since the packet was sent.
+    lost: u64,
+    /// equivalent to RS.is_app_limited: whether the packet was sent while application-limited.
+    is_app_limited: bool,
+}
+
+impl InflightSample {
+    /// equivalent to IsInflightTooHigh <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.5.10.2>
+    fn is_too_high(&self) -> bool {
+        self.lost as f64 > self.tx_in_flight as f64 * LOSS_THRESH
+    }
+
+    /// equivalent to BBRInflightAtLoss <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.5.10.2>
+    ///
+    /// Returns the inflight at which losses crossed `LOSS_THRESH`, part way through the lost
+    /// packet of `packet_size` bytes.
+    fn inflight_at_loss(&self, packet_size: u64) -> u64 {
+        let inflight_prev = self.tx_in_flight.saturating_sub(packet_size) as f64;
+        let lost_prev = self.lost.saturating_sub(packet_size) as f64;
+        let lost_prefix = (LOSS_THRESH * inflight_prev - lost_prev) / (1.0 - LOSS_THRESH);
+        (inflight_prev + lost_prefix) as u64
+    }
+}
+
+impl From<BbrRateSample> for InflightSample {
+    fn from(rs: BbrRateSample) -> Self {
+        Self {
+            tx_in_flight: rs.tx_in_flight,
+            lost: rs.lost,
+            is_app_limited: rs.is_app_limited,
+        }
+    }
+}
+
 /// Experimental! Use at your own risk.
 ///
 /// Aims for reduced buffer bloat and improved performance over high bandwidth-delay product
@@ -489,7 +532,7 @@ pub struct Bbr3 {
     /// packet, so `rs` describes this ACK and is folded into the model when the ACK ends.
     rs_has_data: bool,
     /// The last ACK's own rate sample, if it delivered a tracked packet. A CE event is reported
-    /// after its ACK ends and after loss detection, which rewrites `rs` per lost packet.
+    /// after its ACK ends, and `rs` still holds an older ACK's sample when this one had none.
     ack_rs: Option<BbrRateSample>,
     /// equivalent to RS.newly_acked, accumulated over the ACK being processed. It is passed to
     /// the ACK's model steps rather than kept in `rs`, so no later `set_cwnd` counts it again.
@@ -1529,7 +1572,7 @@ impl Bbr3 {
         false
     }
 
-    /// equivalent to BBRHandleLostPacket <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.5.10.2-11>
+    /// equivalent to BBRHandleLostPacket <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.5.10.2>
     fn process_lost_packet(&mut self, packet_index: usize, space: SpaceKind, now: Instant) {
         let p = self.packets[space as usize][packet_index];
         self.enter_recovery(now, p.send_time);
@@ -1538,16 +1581,17 @@ impl Bbr3 {
             self.packets[space as usize].remove(packet_index);
             return;
         }
-        if let Some(mut rate_sample) = self.rs {
-            rate_sample.tx_in_flight = p.tx_in_flight;
-            rate_sample.lost = self.lost.saturating_sub(p.lost);
-            rate_sample.is_app_limited = p.is_app_limited;
-            self.rs = Some(rate_sample);
-            if self.is_inflight_too_high() {
-                rate_sample.tx_in_flight = self.inflight_at_loss(p.size as u64);
-                self.rs = Some(rate_sample);
-                self.handle_inflight_too_high(now, self.rs);
-            }
+        let sample = InflightSample {
+            tx_in_flight: p.tx_in_flight,
+            lost: self.lost.saturating_sub(p.lost),
+            is_app_limited: p.is_app_limited,
+        };
+        if sample.is_too_high() {
+            let sample = InflightSample {
+                tx_in_flight: sample.inflight_at_loss(p.size as u64),
+                ..sample
+            };
+            self.handle_inflight_too_high(now, Some(sample));
         }
         self.packets[space as usize].remove(packet_index);
     }
@@ -1609,7 +1653,7 @@ impl Bbr3 {
             // untracked ACK-only one. The probe's feedback can still be arriving after the ACK
             // itself ended the probe.
             _ if self.check_probe_loss => {
-                self.handle_inflight_too_high(now, self.ack_rs);
+                self.handle_inflight_too_high(now, self.ack_rs.map(InflightSample::from));
             }
             _ => {}
         }
@@ -1633,37 +1677,23 @@ impl Bbr3 {
         self.undo_inflight_longterm = self.inflight_longterm;
     }
 
-    /// equivalent to IsInflightTooHigh <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.5.10.2-1>
+    /// equivalent to IsInflightTooHigh for the last ACK's rate sample
     fn is_inflight_too_high(&self) -> bool {
-        if let Some(rate_sample) = self.rs {
-            return rate_sample.lost as f64 > rate_sample.tx_in_flight as f64 * LOSS_THRESH;
-        }
-        false
-    }
-
-    /// equivalent to BBRInflightAtLoss <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.5.10.2-11>
-    /// We check at what prefix of packet did losses exceed `loss_thresh`
-    fn inflight_at_loss(&mut self, packet_size: u64) -> u64 {
-        let Some(rate_sample) = self.rs else {
-            return 0;
-        };
-        let inflight_prev = rate_sample.tx_in_flight.saturating_sub(packet_size) as f64;
-        let lost_prev = rate_sample.lost.saturating_sub(packet_size) as f64;
-        let lost_prefix = (LOSS_THRESH * inflight_prev - lost_prev) / (1.0 - LOSS_THRESH);
-        (inflight_prev + lost_prefix) as u64
+        self.rs
+            .is_some_and(|rs| InflightSample::from(rs).is_too_high())
     }
 
     /// equivalent to BBRHandleInflightTooHigh <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.5.10.2>
     ///
-    /// `rs` is the sample that showed it, if any.
-    fn handle_inflight_too_high(&mut self, now: Instant, rs: Option<BbrRateSample>) {
+    /// `sample` is the one that showed it, if any.
+    fn handle_inflight_too_high(&mut self, now: Instant, sample: Option<InflightSample>) {
         self.prev_probe_too_high = true;
         self.check_probe_loss = false;
-        if let Some(rate_sample) = rs
-            && !rate_sample.is_app_limited
+        if let Some(sample) = sample
+            && !sample.is_app_limited
         {
             self.inflight_longterm = Ord::max(
-                rate_sample.tx_in_flight,
+                sample.tx_in_flight,
                 (self.target_inflight() as f64 * BETA) as u64,
             );
         }
@@ -6848,26 +6878,35 @@ mod test {
                     // here is exactly the pre-reduction value.
                     let before = bbr.inflight_longterm;
                     let was_up = bbr.state == BbrState::ProbeBw(ProbeBwSubstate::Up);
+                    // The loss is judged on the lost packet's own snapshot.
+                    let lost_sample = bbr.packets[SpaceKind::Data as usize]
+                        .iter()
+                        .find(|q| q.packet_number == p.pn)
+                        .map(|q| InflightSample {
+                            tx_in_flight: q.tx_in_flight,
+                            lost: bbr.lost + MSS - q.lost,
+                            is_app_limited: q.is_app_limited,
+                        })
+                        .expect("lost packet is tracked");
                     bbr.on_packet_lost(MSS as u16, p.pn, SpaceKind::Data, at(now_ns));
                     if was_up && bbr.state != BbrState::ProbeBw(ProbeBwSubstate::Up) {
                         if established.is_none() {
                             // Episode 1: the first loss clamped inflight_longterm finite.
                             established = Some(bbr.inflight_longterm);
                         } else {
-                            // Episode 2: the deciding loss scaled the established value down. Read
-                            // the formula inputs (tx_in_flight was set
-                            // to inflight_at_loss, target_inflight
-                            // = min(bdp, cwnd)) live: set_cwnd does not run inside the loss path,
-                            // so bdp/cwnd match what
+                            // Episode 2: the deciding loss scaled the established value down. The
+                            // formula's tx_in_flight is the lost packet's inflight_at_loss, and
+                            // target_inflight = min(bdp, cwnd) is read live: set_cwnd does not run
+                            // inside the loss path, so bdp and cwnd match what
                             // handle_inflight_too_high used.
-                            let txif = bbr.rs.map(|rs| rs.tx_in_flight).unwrap();
+                            let txif = lost_sample.inflight_at_loss(MSS);
                             let target = Ord::min(bbr.bdp, bbr.cwnd);
                             ep2 = Some((
                                 before,
                                 bbr.inflight_longterm,
                                 txif,
                                 target,
-                                bbr.rs.is_some_and(|rs| rs.is_app_limited),
+                                lost_sample.is_app_limited,
                                 bbr.full_bw_now,
                                 bbr.state,
                             ));
@@ -7562,6 +7601,39 @@ mod test {
         assert_eq!(sim.bbr.undo_state, Some(BbrState::Startup));
         assert!(sim.bbr.inflight_longterm < u64::MAX);
         assert!(!sim.bbr.in_recovery);
+    }
+
+    /// A loss is judged on the lost packet's own transmit snapshot and leaves the last ACK's
+    /// rate sample as it was.
+    /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.5.10.2>
+    #[test]
+    fn loss_leaves_the_ack_sample_alone() {
+        let mut sim = scripted();
+        sim.round(0, 10, 10 * MS);
+        let before = sim.bbr.rs.unwrap();
+
+        // A probe sends application-limited packets, and one of them is lost.
+        sim.bbr.check_probe_loss = true;
+        sim.bbr.app_limited = sim.bbr.delivered + 1200;
+        sim.send(20 * MS, 2);
+        sim.lose(30 * MS, sim.pn - 2);
+
+        let after = sim.bbr.rs.unwrap();
+        assert_eq!(after.is_app_limited, before.is_app_limited);
+        assert_eq!(after.tx_in_flight, before.tx_in_flight);
+        assert_eq!(after.lost, before.lost);
+    }
+
+    /// A loss during a probe is judged even before the first ACK has produced a rate sample.
+    #[test]
+    fn loss_before_any_sample_bounds_the_probe() {
+        let mut sim = scripted();
+        sim.bbr.check_probe_loss = true;
+        sim.send(0, 10);
+        sim.lose(10 * MS, 0);
+        assert!(sim.bbr.prev_probe_too_high);
+        assert!(!sim.bbr.check_probe_loss);
+        assert!(sim.bbr.inflight_longterm < u64::MAX);
     }
 
     /// The Startup pacing rate a 12 KB initial window takes from its first measured RTT.
