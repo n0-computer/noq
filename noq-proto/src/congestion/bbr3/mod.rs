@@ -1314,10 +1314,16 @@ impl Bbr3 {
     }
 
     /// equivalent to BBRHandleRestartFromIdle <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.4.1>
+    ///
+    /// Unlike the draft, which only restarts the ACK aggregation interval here, this also clears
+    /// the bytes delivered in it, as Linux does on `CA_EVENT_TX_START`. Otherwise an
+    /// application-limited flow that restarts on every frame carries each frame's bytes into the
+    /// next interval, reads them as aggregation, and Startup grows cwnd by that without bound.
     fn handle_restart_from_idle(&mut self, now: Instant) {
         if self.inflight == 0 && self.app_limited != 0 {
             self.idle_restart = true;
             self.extra_acked_interval_start = Some(now);
+            self.extra_acked_delivered = 0;
             match self.state {
                 BbrState::ProbeBw(_) => {
                     self.set_pacing_rate_with_gain(1.0);
@@ -7412,6 +7418,40 @@ mod test {
         let rs = sim.bbr.rs.unwrap();
         assert!(rs.is_app_limited);
         assert_eq!(sim.bbr.max_bw, 1_200_000.0);
+    }
+
+    /// Each restart from idle starts a new ACK aggregation epoch.
+    ///
+    /// An application-limited flow restarts from idle on every frame. If only the epoch's start
+    /// time resets, its delivered bytes keep adding up across frames, every ACK looks like
+    /// aggregation of all of them, and Startup grows cwnd by the extra ACKed volume without
+    /// bound. Linux zeroes `ack_epoch_acked` with the start time on `CA_EVENT_TX_START`.
+    #[test]
+    fn idle_restart_starts_a_new_aggregation_epoch() {
+        let mut sim = scripted();
+        for frame in 0..100 {
+            let sent_ns = frame * 100 * MS;
+            let first = sim.pn;
+            sim.send(sent_ns, 2);
+            sim.starve();
+            sim.ack(sent_ns + 40 * MS, first..first + 2, true);
+            sim.starve();
+            // A control packet between frames, such as an ACK_FREQUENCY or MAX_DATA update.
+            sim.send(sent_ns + 70 * MS, 1);
+            sim.starve();
+            sim.ack(sent_ns + 90 * MS, [first + 2], true);
+            sim.starve();
+            assert!(
+                sim.bbr.extra_acked <= 2 * 1200,
+                "frame {frame}: {} bytes of aggregation from 2-packet frames",
+                sim.bbr.extra_acked
+            );
+        }
+        assert!(
+            sim.bbr.cwnd <= 4 * sim.bbr.initial_cwnd,
+            "cwnd grew to {}",
+            sim.bbr.cwnd
+        );
     }
 
     /// An application sending one packet per burst, idle in between. The transport polls after
