@@ -109,6 +109,14 @@ const MAX_FULL_BW_COUNT: u64 = 3;
 /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-06.html#section-5.3.1.3>
 const STARTUP_FULL_LOSS_CNT: u64 = 6;
 
+/// The fraction of a round's packets that must be CE-marked for the round to count towards
+/// leaving STARTUP on ECN, as Linux BBRv3's `bbr_ecn_thresh` (50 %).
+const STARTUP_ECN_THRESH: f64 = 0.5;
+
+/// Consecutive rounds at or above [`STARTUP_ECN_THRESH`] that end STARTUP, as Linux BBRv3's
+/// `bbr_full_ecn_cnt`.
+const STARTUP_FULL_ECN_CNT: u32 = 2;
+
 /// when setting `bw_probe_up_rounds` when raising our inflight long term slope we don't go above
 /// this <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.3.3.6-8>
 const MAX_LONG_TERM_PROBE_UP_ROUNDS: u32 = 30;
@@ -576,6 +584,13 @@ pub struct Bbr3 {
     /// equivalent to Linux BBRv3's `ecn_in_round`: set when CE marks are reported during the
     /// round, so the short-term model responds to them as it does to loss
     ce_in_round: bool,
+    /// Packets the peer received with an ECN codepoint since the last round started.
+    ecn_marked_in_round: u64,
+    /// Of `ecn_marked_in_round`, the packets that were CE-marked.
+    ecn_ce_in_round: u64,
+    /// Consecutive rounds in STARTUP whose CE fraction reached [`STARTUP_ECN_THRESH`], as Linux
+    /// BBRv3's `startup_ecn_rounds`.
+    startup_ecn_rounds: u32,
     /// equivalent to BBR.loss_events_in_round: count of discontiguous loss events
     /// observed in the current loss round, used by the STARTUP high-loss exit
     /// (BBR.StartupFullLossCnt criterion). Reset at each loss-round boundary.
@@ -755,6 +770,9 @@ impl Bbr3 {
             loss_round_delivered: 0,
             loss_in_round: false,
             ce_in_round: false,
+            ecn_marked_in_round: 0,
+            ecn_ce_in_round: 0,
+            startup_ecn_rounds: 0,
             probe_rtt_done_stamp: None,
             probe_rtt_round_done: false,
             prior_cwnd: 0,
@@ -931,8 +949,38 @@ impl Bbr3 {
     /// equivalent to BBRCheckStartupDone <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.3.1.1-6>
     fn check_startup_done(&mut self) {
         self.check_startup_high_loss();
+        self.check_startup_high_ce();
         if self.state == BbrState::Startup && self.full_bw_reached {
             self.enter_drain();
+        }
+    }
+
+    /// Ends STARTUP once enough of the path's packets come back CE-marked, as Linux BBRv3's
+    /// `bbr_check_ecn_too_high_in_startup`.
+    ///
+    /// Each round's CE fraction is checked when the round ends, and STARTUP ends after
+    /// [`STARTUP_FULL_ECN_CNT`] consecutive rounds at or above [`STARTUP_ECN_THRESH`]. A single
+    /// mark from cross traffic at a shared AQM bottleneck therefore cannot end STARTUP, which
+    /// would leave the flow far below the path's rate until its next bandwidth probes.
+    fn check_startup_high_ce(&mut self) {
+        if !self.round_start {
+            return;
+        }
+        let marked = core::mem::take(&mut self.ecn_marked_in_round);
+        let ce = core::mem::take(&mut self.ecn_ce_in_round);
+        if self.full_bw_reached || marked == 0 {
+            return;
+        }
+        if ce as f64 >= marked as f64 * STARTUP_ECN_THRESH {
+            self.startup_ecn_rounds += 1;
+        } else {
+            self.startup_ecn_rounds = 0;
+        }
+        if self.startup_ecn_rounds >= STARTUP_FULL_ECN_CNT {
+            // As Linux BBRv3's bbr_handle_queue_too_high_in_startup.
+            self.inflight_longterm = Ord::max(self.get_inflight(1.0), self.inflight_latest);
+            self.full_bw_reached = true;
+            self.full_bw_now = true;
         }
     }
 
@@ -1654,13 +1702,9 @@ impl Bbr3 {
         self.start_congestion_round();
         self.ce_in_round = true;
         match self.state {
-            BbrState::Startup => {
-                // As Linux BBRv3's bbr_handle_queue_too_high_in_startup.
-                self.inflight_longterm = Ord::max(self.get_inflight(1.0), self.inflight_latest);
-                self.full_bw_reached = true;
-                self.full_bw_now = true;
-                self.enter_drain();
-            }
+            // Startup answers the CE fraction over whole rounds instead, in
+            // `check_startup_high_ce`.
+            BbrState::Startup => {}
             // The marked ACK's sample bounds the probe, since the event's own packet can be an
             // untracked ACK-only one. The probe's feedback can still be arriving after the ACK
             // itself ended the probe.
@@ -1799,6 +1843,11 @@ impl Bbr3 {
     /// equivalent to CheckIfApplicationLimited <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-06.html#section-4.1.2.4>
     ///
     /// A full window means the connection is window-limited, not starved, so it marks nothing.
+    fn on_ecn_feedback(&mut self, marked: u64, ce: u64) {
+        self.ecn_marked_in_round += marked;
+        self.ecn_ce_in_round += ce;
+    }
+
     fn on_app_limited(&mut self, in_flight: u64) {
         if in_flight >= self.cwnd {
             return;
@@ -2190,6 +2239,10 @@ impl Controller for Bbr3 {
         Self::on_app_limited(self, in_flight);
     }
 
+    fn on_ecn_feedback(&mut self, marked: u64, ce: u64) {
+        Self::on_ecn_feedback(self, marked, ce);
+    }
+
     fn on_end_acks(
         &mut self,
         now: Instant,
@@ -2439,7 +2492,9 @@ mod test {
                 .find(|p| p.pn == largest)
                 .unwrap()
                 .send_ns;
+            let marked = pns.len() as u64;
             self.ack(now_ns, pns, false);
+            self.bbr.on_ecn_feedback(marked, marked);
             self.bbr.on_congestion_event(
                 self.at(now_ns),
                 self.at(sent_ns),
@@ -2559,6 +2614,7 @@ mod test {
                     self.bbr
                         .on_end_acks(now_at, self.inflight, false, Some(p.pn), SpaceKind::Data);
                     // Each ACK covers one packet, so a marked one raises the CE count.
+                    self.bbr.on_ecn_feedback(1, u64::from(p.ce));
                     if p.ce {
                         self.bbr.on_congestion_event(
                             now_at,
@@ -8466,17 +8522,62 @@ mod test {
         assert_eq!(marked.bbr.loss_events_in_round, 0);
     }
 
-    /// The first CE-bearing ACK in Startup drains at once, without waiting for the next ACK.
+    /// Startup ends once two consecutive rounds come back mostly CE-marked, as Linux BBRv3's
+    /// `bbr_check_ecn_too_high_in_startup` does, and bounds inflight by the BDP.
     #[test]
-    fn startup_drains_on_first_ce() {
+    fn startup_drains_after_two_marked_rounds() {
         let mut sim = scripted();
         sim.round(0, 10, 10 * MS);
-        let pacing = sim.bbr.pacing_rate;
         sim.round_ce(10 * MS, 20, 10 * MS);
-        assert_eq!(sim.bbr.state, BbrState::Drain);
+        sim.round_ce(20 * MS, 40, 10 * MS);
+        assert_eq!(sim.bbr.state, BbrState::Startup);
+        // The second marked round is counted when the next round starts.
+        let pacing = sim.bbr.pacing_rate;
+        sim.round(30 * MS, 80, 10 * MS);
+        assert!(sim.bbr.full_bw_reached);
+        assert_ne!(sim.bbr.state, BbrState::Startup);
         assert!(sim.bbr.pacing_rate < pacing);
-        let bdp = sim.bbr.get_inflight(1.0);
-        assert_eq!(sim.bbr.inflight_longterm, bdp);
+        assert!(sim.bbr.inflight_longterm < u64::MAX);
+    }
+
+    /// A single CE-marked round, such as cross traffic briefly filling a shared AQM queue, does
+    /// not end Startup, and neither do rounds where under half the packets are marked.
+    #[test]
+    fn startup_survives_sparse_ce() {
+        let mut sim = scripted();
+        let mut count = 10;
+        let mut now = 0;
+        // Doubling rounds, so the bandwidth keeps growing, each reporting the share of its
+        // packets the peer saw CE-marked.
+        let mut round = |sim: &mut Sim, ce_share: f64| {
+            sim.send(now, count);
+            sim.ack(now + 10 * MS, sim.pn - count..sim.pn, false);
+            // As the transport reports an ACK's ECN counts, then a congestion event if CE grew.
+            let ce = (count as f64 * ce_share) as u64;
+            sim.bbr.on_ecn_feedback(count, ce);
+            if ce > 0 {
+                let ack = sim.at(now + 10 * MS);
+                sim.bbr.on_congestion_event(
+                    ack,
+                    sim.at(now),
+                    false,
+                    true,
+                    0,
+                    sim.pn - 1,
+                    SpaceKind::Data,
+                );
+            }
+            now += 10 * MS;
+            count *= 2;
+        };
+        round(&mut sim, 0.0);
+        round(&mut sim, 1.0);
+        round(&mut sim, 0.0);
+        for _ in 0..4 {
+            round(&mut sim, 0.4);
+        }
+        assert_eq!(sim.bbr.state, BbrState::Startup);
+        assert!(!sim.bbr.full_bw_reached);
     }
 
     /// CE ends a bandwidth probe as too much loss does, bounding inflight by the flight that drew
@@ -8712,9 +8813,8 @@ mod test {
         assert_eq!(run(true), run(false));
     }
 
-    /// CE on the ACK that ends a loss's round still stops Startup, though the loss began the
-    /// recovery episode, and declaring that loss spurious undoes neither. The mark adds no lost
-    /// bytes.
+    /// CE marks that end Startup in a recovery episode a loss began are not undone when that
+    /// loss is declared spurious. The marks add no lost bytes.
     #[test]
     fn ce_with_loss_survives_spurious_undo() {
         let mut sim = scripted();
@@ -8723,6 +8823,8 @@ mod test {
         sim.send(10 * MS, 20);
         sim.lose(15 * MS, first);
         sim.ack_ce(20 * MS, first + 1..sim.pn);
+        sim.round_ce(21 * MS, 20, 10 * MS);
+        sim.round(32 * MS, 20, 10 * MS);
         assert_ne!(sim.bbr.state, BbrState::Startup);
         assert_eq!(sim.bbr.lost, PACKET as u64);
         let (window, bound) = (sim.bbr.window(), sim.bbr.inflight_longterm);

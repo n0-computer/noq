@@ -128,6 +128,15 @@ pub trait Controller: Send + Sync + core::fmt::Debug {
     ) {
     }
 
+    /// The peer's ECN counts covered newly received packets
+    ///
+    /// `marked` is how many of them the peer received with an ECN codepoint, and `ce` how many of
+    /// those were CE-marked. Called for every ACK whose ECN counts validate, before the congestion
+    /// event that new CE marks raise, so a controller can respond to the fraction of marked
+    /// packets rather than to every mark.
+    #[allow(unused_variables)]
+    fn on_ecn_feedback(&mut self, marked: u64, ce: u64) {}
+
     /// Packets were deemed lost or marked congested
     #[deprecated(
         note = "implement `on_congestion_event_space`, which also names the packet's space"

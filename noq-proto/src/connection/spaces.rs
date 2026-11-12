@@ -182,6 +182,15 @@ impl IndexMut<SpaceId> for [PacketSpace; 3] {
     }
 }
 
+/// How much the peer's ECN counts grew on one ACK
+#[derive(Debug, Clone, Copy)]
+pub(super) struct EcnIncrease {
+    /// Packets newly counted as received with ECT(0) or CE
+    pub(super) marked: u64,
+    /// Of those, the packets newly counted as CE
+    pub(super) ce: u64,
+}
+
 /// The three QUIC packet number space kinds
 ///
 /// Unlike a multipath packet number space, this always has exactly three variants: it names the
@@ -415,7 +424,7 @@ impl PacketNumberSpace {
         &mut self,
         newly_acked: u64,
         ecn: frame::EcnCounts,
-    ) -> Result<bool, &'static str> {
+    ) -> Result<EcnIncrease, &'static str> {
         let ect0_increase = ecn
             .ect0
             .checked_sub(self.ecn_feedback.ect0)
@@ -440,7 +449,10 @@ impl PacketNumberSpace {
         // to count CE packets as CE or ECT0. Recording them as CE is more consistent and keeps the
         // congestion check obvious.
         self.ecn_feedback = ecn;
-        Ok(ce_increase != 0)
+        Ok(EcnIncrease {
+            marked: ect0_increase + ce_increase,
+            ce: ce_increase,
+        })
     }
 
     /// Stop tracking sent packet `number`, and return what we knew about it

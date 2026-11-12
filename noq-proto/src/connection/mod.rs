@@ -3190,8 +3190,13 @@ impl Connection {
                 // future attempts to use ECN on new paths.
                 self.spaces[space].for_path(path).ecn_feedback = frame::EcnCounts::ZERO;
             }
-            Ok(false) => {}
-            Ok(true) => {
+            Ok(increase) => {
+                self.path_data_mut(path)
+                    .congestion
+                    .on_ecn_feedback(increase.marked, increase.ce);
+                if increase.ce == 0 {
+                    return;
+                }
                 self.path_stats.get_mut(path).congestion_events += 1;
                 self.path_data_mut(path)
                     .congestion

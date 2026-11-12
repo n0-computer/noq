@@ -5828,7 +5828,9 @@ fn throughput() -> TestResult {
 
 /// A 1 MB/s bottleneck with a 20ms RTT and a one-BDP buffer carries a BBR upload, once marking
 /// CE at half full and once only tail-dropping when full. BBR answers the marks, so the marking
-/// run holds a shorter queue without drops at the dropping run's goodput.
+/// run holds a shorter queue with fewer drops at the dropping run's goodput. Startup waits for
+/// two heavily marked rounds before it stops, so the marking run drops a few packets as Startup
+/// overshoots.
 #[test]
 fn bbr_marking_versus_dropping() -> TestResult {
     const TOTAL_BYTES: usize = 4_000_000;
@@ -5872,12 +5874,11 @@ fn bbr_marking_versus_dropping() -> TestResult {
 
     let (marking_goodput, marking) = run(true)?;
     let (dropping_goodput, dropping) = run(false)?;
-    // Measured at 3.6ms mean delay for marking and 5.9ms for dropping, 0.68s and 1.22s past the
-    // marking threshold, and 25 drops when dropping. The controller before classic ECN dropped
-    // 44 packets when marking, at 7.4ms and 1.6s.
+    // Measured at 3.8ms mean delay for marking and 7.4ms for dropping, 0.73s and 1.60s past the
+    // marking threshold, and 12 drops when marking against 36 to 40 when dropping. The
+    // controller before classic ECN dropped 44 packets when marking, at 7.4ms and 1.6s.
     assert!(marking.marked > 0);
-    assert_eq!(marking.dropped, 0);
-    assert!(dropping.dropped > 0);
+    assert!(marking.dropped * 2 < dropping.dropped);
     assert!(marking.mean_delay() * 3 < dropping.mean_delay() * 2);
     assert!(marking.congested * 3 < dropping.congested * 2);
     assert!(marking_goodput > 0.9 * dropping_goodput);
