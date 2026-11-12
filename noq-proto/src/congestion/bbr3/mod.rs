@@ -8,7 +8,9 @@ use rand_pcg::Pcg32;
 
 use crate::RttEstimator;
 use crate::congestion::bbr3::max_filter::MaxFilter;
-use crate::congestion::{BASE_DATAGRAM_SIZE, Controller, ControllerFactory, ControllerMetrics};
+use crate::congestion::{
+    BASE_DATAGRAM_SIZE, Controller, ControllerFactory, ControllerMetrics, PacketId,
+};
 use crate::connection::SpaceKind;
 use crate::{Duration, Instant};
 
@@ -1878,17 +1880,44 @@ impl Bbr3 {
     }
 }
 
-// TODO(@divma): We need to expand the Controller trait to receive the SpaceKind. The current
-// implementation simply uses SpaceKind::Data, which is wrong for PathId::Zero
 impl Controller for Bbr3 {
-    fn on_congestion_event(
+    fn on_packet_space_sent(&mut self, now: Instant, bytes: u16, packet: PacketId) {
+        Self::on_packet_sent(self, now, bytes, packet.number, packet.space);
+    }
+
+    fn on_packet_space_acked(
+        &mut self,
+        now: Instant,
+        sent: Instant,
+        bytes: u64,
+        packet: PacketId,
+        app_limited: bool,
+        rtt: &RttEstimator,
+    ) {
+        Self::on_ack(
+            self,
+            now,
+            sent,
+            bytes,
+            packet.number,
+            packet.space,
+            app_limited,
+            rtt,
+        );
+    }
+
+    fn on_packet_space_lost(&mut self, lost_bytes: u16, packet: PacketId, now: Instant) {
+        Self::on_packet_lost(self, lost_bytes, packet.number, packet.space, now);
+    }
+
+    fn on_congestion_event_space(
         &mut self,
         now: Instant,
         sent: Instant,
         is_persistent_congestion: bool,
         is_ecn: bool,
         lost_bytes: u64,
-        largest_lost_pn: u64,
+        largest_lost: PacketId,
     ) {
         Self::on_congestion_event(
             self,
@@ -1897,8 +1926,8 @@ impl Controller for Bbr3 {
             is_persistent_congestion,
             is_ecn,
             lost_bytes,
-            largest_lost_pn,
-            SpaceKind::Data,
+            largest_lost.number,
+            largest_lost.space,
         );
     }
 
@@ -1922,33 +1951,8 @@ impl Controller for Bbr3 {
         Self::into_any(self)
     }
 
-    fn on_packet_sent(&mut self, now: Instant, bytes: u16, pn: u64) {
-        Self::on_packet_sent(self, now, bytes, pn, SpaceKind::Data);
-    }
-
     fn on_cwnd_limited(&mut self) {
         Self::on_cwnd_limited(self);
-    }
-
-    fn on_ack(
-        &mut self,
-        now: Instant,
-        sent: Instant,
-        bytes: u64,
-        pn: u64,
-        app_limited: bool,
-        rtt: &RttEstimator,
-    ) {
-        Self::on_ack(
-            self,
-            now,
-            sent,
-            bytes,
-            pn,
-            SpaceKind::Data,
-            app_limited,
-            rtt,
-        );
     }
 
     fn on_end_acks(
@@ -1966,10 +1970,6 @@ impl Controller for Bbr3 {
             largest_packet_num_acked,
             SpaceKind::Data,
         );
-    }
-
-    fn on_packet_lost(&mut self, lost_bytes: u16, pn: u64, now: Instant) {
-        Self::on_packet_lost(self, lost_bytes, pn, SpaceKind::Data, now);
     }
 
     fn on_spurious_congestion_event(&mut self) {
@@ -6992,5 +6992,83 @@ mod test {
             "max_bw after subsequent probing ({max_bw_final}) should still be within 10% of the \
              simulated {BW} (rel err {final_err})"
         );
+    }
+
+    /// Packet size for the packet identity tests.
+    const PACKET: u16 = 1200;
+    const INITIAL_0: PacketId = PacketId {
+        space: SpaceKind::Initial,
+        number: 0,
+    };
+    const INITIAL_1: PacketId = PacketId {
+        space: SpaceKind::Initial,
+        number: 1,
+    };
+    const HANDSHAKE_0: PacketId = PacketId {
+        space: SpaceKind::Handshake,
+        number: 0,
+    };
+
+    /// Packet numbers restart in every space, so an ACK for Handshake packet 0 must sample the
+    /// Handshake packet, not Initial packet 0 sent earlier with a different delivery snapshot.
+    #[test]
+    fn ack_samples_the_packet_from_its_own_space() {
+        let mut bbr = Bbr3::new(Arc::new(Bbr3Config::default()), PACKET);
+        let rtt = RttEstimator::new(Duration::from_millis(100));
+        let t0 = Instant::now();
+        let at = |ms| t0 + Duration::from_millis(ms);
+        let c: &mut dyn Controller = &mut bbr;
+
+        c.on_packet_space_sent(at(0), PACKET, INITIAL_0);
+        c.on_packet_space_sent(at(1), PACKET, INITIAL_1);
+        c.on_packet_space_acked(at(10), at(0), PACKET as u64, INITIAL_0, false, &rtt);
+        c.on_end_acks(at(10), PACKET as u64, false, Some(0));
+        // Sent after Initial 0 was delivered, so its snapshot counts that delivery.
+        c.on_packet_space_sent(at(11), PACKET, HANDSHAKE_0);
+        c.on_packet_space_acked(at(20), at(11), PACKET as u64, HANDSHAKE_0, false, &rtt);
+
+        let rs = bbr.rs.expect("rate sample");
+        assert_eq!(rs.last_packet.space, SpaceKind::Handshake);
+        assert_eq!(rs.last_packet.send_time, at(11));
+        assert_eq!(rs.prior_delivered, PACKET as u64);
+        assert_eq!(rs.rtt, Duration::from_millis(9));
+    }
+
+    /// A loss reported for Handshake packet 0 must not remove Initial packet 0.
+    #[test]
+    fn loss_removes_the_packet_from_its_own_space() {
+        let mut bbr = Bbr3::new(Arc::new(Bbr3Config::default()), PACKET);
+        let t0 = Instant::now();
+        let c: &mut dyn Controller = &mut bbr;
+
+        c.on_packet_space_sent(t0, PACKET, INITIAL_0);
+        c.on_packet_space_sent(t0, PACKET, HANDSHAKE_0);
+        c.on_packet_space_lost(PACKET, HANDSHAKE_0, t0 + Duration::from_millis(10));
+
+        assert_eq!(bbr.packets[SpaceKind::Initial as usize].len(), 1);
+        assert!(bbr.packets[SpaceKind::Handshake as usize].is_empty());
+        assert_eq!(bbr.last_lost_packet, Some((SpaceKind::Handshake, 0)));
+    }
+
+    /// An ECN congestion event names its largest packet by space, like a loss.
+    #[test]
+    fn ecn_congestion_marks_the_packet_from_its_own_space() {
+        let mut bbr = Bbr3::new(Arc::new(Bbr3Config::default()), PACKET);
+        let t0 = Instant::now();
+        let c: &mut dyn Controller = &mut bbr;
+
+        c.on_packet_space_sent(t0, PACKET, INITIAL_0);
+        c.on_packet_space_sent(t0, PACKET, HANDSHAKE_0);
+        c.on_congestion_event_space(
+            t0 + Duration::from_millis(10),
+            t0,
+            false,
+            true,
+            0,
+            HANDSHAKE_0,
+        );
+
+        assert_eq!(bbr.packets[SpaceKind::Initial as usize].len(), 1);
+        assert!(bbr.packets[SpaceKind::Handshake as usize].is_empty());
     }
 }

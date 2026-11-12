@@ -13,6 +13,21 @@ pub use bbr3::{Bbr3, Bbr3Config};
 pub use cubic::{Cubic, CubicConfig};
 pub use new_reno::{NewReno, NewRenoConfig};
 
+/// The packet number space a packet was sent in
+pub use crate::connection::SpaceKind as Space;
+
+/// A sent packet: its packet number space and its number within that space
+///
+/// Packet numbers restart from zero in each space, so the number alone is ambiguous while the
+/// handshake spaces are live. Each path has its own controller, so this is unique per controller.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub struct PacketId {
+    /// The packet number space
+    pub space: Space,
+    /// The packet number within `space`
+    pub number: u64,
+}
+
 /// Common interface for different congestion controllers
 pub trait Controller: Send + Sync + core::fmt::Debug {
     /// One or more packets were just sent
@@ -20,8 +35,17 @@ pub trait Controller: Send + Sync + core::fmt::Debug {
     fn on_sent(&mut self, now: Instant, bytes: u64, largest_pn: u64) {}
 
     /// One packet was just sent
+    #[deprecated(note = "implement `on_packet_space_sent`, which also names the packet's space")]
     #[allow(unused_variables)]
     fn on_packet_sent(&mut self, now: Instant, bytes: u16, pn: u64) {}
+
+    /// One packet was just sent, identified by its space and number
+    ///
+    /// Defaults to the deprecated [`Self::on_packet_sent`], dropping the space.
+    fn on_packet_space_sent(&mut self, now: Instant, bytes: u16, packet: PacketId) {
+        #[allow(deprecated)]
+        self.on_packet_sent(now, bytes, packet.number);
+    }
 
     /// The connection had data to send but was blocked by the congestion window
     ///
@@ -30,9 +54,7 @@ pub trait Controller: Send + Sync + core::fmt::Debug {
     fn on_cwnd_limited(&mut self) {}
 
     /// Packet deliveries were confirmed
-    ///
-    /// `app_limited` indicates whether the connection was blocked on outgoing
-    /// application data prior to receiving these acknowledgements.
+    #[deprecated(note = "implement `on_packet_space_acked`, which also names the packet's space")]
     #[allow(unused_variables)]
     fn on_ack(
         &mut self,
@@ -43,6 +65,25 @@ pub trait Controller: Send + Sync + core::fmt::Debug {
         app_limited: bool,
         rtt: &RttEstimator,
     ) {
+    }
+
+    /// One packet's delivery was confirmed, identified by its space and number
+    ///
+    /// `app_limited` indicates whether the connection was blocked on outgoing
+    /// application data prior to receiving these acknowledgements.
+    ///
+    /// Defaults to the deprecated [`Self::on_ack`], dropping the space.
+    fn on_packet_space_acked(
+        &mut self,
+        now: Instant,
+        sent: Instant,
+        bytes: u64,
+        packet: PacketId,
+        app_limited: bool,
+        rtt: &RttEstimator,
+    ) {
+        #[allow(deprecated)]
+        self.on_ack(now, sent, bytes, packet.number, app_limited, rtt);
     }
 
     /// Packets are acked in batches, all with the same `now` argument. This indicates one of those
@@ -58,13 +99,10 @@ pub trait Controller: Send + Sync + core::fmt::Debug {
     }
 
     /// Packets were deemed lost or marked congested
-    ///
-    /// `in_persistent_congestion` indicates whether all packets sent within the persistent
-    /// congestion threshold period ending when the most recent packet in this batch was sent were
-    /// lost.
-    /// `lost_bytes` indicates how many bytes were lost. This value will be 0 for ECN triggers.
-    /// `largest_lost_pn` indicates the packet number of the packet with the highest packet number
-    /// in the congestion event.
+    #[deprecated(
+        note = "implement `on_congestion_event_space`, which also names the packet's space"
+    )]
+    #[allow(unused_variables)]
     fn on_congestion_event(
         &mut self,
         now: Instant,
@@ -73,11 +111,51 @@ pub trait Controller: Send + Sync + core::fmt::Debug {
         is_ecn: bool,
         lost_bytes: u64,
         largest_lost_pn: u64,
-    );
+    ) {
+    }
+
+    /// Packets were deemed lost or marked congested
+    ///
+    /// `is_persistent_congestion` indicates whether all packets sent within the persistent
+    /// congestion threshold period ending when the most recent packet in this batch was sent were
+    /// lost.
+    /// `lost_bytes` indicates how many bytes were lost. This value will be 0 for ECN triggers.
+    /// `largest_lost` identifies the packet with the highest packet number in the congestion
+    /// event.
+    ///
+    /// Defaults to the deprecated [`Self::on_congestion_event`], dropping the space.
+    fn on_congestion_event_space(
+        &mut self,
+        now: Instant,
+        sent: Instant,
+        is_persistent_congestion: bool,
+        is_ecn: bool,
+        lost_bytes: u64,
+        largest_lost: PacketId,
+    ) {
+        #[allow(deprecated)]
+        self.on_congestion_event(
+            now,
+            sent,
+            is_persistent_congestion,
+            is_ecn,
+            lost_bytes,
+            largest_lost.number,
+        );
+    }
 
     /// One packet was just lost
+    #[deprecated(note = "implement `on_packet_space_lost`, which also names the packet's space")]
     #[allow(unused_variables)]
     fn on_packet_lost(&mut self, lost_bytes: u16, pn: u64, now: Instant) {}
+
+    /// One packet was just lost, identified by its space and number
+    ///
+    /// Defaults to the deprecated [`Self::on_packet_lost`], dropping the space.
+    fn on_packet_space_lost(&mut self, lost_bytes: u16, packet: PacketId, now: Instant) {
+        #[allow(deprecated)]
+        self.on_packet_lost(lost_bytes, packet.number, now);
+    }
 
     /// Packets were incorrectly deemed lost
     ///

@@ -29,7 +29,7 @@ use crate::{
     TransportError, TransportErrorCode, VarInt,
     cid_queue::CidQueue,
     config::{ServerConfig, TransportConfig},
-    congestion::Controller,
+    congestion::{Controller, PacketId},
     connection::{
         paths::PathRetransmits,
         qlog::{QlogRecvPacket, QlogSink},
@@ -93,7 +93,7 @@ pub(crate) mod spaces;
 pub use spaces::Retransmits;
 #[cfg(not(fuzzing))]
 use spaces::Retransmits;
-pub(crate) use spaces::SpaceKind;
+pub use spaces::SpaceKind;
 use spaces::{OpenStatus, PacketSpace, SendableFrames, SentPacket, ThinRetransmits};
 
 mod stats;
@@ -1005,6 +1005,12 @@ impl Connection {
 
         let path = vacant_entry.insert(PathState { data, prev: None });
 
+        #[cfg(test)]
+        let mut pn_space = match self.config.deterministic_packet_numbers {
+            true => spaces::PacketNumberSpace::new_deterministic(now, SpaceId::Data),
+            false => spaces::PacketNumberSpace::new(now, SpaceId::Data, &mut self.rng),
+        };
+        #[cfg(not(test))]
         let mut pn_space = spaces::PacketNumberSpace::new(now, SpaceId::Data, &mut self.rng);
         if let Some(pn) = pn {
             pn_space.dedup.insert(pn);
@@ -3033,7 +3039,7 @@ impl Connection {
                 // ACK_FREQUENCY frame
                 self.ack_frequency.on_acked(path, packet);
 
-                self.on_packet_acked(now, path, packet, info);
+                self.on_packet_acked(now, path, space.kind(), packet, info);
             }
         }
 
@@ -3179,21 +3185,33 @@ impl Connection {
             Ok(false) => {}
             Ok(true) => {
                 self.path_stats.get_mut(path).congestion_events += 1;
-                self.path_data_mut(path).congestion.on_congestion_event(
-                    now,
-                    largest_sent_time,
-                    false,
-                    true,
-                    0,
-                    largest_sent_pn,
-                );
+                self.path_data_mut(path)
+                    .congestion
+                    .on_congestion_event_space(
+                        now,
+                        largest_sent_time,
+                        false,
+                        true,
+                        0,
+                        PacketId {
+                            space: space.kind(),
+                            number: largest_sent_pn,
+                        },
+                    );
             }
         }
     }
 
     // Not timing-aware, so it's safe to call this for inferred acks, such as arise from
     // high-latency handshakes
-    fn on_packet_acked(&mut self, now: Instant, path_id: PathId, pn: u64, info: SentPacket) {
+    fn on_packet_acked(
+        &mut self,
+        now: Instant,
+        path_id: PathId,
+        space: SpaceKind,
+        pn: u64,
+        info: SentPacket,
+    ) {
         let path = self.path_data_mut(path_id);
         let app_limited = path.app_limited;
         path.remove_in_flight(&info);
@@ -3202,8 +3220,15 @@ impl Connection {
             // generation of the path. Otherwise we might be feeding ACKs from the previous
             // 4-tuple into our congestion controller.
             let rtt = path.rtt;
-            path.congestion
-                .on_ack(now, info.time_sent, info.size.into(), pn, app_limited, &rtt);
+            let packet = PacketId { space, number: pn };
+            path.congestion.on_packet_space_acked(
+                now,
+                info.time_sent,
+                info.size.into(),
+                packet,
+                app_limited,
+                &rtt,
+            );
         }
 
         // Update state for confirmed delivery of frames
@@ -3511,7 +3536,11 @@ impl Connection {
                 let path = self.path_data_mut(path_id);
                 path.pending |= info.path_retransmits;
                 path.mtud.on_non_probe_lost(packet, info.size);
-                path.congestion.on_packet_lost(info.size, packet, now);
+                let lost = PacketId {
+                    space: pn_space.kind(),
+                    number: packet,
+                };
+                path.congestion.on_packet_space_lost(info.size, lost, now);
 
                 self.spaces[pn_space].for_path(path_id).lost_packets.insert(
                     packet,
@@ -3540,14 +3569,19 @@ impl Connection {
 
             if lost_ack_eliciting {
                 self.path_stats.get_mut(path_id).congestion_events += 1;
-                self.path_data_mut(path_id).congestion.on_congestion_event(
-                    now,
-                    largest_lost_sent,
-                    in_persistent_congestion,
-                    false,
-                    size_of_lost_packets,
-                    largest_lost,
-                );
+                self.path_data_mut(path_id)
+                    .congestion
+                    .on_congestion_event_space(
+                        now,
+                        largest_lost_sent,
+                        in_persistent_congestion,
+                        false,
+                        size_of_lost_packets,
+                        PacketId {
+                            space: pn_space.kind(),
+                            number: largest_lost,
+                        },
+                    );
             }
         }
 
@@ -4627,7 +4661,7 @@ impl Connection {
 
                 let space = &mut self.spaces[SpaceId::Initial];
                 if let Some(info) = space.for_path(PathId::ZERO).take(0) {
-                    self.on_packet_acked(now, PathId::ZERO, 0, info);
+                    self.on_packet_acked(now, PathId::ZERO, SpaceKind::Initial, 0, info);
                 };
 
                 self.discard_space(now, SpaceKind::Initial); // Make sure we clean up after

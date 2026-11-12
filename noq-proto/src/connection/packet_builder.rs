@@ -6,6 +6,7 @@ use super::{Connection, PathId, SentFrames, TransmitBuf, spaces::SentPacket};
 use crate::{
     ConnectionId, FrameStats, Instant, MIN_INITIAL_SIZE, TransportError,
     coding::Encodable,
+    congestion::PacketId,
     connection::{ConnectionSide, EncryptionLevel, qlog::QlogSentPacket, spaces::Retransmits},
     frame::EncodableFrame,
     packet::{FIXED_BIT, Header, InitialHeader, LongType, PacketNumber, PartialEncode, SpaceId},
@@ -321,9 +322,14 @@ impl<'a, 'b> PacketBuilder<'a, 'b> {
                     conn.reset_idle_timeout(now, space_id.kind(), path_id);
                 }
                 conn.path_data_mut(path_id).permit_idle_reset = false;
-                conn.path_data_mut(path_id)
-                    .congestion
-                    .on_packet_sent(now, size, packet_number)
+                conn.path_data_mut(path_id).congestion.on_packet_space_sent(
+                    now,
+                    size,
+                    PacketId {
+                        space: space_id.kind(),
+                        number: packet_number,
+                    },
+                )
             }
             conn.set_loss_detection_timer(now, path_id);
             conn.path_data_mut(path_id).pacing.on_transmit(size);

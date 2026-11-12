@@ -184,10 +184,10 @@ impl IndexMut<SpaceId> for [PacketSpace; 3] {
 
 /// The three QUIC packet number space kinds
 ///
-/// Unlike [`SpaceId`], this always has exactly three variants — it represents the
-/// encryption level / space kind, not a specific packet number space identity.
+/// Unlike a multipath packet number space, this always has exactly three variants: it names the
+/// encryption level, and every path's application data shares [`Self::Data`].
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub(crate) enum SpaceKind {
+pub enum SpaceKind {
     /// Initial packets (client and server).
     Initial = 0,
     /// Handshake packets.
@@ -339,7 +339,7 @@ impl PacketNumberSpace {
     }
 
     #[cfg(test)]
-    fn new_deterministic(now: Instant, space: SpaceId) -> Self {
+    pub(super) fn new_deterministic(now: Instant, space: SpaceId) -> Self {
         let pn_filter = match space {
             SpaceId::Initial | SpaceId::Handshake => None,
             SpaceId::Data => Some(PacketNumberFilter::disabled()),

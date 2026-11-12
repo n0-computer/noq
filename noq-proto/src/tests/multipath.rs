@@ -12,7 +12,11 @@ use crate::connection::timer::{PathTimer, Timer};
 use crate::{
     ClientConfig, ConnectionId, ConnectionIdGenerator, Endpoint, EndpointConfig, FourTuple,
     LOCAL_CID_COUNT, NetworkChangeHint, PathId, PathStatus, RandomConnectionIdGenerator,
-    ServerConfig, Side::*, TransportConfig, cid_queue::CidQueue,
+    ServerConfig,
+    Side::*,
+    TransportConfig,
+    cid_queue::CidQueue,
+    congestion::{PacketId, Space},
 };
 use crate::{
     ClosePathError, Dir, Event, PathAbandonReason, PathEvent, StreamAffinity, StreamEvent,
@@ -23,6 +27,7 @@ use super::util::{
     ConnPair, ManyToManyRouting, Pair, SimpleFirewallRouting, client_config, min_opt,
     server_config, subscribe,
 };
+use super::{PacketEvent, PacketRecorderFactory, check_packet_identity};
 
 const MAX_PATHS: u32 = 3;
 
@@ -2706,5 +2711,50 @@ fn regression_discarded_path_stats_are_up_to_date() -> TestResult {
     assert_ne!(discarded_stats.cwnd, 0);
     assert_ne!(discarded_stats.current_mtu, 0);
 
+    Ok(())
+}
+
+/// Each path numbers its application data from zero under a controller of its own, so a
+/// callback must reach the controller that sent the packet, with that packet's send time.
+#[test]
+fn congestion_callbacks_stay_on_the_sending_path() -> TestResult {
+    let _guard = subscribe();
+    let factory = Arc::new(PacketRecorderFactory::default());
+    let mut transport = TransportConfig::default();
+    transport.deterministic_packet_numbers(true);
+    transport.congestion_controller_factory(factory.clone());
+    let mut pair = ConnPair::builder()
+        .with_transport_cfg(transport)
+        .enable_multipath()
+        .connect();
+
+    let server_addr = pair.routes.public_server_addr();
+    let path1 = pair.open_path(
+        Client,
+        FourTuple::from_remote(server_addr),
+        PathStatus::Available,
+    )?;
+    pair.drive();
+    let s = pair.streams(Client).open(Dir::Uni).unwrap();
+    pair.send_stream(Client, s).write(&[42; 64 * 1024]).unwrap();
+    pair.drive();
+    assert!(pair.path_status(Client, path1).is_ok());
+
+    let logs = factory.logs.lock().unwrap().clone();
+    assert_eq!(logs.len(), 4, "one controller per path per side");
+    let data_0_acked = logs
+        .iter()
+        .map(check_packet_identity)
+        .filter(|events| {
+            events.iter().any(|e| {
+                matches!(e, PacketEvent::Acked { packet, .. }
+                    if *packet == PacketId { space: Space::Data, number: 0 })
+            })
+        })
+        .count();
+    assert_eq!(
+        data_0_acked, 4,
+        "every path controller resolves its own Data 0"
+    );
     Ok(())
 }

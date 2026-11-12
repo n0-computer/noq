@@ -1,7 +1,7 @@
 use alloc::{boxed::Box, sync::Arc};
 use core::any::Any;
 
-use super::{BASE_DATAGRAM_SIZE, Controller, ControllerFactory};
+use super::{BASE_DATAGRAM_SIZE, Controller, ControllerFactory, PacketId};
 use crate::Instant;
 use crate::connection::RttEstimator;
 
@@ -41,12 +41,12 @@ impl NewReno {
 }
 
 impl Controller for NewReno {
-    fn on_ack(
+    fn on_packet_space_acked(
         &mut self,
         _now: Instant,
         sent: Instant,
         bytes: u64,
-        _pn: u64,
+        _packet: PacketId,
         app_limited: bool,
         _rtt: &RttEstimator,
     ) {
@@ -83,14 +83,14 @@ impl Controller for NewReno {
         }
     }
 
-    fn on_congestion_event(
+    fn on_congestion_event_space(
         &mut self,
         now: Instant,
         sent: Instant,
         is_persistent_congestion: bool,
         _is_ecn: bool,
         _lost_bytes: u64,
-        _largest_lost_pn: u64,
+        _largest_lost: PacketId,
     ) {
         if sent <= self.recovery_start_time {
             return;
