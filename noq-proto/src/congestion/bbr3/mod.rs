@@ -173,9 +173,11 @@ enum BbrState {
 }
 
 /// Ack phases used during ProbeBW states
-/// equivalent to BBR.ack_phase states <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.3.3.6>
+/// equivalent to BBR.ack_phase states <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-06.html#section-2.14>
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum AckPhase {
+    /// equivalent to ACKS_INIT
+    Init,
     /// equivalent to ACKS_PROBE_STARTING
     ProbeStarting,
     /// equivalent to ACKS_PROBE_STOPPING
@@ -516,17 +518,16 @@ pub struct Bbr3 {
     /// equivalent to BBR.bw_probe_up_rounds: number of rounds that have been executed in probe up
     /// state
     bw_probe_up_rounds: u32,
-    /// equivalent to BBR.bw_probe_up_acks: volume of data in bytes that has been acknowledged
-    /// during probe up state
-    bw_probe_up_acks: u64,
-    /// equivalent to BBR.probe_up_cnt: count of the number of times we've grown the cwnd during
-    /// probe up state
-    probe_up_cnt: u64,
+    /// equivalent to BBR.bw_probe_up_acked: bytes acknowledged since `inflight_longterm` last grew
+    bw_probe_up_acked: u64,
+    /// equivalent to BBR.probe_up_acked_per_inc: bytes to acknowledge per SMSS of
+    /// `inflight_longterm` growth during probe up state
+    probe_up_acked_per_inc: u64,
     /// equivalent to BBR.cycle_stamp: timestamp when we start probing down state
     cycle_stamp: Option<Instant>,
     /// equivalent to BBR.ack_phase: ACK phase during probing states
     ack_phase: AckPhase,
-    /// equivalent to BBR.bw_probe_samples: <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.5.10.2>
+    /// equivalent to BBR.is_bw_probe_sample <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-06.html#section-2.14>
     bw_probe_samples: bool,
     /// equivalent to BBR.loss_round_delivered: C.delivered during the first loss of the round
     loss_round_delivered: u64,
@@ -685,10 +686,10 @@ impl Bbr3 {
             rounds_since_bw_probe: 0,
             bw_probe_wait: Duration::ZERO,
             bw_probe_up_rounds: 0,
-            bw_probe_up_acks: 0,
-            probe_up_cnt: 0,
+            bw_probe_up_acked: 0,
+            probe_up_acked_per_inc: 0,
             cycle_stamp: None,
-            ack_phase: AckPhase::ProbeStarting,
+            ack_phase: AckPhase::Init,
             bw_probe_samples: false,
             loss_events_in_round: 0,
             last_lost_packet: None,
@@ -991,18 +992,23 @@ impl Bbr3 {
         }
     }
 
-    /// equivalent to BBRAdaptLongTermModel <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.3.3.6-8>
+    /// equivalent to BBRAdaptLongTermModel <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-06.html#section-5.3.3.9-9>
+    ///
+    /// The probe's feedback ends once, on the first round after it stops, so later losses are not
+    /// taken as probe feedback and later rounds do not age the max-bw window again.
     fn adapt_long_term_model(&mut self, newly_acked: u64) {
         if self.ack_phase == AckPhase::ProbeStarting && self.round_start {
             self.ack_phase = AckPhase::ProbeFeedback;
         }
-        if self.ack_phase == AckPhase::ProbeStopping
-            && self.round_start
-            && let BbrState::ProbeBw(_) = self.state
-            && let Some(rate_sample) = self.rs
-            && !rate_sample.is_app_limited
-        {
-            self.advance_max_bw_filter();
+        if self.ack_phase == AckPhase::ProbeStopping && self.round_start {
+            self.bw_probe_samples = false;
+            self.ack_phase = AckPhase::Init;
+            if let BbrState::ProbeBw(_) = self.state
+                && let Some(rate_sample) = self.rs
+                && !rate_sample.is_app_limited
+            {
+                self.advance_max_bw_filter();
+            }
         }
         if !self.is_inflight_too_high() {
             if self.inflight_longterm == u64::MAX {
@@ -1064,7 +1070,7 @@ impl Bbr3 {
     fn start_probe_bw_refill(&mut self) {
         self.reset_short_term_model();
         self.bw_probe_up_rounds = 0;
-        self.bw_probe_up_acks = 0;
+        self.bw_probe_up_acked = 0;
         self.ack_phase = AckPhase::Refilling;
         self.start_round();
         self.cwnd_gain = self.default_cwnd_gain;
@@ -1102,16 +1108,22 @@ impl Bbr3 {
         false
     }
 
-    /// equivalent to BBRProbeInflightLongtermUpward <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.3.3.6-8>
+    /// equivalent to BBRProbeInflightLongtermUpward <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-06.html#section-5.3.3.9-9>
+    ///
+    /// Growing in whole packets lets the cwnd catch up between increments, so PROBE_UP sees the
+    /// cwnd reach `inflight_longterm` and keeps probing while that bound is what limits it. Once
+    /// `probe_up_acked_per_inc` falls to its SMSS floor, each ACK grows the bound before the cwnd
+    /// follows, so late rounds no longer reset the plateau check. The draft and Linux do the same.
     fn probe_inflight_long_term_upward(&mut self, newly_acked: u64) {
         if !self.is_cwnd_limited || self.cwnd < self.inflight_longterm {
             return;
         }
-        self.bw_probe_up_acks += newly_acked;
-        if self.bw_probe_up_acks >= self.probe_up_cnt && self.probe_up_cnt > 0 {
-            let delta = self.bw_probe_up_acks / self.probe_up_cnt;
-            self.bw_probe_up_acks -= delta * self.probe_up_cnt;
-            self.inflight_longterm += delta;
+        self.bw_probe_up_acked += newly_acked;
+        if self.bw_probe_up_acked >= self.probe_up_acked_per_inc && self.probe_up_acked_per_inc > 0
+        {
+            let delta = self.bw_probe_up_acked / self.probe_up_acked_per_inc;
+            self.bw_probe_up_acked -= delta * self.probe_up_acked_per_inc;
+            self.inflight_longterm += delta * self.smss;
         }
         if self.round_start {
             self.raise_inflight_long_term_slope();
@@ -1253,15 +1265,14 @@ impl Bbr3 {
         self.full_bw_now = false;
     }
 
-    /// equivalent to BBRRaiseInflightLongtermSlope <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.3.3.6-8>
+    /// equivalent to BBRRaiseInflightLongtermSlope <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-06.html#section-5.3.3.9-9>
     fn raise_inflight_long_term_slope(&mut self) {
-        let growth_this_round = self
-            .smss
+        let growth_this_round = 1u64
             .checked_shl(self.bw_probe_up_rounds)
             .unwrap_or(u64::MAX);
         self.bw_probe_up_rounds =
             Ord::min(self.bw_probe_up_rounds + 1, MAX_LONG_TERM_PROBE_UP_ROUNDS);
-        self.probe_up_cnt = Ord::max(self.cwnd / growth_this_round, 1);
+        self.probe_up_acked_per_inc = Ord::max(self.cwnd / growth_this_round, self.smss);
     }
 
     /// equivalent to BBRHandleRestartFromIdle <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.4.1>
@@ -1581,7 +1592,7 @@ impl Bbr3 {
     /// equivalent to BBRStartProbeBW_DOWN <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.3.3.6-4>
     fn start_probe_bw_down(&mut self, now: Instant) {
         self.reset_congestion_signals();
-        self.probe_up_cnt = u64::MAX;
+        self.probe_up_acked_per_inc = u64::MAX;
         self.pick_probe_wait();
         self.cycle_stamp = Some(now);
         self.ack_phase = AckPhase::ProbeStopping;
@@ -2186,6 +2197,14 @@ mod test {
             // The transport reports the largest packet ever acked; only its presence matters.
             self.bbr
                 .on_end_acks(now, self.inflight, app_limited, Some(0), SpaceKind::Data);
+        }
+
+        /// Send `count` packets at `now_ns` and acknowledge them in one ACK `rtt_ns` later: one
+        /// round when nothing else is in flight.
+        fn round(&mut self, now_ns: u64, count: u64, rtt_ns: u64) {
+            let first = self.pn;
+            self.send(now_ns, count);
+            self.ack(now_ns + rtt_ns, first..self.pn, false);
         }
 
         /// Report an empty transmit poll that nothing held back, as the transport does.
@@ -4955,18 +4974,19 @@ mod test {
 
     /// A.15: Increasing bandwidth 10x and ensuring full bandwidth is reached.
     /// equivalent to BBRRaiseInflightLongtermSlope / BBRProbeInflightLongtermUpward:
-    /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.3.3.6-8>
+    /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-06.html#section-5.3.3.9-9>
     ///
     /// After PROBE_BW is reached at a low link rate, the bottleneck bandwidth jumps 10x. In
     /// PROBE_UP BBR grows `inflight_longterm` with an exponentially increasing per-round step so
     /// it rediscovers a much larger BDP in O(log(BDP)) round trips rather than linearly.
     ///
     /// The step doubling comes from `raise_inflight_long_term_slope`, called once per round-start
-    /// while probing up: `growth_this_round = SMSS << bw_probe_up_rounds` and `bw_probe_up_rounds`
-    /// increments each round, so the unit of growth doubles every round. `probe_up_cnt` (bytes to
-    /// ack per +1 byte of `inflight_longterm`) is set to `cwnd / growth_this_round`, so over one
-    /// round (~cwnd bytes acked) `inflight_longterm` climbs by ~`growth_this_round`, a per-round
-    /// increment that doubles each round.
+    /// while probing up: `growth_this_round = 1 << bw_probe_up_rounds` packets and
+    /// `bw_probe_up_rounds` increments each round, so the unit of growth doubles every round.
+    /// `probe_up_acked_per_inc` (bytes to ack per SMSS of `inflight_longterm`) is set to
+    /// `max(cwnd / growth_this_round, SMSS)`, so over one round (~cwnd bytes acked)
+    /// `inflight_longterm` climbs by ~`growth_this_round` packets, a per-round increment that
+    /// doubles each round.
     ///
     /// The growth path only engages when the flow is genuinely cwnd-limited. That signal is
     /// spec-defined as connection-provided (`C.is_cwnd_limited`), so the harness reports it exactly
@@ -7276,6 +7296,94 @@ mod test {
         sim.ack(12 * MS, [2, 3, 4], false);
         assert!(sim.bbr.rs.unwrap().is_app_limited);
         assert_eq!(sim.bbr.app_limited, 0);
+    }
+
+    /// A scripted `Sim` in PROBE_DOWN after a loss-free probe measured 12 MB/s over a 10ms RTT,
+    /// a 100-packet BDP, with the probe's feedback still arriving.
+    fn probed() -> Sim {
+        let mut sim = scripted();
+        sim.round(0, 100, 10 * MS);
+        sim.bbr.full_bw_reached = true;
+        sim.bbr.bw_probe_samples = true;
+        sim.bbr.enter_probe_bw(sim.at(10 * MS));
+        sim
+    }
+
+    /// Finishing a probe ages the max-bw window once, so cruise rounds keep the probe's maximum,
+    /// and a later cruise loss cuts only the short-term model.
+    #[test]
+    fn probe_feedback_finishes_once() {
+        let mut sim = probed();
+        let cycle = sim.bbr.cycle_count;
+        // Cruise at half the probed rate for longer than the filter window.
+        for i in 0..5 {
+            sim.round(10 * MS + i * 20 * MS, 100, 20 * MS);
+        }
+        assert_eq!(sim.bbr.state, BbrState::ProbeBw(ProbeBwSubstate::Cruise));
+        assert_eq!(sim.bbr.cycle_count, cycle + 1);
+        assert_eq!(sim.bbr.max_bw, 12_000_000.0);
+        assert!(!sim.bbr.bw_probe_samples);
+
+        // Lose 10% of the next round.
+        let first = sim.pn;
+        sim.send(110 * MS, 100);
+        for pn in first..first + 10 {
+            sim.lose(130 * MS, pn);
+        }
+        sim.ack(130 * MS, first + 10..sim.pn, false);
+        assert_eq!(sim.bbr.inflight_longterm, u64::MAX);
+        assert!(sim.bbr.bw_shortterm < f64::INFINITY);
+    }
+
+    /// Probe feedback that ends on an application-limited round finishes without aging the
+    /// window, and later rounds do not finish it again.
+    #[test]
+    fn app_limited_probe_feedback_finishes_once() {
+        let mut sim = probed();
+        let cycle = sim.bbr.cycle_count;
+        sim.starve();
+        sim.round(10 * MS, 100, 20 * MS);
+        assert!(sim.bbr.rs.unwrap().is_app_limited);
+        assert!(!sim.bbr.bw_probe_samples);
+
+        for i in 1..5 {
+            sim.round(10 * MS + i * 20 * MS, 100, 20 * MS);
+        }
+        assert_eq!(sim.bbr.state, BbrState::ProbeBw(ProbeBwSubstate::Cruise));
+        assert_eq!(sim.bbr.cycle_count, cycle);
+        assert_eq!(sim.bbr.max_bw, 12_000_000.0);
+    }
+
+    /// ProbeRTT entered mid-probe ends the probe's feedback: the window ages once, on the first
+    /// round after ProbeRTT returns to cruising.
+    #[test]
+    fn probe_rtt_finishes_probe_feedback_once() {
+        let mut sim = probed();
+        sim.bbr.start_probe_bw_up();
+        sim.round(10 * MS, 100, 10 * MS);
+        assert_eq!(sim.bbr.ack_phase, AckPhase::ProbeFeedback);
+        let cycle = sim.bbr.cycle_count;
+
+        // The min RTT expires on the next round.
+        sim.bbr.probe_rtt_interval = Duration::ZERO;
+        sim.round(20 * MS, 100, 10 * MS);
+        sim.bbr.probe_rtt_interval = Duration::from_secs(PROBE_RTT_INTERVAL_SEC);
+        assert_eq!(sim.bbr.state, BbrState::ProbeRtt);
+
+        let mut now = 30 * MS;
+        while sim.bbr.state == BbrState::ProbeRtt {
+            sim.round(now, 100, 10 * MS);
+            now += 10 * MS;
+            assert!(now < 1000 * MS, "ProbeRTT never ended");
+        }
+        assert_eq!(sim.bbr.state, BbrState::ProbeBw(ProbeBwSubstate::Cruise));
+        assert_eq!(sim.bbr.cycle_count, cycle);
+        assert!(!sim.bbr.bw_probe_samples);
+
+        for i in 0..5 {
+            sim.round(now + i * 10 * MS, 100, 10 * MS);
+        }
+        assert_eq!(sim.bbr.cycle_count, cycle + 1);
     }
 
     /// Packet size for the packet identity tests.
