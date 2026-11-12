@@ -525,6 +525,14 @@ pub struct Bbr3 {
     /// equivalent to BBR.check_probe_loss: losses are checked as feedback from a bandwidth probe.
     /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-2.14>
     check_probe_loss: bool,
+    /// equivalent to BBR.prev_probe_too_high: the most recent bandwidth probe saw a loss rate
+    /// above `LOSS_THRESH`, so the next probe stops once inflight reaches `inflight_longterm`.
+    /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.3.3.6>
+    prev_probe_too_high: bool,
+    /// equivalent to BBR.prev_probe_precautionary: the most recent ProbeBW_UP stopped early on
+    /// reaching the `inflight_longterm` of a previous probe that went too high.
+    /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.3.3.6>
+    prev_probe_precautionary: bool,
     /// equivalent to BBR.loss_round_delivered: C.delivered during the first loss of the round
     loss_round_delivered: u64,
     /// equivalent to BBR.loss_in_round: flag set to true when loss occurs during the round
@@ -696,6 +704,8 @@ impl Bbr3 {
             cycle_stamp: None,
             is_bw_probe_stopping: false,
             check_probe_loss: false,
+            prev_probe_too_high: false,
+            prev_probe_precautionary: false,
             loss_events_in_round: 0,
             last_lost_packet: None,
             recovery_start_time: None,
@@ -981,7 +991,9 @@ impl Bbr3 {
         if !self.full_bw_reached {
             return;
         }
-        self.adapt_long_term_model(newly_acked);
+        if self.adapt_long_term_model(newly_acked) {
+            return;
+        }
         let state = self.state;
         match state {
             BbrState::ProbeBw(ProbeBwSubstate::Down) => {
@@ -999,30 +1011,38 @@ impl Bbr3 {
                 self.start_probe_bw_up();
             }
             BbrState::ProbeBw(ProbeBwSubstate::Up) if self.maybe_go_down() => {
+                // No high loss, yet: a loss in the feedback round can still set this.
+                self.prev_probe_too_high = false;
                 self.start_probe_bw_down(now);
             }
             _ => {}
         }
     }
 
-    /// equivalent to BBRAdaptLongTermModel <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-06.html#section-5.3.3.9-9>
+    /// equivalent to BBRAdaptLongTermModel <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.3.3.9>
     ///
     /// The probe's feedback ends once, on the first round after it stops, so later losses are not
     /// taken as probe feedback and later rounds do not age the max-bw window again.
-    fn adapt_long_term_model(&mut self, newly_acked: u64) {
+    ///
+    /// Returns whether it started a new ProbeBW phase, which ends the cycle-phase update.
+    fn adapt_long_term_model(&mut self, newly_acked: u64) -> bool {
         if self.is_bw_probe_stopping && self.round_start {
             self.check_probe_loss = false;
             self.is_bw_probe_stopping = false;
-            if let BbrState::ProbeBw(_) = self.state
-                && let Some(rate_sample) = self.rs
-                && !rate_sample.is_app_limited
-            {
+            let in_probe_bw = matches!(self.state, BbrState::ProbeBw(_));
+            if in_probe_bw && self.rs.is_some_and(|rs| !rs.is_app_limited) {
                 self.advance_max_bw_filter();
+            }
+            // Precautionary bandwidth probing: acceleration. A probe that stopped early without
+            // excess loss proved its inflight safe, so probe again at once and hold it this time.
+            if in_probe_bw && self.prev_probe_precautionary && !self.prev_probe_too_high {
+                self.start_probe_bw_refill();
+                return true;
             }
         }
         if !self.is_inflight_too_high() {
             if self.inflight_longterm == u64::MAX {
-                return;
+                return false;
             }
             if let Some(rate_sample) = self.rs
                 && rate_sample.tx_in_flight > self.inflight_longterm
@@ -1033,6 +1053,7 @@ impl Bbr3 {
                 self.probe_inflight_long_term_upward(newly_acked);
             }
         }
+        false
     }
 
     /// equivalent to BBRAdvanceMaxBwFilter <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.5.6>
@@ -1076,11 +1097,12 @@ impl Bbr3 {
         self.rounds_since_bw_probe >= rounds
     }
 
-    /// equivalent to BBRStartProbeBW_REFILL <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.3.3.6-4>
+    /// equivalent to BBRStartProbeBW_REFILL <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.3.3.9>
     fn start_probe_bw_refill(&mut self) {
         self.reset_short_term_model();
         self.bw_probe_up_rounds = 0;
         self.bw_probe_up_acked = 0;
+        self.prev_probe_precautionary = false;
         self.is_bw_probe_stopping = false;
         self.start_round();
         self.cwnd_gain = self.default_cwnd_gain;
@@ -1105,8 +1127,13 @@ impl Bbr3 {
         self.quantization_budget(inflight_cap)
     }
 
-    /// equivalent to BBRIsTimeToGoDown <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.3.3.6-6>
+    /// equivalent to BBRIsTimeToGoDown <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.3.3.9>
     fn maybe_go_down(&mut self) -> bool {
+        // Precautionary bandwidth probing: deceleration.
+        if self.prev_probe_too_high && self.inflight >= self.inflight_longterm {
+            self.prev_probe_precautionary = true;
+            return true;
+        }
         if self.is_cwnd_limited && self.cwnd >= self.inflight_longterm {
             self.reset_full_bw();
             if let Some(rate_sample) = self.rs {
@@ -1652,10 +1679,11 @@ impl Bbr3 {
         (inflight_prev + lost_prefix) as u64
     }
 
-    /// equivalent to BBRHandleInflightTooHigh <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.5.10.2-1>
+    /// equivalent to BBRHandleInflightTooHigh <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.5.10.2>
     ///
     /// `rs` is the sample that showed it, if any.
     fn handle_inflight_too_high(&mut self, now: Instant, rs: Option<BbrRateSample>) {
+        self.prev_probe_too_high = true;
         self.check_probe_loss = false;
         if let Some(rate_sample) = rs
             && !rate_sample.is_app_limited
@@ -8181,6 +8209,67 @@ mod test {
         }
         assert_eq!(sim.bbr.state, BbrState::ProbeBw(ProbeBwSubstate::Cruise));
         sim
+    }
+
+    /// Starts a probe from CRUISE with `inflight_longterm` at 40 packets, and returns once it is
+    /// in ProbeBW_UP with 45 packets sent and two of them acknowledged.
+    fn probing_past_inflight_longterm(prev_probe_too_high: bool) -> Sim {
+        let mut sim = cruising();
+        sim.bbr.inflight_longterm = 40 * 1200;
+        sim.bbr.prev_probe_too_high = prev_probe_too_high;
+        sim.bbr.start_probe_bw_refill();
+        sim.round(200 * MS, 10, 20 * MS);
+        assert_eq!(sim.bbr.state, BbrState::ProbeBw(ProbeBwSubstate::Up));
+        let first = sim.pn;
+        sim.send(230 * MS, 45);
+        sim.ack(250 * MS, [first, first + 1], false);
+        sim
+    }
+
+    /// After a probe that went too high, the next probe stops as soon as inflight reaches
+    /// `inflight_longterm`, and when its feedback shows no excess loss, BBR probes again at once.
+    /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.3.3.6>
+    #[test]
+    fn precautionary_probe_stops_at_inflight_longterm_then_reprobes() {
+        let mut sim = probing_past_inflight_longterm(true);
+        assert_eq!(sim.bbr.state, BbrState::ProbeBw(ProbeBwSubstate::Down));
+        assert!(sim.bbr.prev_probe_precautionary);
+        assert!(!sim.bbr.prev_probe_too_high);
+
+        // The rest of the probe and a round sent after it deliver without loss.
+        let rest = sim.pn - 43..sim.pn;
+        sim.ack(251 * MS, rest, false);
+        sim.round(260 * MS, 10, 20 * MS);
+        assert_eq!(sim.bbr.state, BbrState::ProbeBw(ProbeBwSubstate::Refill));
+        assert!(!sim.bbr.prev_probe_precautionary);
+    }
+
+    /// A precautionary probe whose feedback shows excess loss does not probe again at once.
+    #[test]
+    fn lossy_precautionary_probe_waits_for_the_next_cycle() {
+        let mut sim = probing_past_inflight_longterm(true);
+        assert!(sim.bbr.prev_probe_precautionary);
+
+        let first = sim.pn - 43;
+        for pn in first..first + 5 {
+            sim.lose(251 * MS, pn);
+        }
+        sim.ack(252 * MS, first + 5..sim.pn, false);
+        assert!(sim.bbr.prev_probe_too_high);
+        sim.round(260 * MS, 10, 20 * MS);
+        assert!(matches!(
+            sim.bbr.state,
+            BbrState::ProbeBw(ProbeBwSubstate::Down | ProbeBwSubstate::Cruise)
+        ));
+    }
+
+    /// Without a previous probe that went too high, ProbeBW_UP keeps probing past
+    /// `inflight_longterm`.
+    #[test]
+    fn clean_probe_continues_past_inflight_longterm() {
+        let sim = probing_past_inflight_longterm(false);
+        assert_eq!(sim.bbr.state, BbrState::ProbeBw(ProbeBwSubstate::Up));
+        assert!(!sim.bbr.prev_probe_precautionary);
     }
 
     /// CE while cruising lowers the short-term model when the round ends, as loss does.
