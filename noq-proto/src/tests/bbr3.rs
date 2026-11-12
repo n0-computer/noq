@@ -38,9 +38,12 @@ fn bbr3_pair_builder(link_rate: u64) -> ConnPairBuilder {
                     latency: ONE_WAY,
                 },
             ));
+    let mut bbr3 = Bbr3Config::default();
+    // Reproducible probe timing.
+    bbr3.probe_rng_seed([3; 16]);
     builder
         .client_transport_cfg
-        .congestion_controller_factory(Arc::new(Bbr3Config::default()));
+        .congestion_controller_factory(Arc::new(bbr3));
     builder
 }
 

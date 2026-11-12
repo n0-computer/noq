@@ -2308,6 +2308,13 @@ impl Bbr3Config {
         self.initial_window = value;
         self
     }
+
+    /// Seeds the random choice of probe timing, so a test run is reproducible.
+    #[cfg(test)]
+    pub(crate) fn probe_rng_seed(&mut self, seed: [u8; 16]) -> &mut Self {
+        self.probe_rng_seed = Some(seed);
+        self
+    }
 }
 
 impl Default for Bbr3Config {
@@ -2394,7 +2401,9 @@ mod test {
     }
 
     impl Sim {
-        fn new(config: Bbr3Config, mss: u64, bw: f64, rtt_ns: u64) -> Self {
+        fn new(mut config: Bbr3Config, mss: u64, bw: f64, rtt_ns: u64) -> Self {
+            // Reproducible probe timing unless a test picks its own seed.
+            config.probe_rng_seed.get_or_insert([3; 16]);
             Self {
                 bbr: Bbr3::new(Arc::new(config), mss as u16),
                 base: Instant::now(),

@@ -2765,7 +2765,9 @@ fn congestion_callbacks_stay_on_the_sending_path() -> TestResult {
 #[test]
 fn paths_pace_startup_from_measured_rtt() -> TestResult {
     let _guard = subscribe();
-    let factory = Arc::new(Bbr3Config::default());
+    let mut bbr3 = Bbr3Config::default();
+    bbr3.probe_rng_seed([3; 16]);
+    let factory = Arc::new(bbr3);
     let mut transport = TransportConfig::default();
     transport.congestion_controller_factory(factory.clone());
     let mut pair = ConnPair::builder()

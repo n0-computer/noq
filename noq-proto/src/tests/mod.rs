@@ -5893,7 +5893,9 @@ fn bbr_marking_versus_dropping() -> TestResult {
     let _guard = subscribe();
     let run = |marks_ce| -> TestResult<_> {
         let mut transport = TransportConfig::default();
-        transport.congestion_controller_factory(Arc::new(Bbr3Config::default()));
+        let mut bbr3 = Bbr3Config::default();
+        bbr3.probe_rng_seed([3; 16]);
+        transport.congestion_controller_factory(Arc::new(bbr3));
         let mut pair = ConnPair::builder()
             .with_transport_cfg(transport)
             .with_routes(BwLimitedRouting::new(
