@@ -28,7 +28,22 @@ pub struct PacketId {
     pub number: u64,
 }
 
+impl PacketId {
+    /// Returns the Data-space packet `number`, the space the pn-only callbacks assume.
+    pub(crate) fn data(number: u64) -> Self {
+        Self {
+            space: Space::Data,
+            number,
+        }
+    }
+}
+
 /// Common interface for different congestion controllers
+///
+/// The transport calls the space-aware per-packet callbacks, such as
+/// [`Self::on_packet_space_acked`]. A controller that wraps another must forward those. The
+/// deprecated pn-only callbacks remain for older wrappers, and the built-in controllers still
+/// answer them, assuming the Data space.
 pub trait Controller: Send + Sync + core::fmt::Debug {
     /// One or more packets were just sent
     #[allow(unused_variables)]

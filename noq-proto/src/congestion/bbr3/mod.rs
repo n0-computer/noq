@@ -1931,6 +1931,46 @@ impl Controller for Bbr3 {
         );
     }
 
+    // The pn-only callbacks are deprecated, but a controller wrapping this one may still forward
+    // them. They keep working, with packets numbered in the Data space as before.
+    fn on_packet_sent(&mut self, now: Instant, bytes: u16, pn: u64) {
+        self.on_packet_space_sent(now, bytes, PacketId::data(pn));
+    }
+    fn on_ack(
+        &mut self,
+        now: Instant,
+        sent: Instant,
+        bytes: u64,
+        pn: u64,
+        app_limited: bool,
+        rtt: &RttEstimator,
+    ) {
+        self.on_packet_space_acked(now, sent, bytes, PacketId::data(pn), app_limited, rtt);
+    }
+
+    fn on_congestion_event(
+        &mut self,
+        now: Instant,
+        sent: Instant,
+        is_persistent_congestion: bool,
+        is_ecn: bool,
+        lost_bytes: u64,
+        largest_lost_pn: u64,
+    ) {
+        self.on_congestion_event_space(
+            now,
+            sent,
+            is_persistent_congestion,
+            is_ecn,
+            lost_bytes,
+            PacketId::data(largest_lost_pn),
+        );
+    }
+
+    fn on_packet_lost(&mut self, lost_bytes: u16, pn: u64, now: Instant) {
+        self.on_packet_space_lost(lost_bytes, PacketId::data(pn), now);
+    }
+
     fn on_mtu_update(&mut self, new_mtu: u16) {
         Self::on_mtu_update(self, new_mtu);
     }
@@ -7070,5 +7110,24 @@ mod test {
 
         assert_eq!(bbr.packets[SpaceKind::Initial as usize].len(), 1);
         assert!(bbr.packets[SpaceKind::Handshake as usize].is_empty());
+    }
+
+    /// A controller that wraps BBR and forwards the deprecated pn-only callbacks still drives it:
+    /// the packets are tracked as Data packets, and their ACK and loss resolve them.
+    #[test]
+    #[allow(deprecated)]
+    fn deprecated_callbacks_still_drive_bbr() {
+        let mut bbr = Bbr3::new(Arc::new(Bbr3Config::default()), 1200);
+        let rtt = RttEstimator::new(Duration::from_millis(10));
+        let start = Instant::now();
+        let acked = start + Duration::from_millis(10);
+        let controller: &mut dyn Controller = &mut bbr;
+        controller.on_packet_sent(start, 1200, 0);
+        controller.on_packet_sent(start, 1200, 1);
+        controller.on_ack(acked, start, 1200, 0, false, &rtt);
+        controller.on_packet_lost(1200, 1, acked);
+        controller.on_end_acks(acked, 0, false, Some(0));
+        assert_eq!(bbr.delivered, 1200);
+        assert_eq!(bbr.lost, 1200);
     }
 }

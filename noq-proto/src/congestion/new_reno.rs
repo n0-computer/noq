@@ -106,6 +106,39 @@ impl Controller for NewReno {
         }
     }
 
+    // The pn-only callbacks are deprecated, but a controller wrapping this one may still forward
+    // them. They keep working, with packets numbered in the Data space as before.
+    fn on_ack(
+        &mut self,
+        now: Instant,
+        sent: Instant,
+        bytes: u64,
+        pn: u64,
+        app_limited: bool,
+        rtt: &RttEstimator,
+    ) {
+        self.on_packet_space_acked(now, sent, bytes, PacketId::data(pn), app_limited, rtt);
+    }
+
+    fn on_congestion_event(
+        &mut self,
+        now: Instant,
+        sent: Instant,
+        is_persistent_congestion: bool,
+        is_ecn: bool,
+        lost_bytes: u64,
+        largest_lost_pn: u64,
+    ) {
+        self.on_congestion_event_space(
+            now,
+            sent,
+            is_persistent_congestion,
+            is_ecn,
+            lost_bytes,
+            PacketId::data(largest_lost_pn),
+        );
+    }
+
     fn on_mtu_update(&mut self, new_mtu: u16) {
         self.current_mtu = new_mtu as u64;
         self.window = self.window.max(self.minimum_window());
@@ -173,5 +206,30 @@ impl Default for NewRenoConfig {
 impl ControllerFactory for NewRenoConfig {
     fn build(self: Arc<Self>, now: Instant, current_mtu: u16) -> Box<dyn Controller> {
         Box::new(NewReno::new(self, now, current_mtu))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Duration;
+
+    /// A controller that wraps NewReno and forwards the deprecated pn-only callbacks still drives
+    /// it: an ACK grows the window in slow start and a loss cuts it.
+    #[test]
+    #[allow(deprecated)]
+    fn deprecated_callbacks_still_drive_new_reno() {
+        let now = Instant::now();
+        let rtt = RttEstimator::new(Duration::from_millis(100));
+        let mut reno = NewReno::new(Arc::new(NewRenoConfig::default()), now, 1200);
+        let window = reno.window();
+
+        let sent = now + Duration::from_millis(1);
+        let later = now + Duration::from_millis(100);
+        reno.on_ack(later, sent, 1200, 0, false, &rtt);
+        assert_eq!(reno.window(), window + 1200);
+
+        reno.on_congestion_event(later, later, false, false, 1200, 1);
+        assert!(reno.window() < window);
     }
 }
