@@ -5561,6 +5561,60 @@ fn late_ack_only_packet_is_not_a_spurious_loss() {
     );
 }
 
+/// Losses of packets sent on a path before it migrated do not reach the controller of the
+/// migrated path, as their ACKs do not.
+#[test]
+fn old_path_losses_stay_off_the_migrated_path() {
+    let _guard = subscribe();
+    let factory = Arc::new(PacketRecorderFactory::default());
+    let mut transport = TransportConfig::default();
+    transport.congestion_controller_factory(factory.clone());
+    let transport = Arc::new(transport);
+    let mut server_cfg = server_config();
+    server_cfg.transport = transport.clone();
+    let mut pair = Pair::new(Default::default(), server_cfg);
+    let mut client_cfg = client_config();
+    client_cfg.transport = transport;
+    let (client_ch, server_ch) = pair.connect_with(client_cfg);
+    pair.drive();
+    let server_log = factory.logs.lock().unwrap()[1].clone();
+
+    // The server's data on the old path never arrives.
+    let s = pair.server_streams(server_ch).open(Dir::Uni).unwrap();
+    pair.server_send(server_ch, s).write(&[42; 4000]).unwrap();
+    pair.drive_server();
+    pair.client.inbound.clear();
+    let old_path_sent: HashSet<PacketId> = server_log
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|e| match e {
+            PacketEvent::Sent { packet, .. } => Some(*packet),
+            _ => None,
+        })
+        .collect();
+
+    // The client moves, and the server follows it to the new address.
+    pair.routes.as_basic_mut().passive_migration(Client);
+    pair.client_conn_mut(client_ch).ping();
+    pair.drive_client();
+    pair.drive_server();
+    pair.drive();
+
+    // The address change gave the path a fresh controller, as RFC 9000 section 9.4 asks.
+    let logs = factory.logs.lock().unwrap().clone();
+    assert_eq!(logs.len(), 3, "the migrated path has its own controller");
+    let events = logs[2].lock().unwrap().clone();
+    let stray: Vec<_> = events
+        .iter()
+        .filter(|e| matches!(e, PacketEvent::Lost { packet } if old_path_sent.contains(packet)))
+        .collect();
+    assert!(
+        stray.is_empty(),
+        "old-path losses reached the new path: {stray:?}"
+    );
+}
+
 #[test]
 fn datagram_starvation_reported_before_resumed_send() {
     check_starvation_reported_before_resumed_send(|pair, ch| {

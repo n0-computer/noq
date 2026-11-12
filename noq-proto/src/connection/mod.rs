@@ -3549,11 +3549,15 @@ impl Connection {
                 let path = self.path_data_mut(path_id);
                 path.pending |= info.path_retransmits;
                 path.mtud.on_non_probe_lost(packet, info.size);
-                let lost = PacketId {
-                    space: pn_space.kind(),
-                    number: packet,
-                };
-                path.congestion.on_packet_space_lost(info.size, lost, now);
+                // As for ACKs, a packet sent before the path changed tells this path's controller
+                // nothing, and it never learned of the send.
+                if info.path_generation == path.generation() {
+                    let lost = PacketId {
+                        space: pn_space.kind(),
+                        number: packet,
+                    };
+                    path.congestion.on_packet_space_lost(info.size, lost, now);
+                }
 
                 // Only a loss that counted as congestion can later turn out to be spurious. An
                 // ACK-only packet is not in flight and raises no congestion event when lost, so
