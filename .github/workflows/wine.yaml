@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  merge_group:
   workflow_dispatch:
 
 concurrency:
@@ -22,7 +23,7 @@ permissions:
 jobs:
   wine_test:
     name: Wine Sanity Check
-    runs-on: [self-hosted, linux, X64]
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
