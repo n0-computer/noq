@@ -72,12 +72,15 @@ impl Pacer {
     /// `controller_metrics` provides [`ControllerMetrics`] from the congestion controller used to
     /// adjust pacing.
     ///
-    /// Two of its fields are consumed here:
+    /// Three of its fields are consumed here:
     /// - `congestion_window` (bytes) sets the refill rate when the controller does not compute a
     ///   rate of its own: one window per `smoothed_rtt`, times the 5/4 ratio above.
     /// - `pacing_rate` (bytes/sec) sets the upper limit of how fast we're sending data, and takes
     ///   precedence over `congestion_window` when present. e.g:
     ///   <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-04.html#name-pacing-rate-cpacing_rate>
+    /// - `send_quantum` (bytes) is the least burst the bucket holds when `pacing_rate` is
+    ///   present, so the aggregate the controller schedules as a unit is released as one.
+    ///   <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-06.html#section-5.6.3>
     pub(super) fn delay(
         &mut self,
         smoothed_rtt: Duration,
@@ -95,7 +98,13 @@ impl Pacer {
         // A controller that computes its own sending rate drives the bucket directly; the
         // window- and RTT-derived refill below is used only when no rate is reported.
         if let Some(pacing_rate) = controller_metrics.pacing_rate {
-            return self.delay_at_rate(pacing_rate, bytes_to_send, mtu, now);
+            return self.delay_at_rate(
+                pacing_rate,
+                controller_metrics.send_quantum,
+                bytes_to_send,
+                mtu,
+                now,
+            );
         }
 
         let window = rate_limited_window(smoothed_rtt, window, self.max_bytes_per_second);
@@ -158,11 +167,18 @@ impl Pacer {
     /// controller dictates an explicit `pacing_rate` in bytes/sec.
     ///
     /// Credit accumulates in `tokens` at `pacing_rate` for the time elapsed since the last
-    /// refill, bounded by a burst budget derived from that same rate. If the credit on hand
-    /// is short, the returned delay indicates when the shortfall will have been earned.
+    /// refill, bounded by a burst budget derived from that same rate and never below
+    /// `send_quantum`. If the credit on hand is short, the returned delay indicates when the
+    /// shortfall will have been earned.
+    ///
+    /// At low rates the rate-derived budget is a single MTU, while BBR3 schedules at least
+    /// `2 * SMSS` as one unit. Without the floor, the second datagram of every such unit
+    /// waits a full datagram's worth of pacing time, which for an application-limited flow at
+    /// a few hundred kbit/s is tens of milliseconds.
     fn delay_at_rate(
         &mut self,
         pacing_rate: u64,
+        send_quantum: Option<u64>,
         bytes_to_send: u64,
         mtu: u16,
         now: Instant,
@@ -176,7 +192,7 @@ impl Pacer {
         }
         .max(1);
 
-        let capacity = rate_capacity(rate, mtu);
+        let capacity = rate_capacity(rate, mtu).max(send_quantum.unwrap_or(0));
         if capacity != self.capacity {
             self.capacity = capacity;
             // here we cap the number of bytes sent at once during a burst
@@ -692,6 +708,71 @@ mod tests {
             resume_after,
             Duration::from_secs_f64(deficit as f64 / RATE as f64)
         );
+    }
+
+    /// A backlogged sender at a very low rate does not get more than the rate plus one burst.
+    ///
+    /// With a two-datagram quantum the bucket is larger than one datagram. Every transmit must
+    /// still be fully paid for before it leaves, so the saturating `on_transmit` never forgives
+    /// a debt.
+    #[test]
+    fn low_rate_sender_stays_within_the_rate() {
+        const RATE: u64 = 1250;
+        const RUN: Duration = Duration::from_secs(20);
+
+        let window = 2_000_000;
+        let mtu = 1200;
+        let rtt = Duration::from_millis(50);
+        let start = Instant::now();
+        let quantum = 2 * u64::from(mtu);
+        let metrics = paced_metrics(window, RATE, quantum);
+        let mut pacer = Pacer::new(rtt, window, mtu, None, start);
+
+        let mut now = start;
+        let mut sent = 0;
+        while now < start + RUN {
+            match pacer.delay(rtt, u64::from(mtu), mtu, now, &metrics) {
+                Some(wait) => now += wait.max(Duration::from_micros(1)),
+                None => {
+                    pacer.on_transmit(mtu);
+                    sent += u64::from(mtu);
+                }
+            }
+        }
+
+        let allowed = RATE * RUN.as_secs() + quantum;
+        assert!(
+            sent <= allowed,
+            "sent {sent} bytes in {RUN:?} at {RATE} B/s, allowed {allowed}"
+        );
+        assert!(
+            sent + u64::from(mtu) >= RATE * RUN.as_secs(),
+            "sent only {sent} bytes in {RUN:?} at {RATE} B/s"
+        );
+    }
+
+    #[test]
+    fn releases_the_send_quantum_at_once_at_low_rates() {
+        // 400 kbit/s: 10ms of it is less than one datagram, so the rate alone allows one.
+        const RATE: u64 = 50_000;
+
+        let window = 2_000_000;
+        let mtu = 1500;
+        let rtt = Duration::from_millis(50);
+        let now = Instant::now();
+        let quantum = 2 * u64::from(mtu);
+        let metrics = paced_metrics(window, RATE, quantum);
+        let mut pacer = Pacer::new(rtt, window, mtu, None, now);
+
+        burst_until_blocked(&mut pacer, rtt, mtu, now, &metrics)
+            .expect("pacer must block once the burst budget is spent");
+        // After an idle spell long enough to earn the whole quantum, an application-limited
+        // sender hands over one quantum, such as a video frame of two datagrams.
+        let later = now + Duration::from_millis(100);
+        let (_, burst) = burst_until_blocked(&mut pacer, rtt, mtu, later, &metrics)
+            .expect("pacer must block once the burst budget is spent");
+
+        assert_eq!(burst, quantum, "the quantum was not released as one burst");
     }
 
     #[test]
