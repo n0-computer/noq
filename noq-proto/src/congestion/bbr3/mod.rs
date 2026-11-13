@@ -2098,12 +2098,19 @@ impl Bbr3 {
     }
 
     fn metrics(&self) -> ControllerMetrics {
+        // The estimate is BBR.bw, the rate BBR paces and sizes cwnd from: a loss or CE round sets
+        // bw_shortterm below max_bw, and a follower such as an encoder should slow with it.
+        // Recomputed rather than read from `self.bw`, since a spurious-loss undo or a short-term
+        // reset lands between ACKs, before `bound_bw_for_model` folds it in. bw_shortterm is
+        // infinite while unset.
+        // <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.5.10.3>
+        let bw = self.max_bw.min(self.bw_shortterm);
         ControllerMetrics {
             congestion_window: self.window(),
             ssthresh: None,
             pacing_rate: Some(self.pacing_rate.round() as u64),
             send_quantum: Some(self.send_quantum),
-            bandwidth_estimate: (self.max_bw > 0.0).then_some((self.max_bw * 8.0).round() as u64),
+            bandwidth_estimate: (bw > 0.0).then_some((bw * 8.0).round() as u64),
         }
     }
 
@@ -8756,6 +8763,31 @@ mod test {
             Ord::max(sim.bbr.offload_budget, sim.bbr.min_pipe_cwnd),
         );
         assert_eq!(sim.bbr.max_inflight, expected);
+    }
+
+    /// The bandwidth estimate is BBR.bw: a loss round while cruising lowers it with
+    /// `bw_shortterm`, and undoing those losses as spurious lifts it again before the next ACK.
+    #[test]
+    fn bandwidth_estimate_follows_the_short_term_model() {
+        let estimate = |sim: &Sim| sim.bbr.metrics().bandwidth_estimate.unwrap();
+        let bits = |bytes_per_sec: f64| (bytes_per_sec * 8.0).round() as u64;
+        let mut sim = cruising();
+        let max_bw = sim.bbr.max_bw;
+        assert_eq!(estimate(&sim), bits(max_bw));
+
+        // Lose 10% of a round, revealed by the ACK of the rest; the next round ends the loss
+        // round and cuts the short-term model.
+        let first = sim.pn;
+        sim.send(110 * MS, 100);
+        sim.ack_with_losses(130 * MS, first + 10..first + 100, first..first + 10, false);
+        sim.round(130 * MS, 100, 20 * MS);
+        assert_eq!(sim.bbr.max_bw, max_bw);
+        assert!(sim.bbr.bw_shortterm < max_bw);
+        assert_eq!(estimate(&sim), bits(sim.bbr.bw_shortterm));
+
+        sim.bbr.on_spurious_congestion_event();
+        assert_eq!(sim.bbr.bw_shortterm, f64::INFINITY);
+        assert_eq!(estimate(&sim), bits(max_bw));
     }
 
     /// CE while cruising lowers the short-term model when the round ends, as loss does.
