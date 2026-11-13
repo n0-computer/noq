@@ -669,7 +669,9 @@ impl Bbr3 {
             Ord::max(MIN_MAX_DATAGRAM_SIZE, current_mtu) as u64,
             MAX_DATAGRAM_SIZE,
         );
-        let initial_cwnd = config.initial_window;
+        // SetCwnd never lets cwnd below MinPipeCwnd, so start there if the configured window is
+        // smaller, as it is with a large initial MTU: otherwise not even the first datagram fits.
+        let initial_cwnd = Ord::max(config.initial_window, 4 * smss);
         let startup_pacing_gain = config.startup_pacing_gain.unwrap_or(STARTUP_PACING_GAIN);
         let default_pacing_gain = config.default_pacing_gain.unwrap_or(DEFAULT_PACING_GAIN);
         let probe_bw_down_pacing_gain = config
@@ -2359,6 +2361,9 @@ impl Bbr3Config {
     /// Default limit on the amount of outstanding data in bytes.
     ///
     /// Recommended value: `min(10 * max_datagram_size, max(2 * max_datagram_size, 14720))`
+    ///
+    /// The controller starts at no less than BBR's minimum of four datagrams of the current MTU, so a large initial MTU cannot leave the
+    /// first datagram blocked.
     pub fn initial_window(&mut self, value: u64) -> &mut Self {
         self.initial_window = value;
         self

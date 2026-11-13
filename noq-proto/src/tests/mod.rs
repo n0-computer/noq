@@ -6248,3 +6248,65 @@ fn qlog_packet_lost_trigger() {
         ]
     );
 }
+
+/// Connects at an initial MTU of `mtu` with MTU discovery off under `controller`, and returns
+/// whether the handshake finished within five seconds.
+fn handshake_at_initial_mtu(
+    mtu: u16,
+    controller: Arc<dyn ControllerFactory + Send + Sync>,
+) -> bool {
+    let mut transport = TransportConfig::default();
+    transport.initial_mtu(mtu);
+    transport.mtu_discovery_config(None);
+    transport.congestion_controller_factory(controller);
+    let transport = Arc::new(transport);
+    let mut server_cfg = server_config();
+    server_cfg.transport = transport.clone();
+    let mut pair = Pair::new(Default::default(), server_cfg);
+    let mut client_cfg = client_config();
+    client_cfg.transport = transport;
+    let client_ch = pair.begin_connect(client_cfg);
+    let deadline = pair.time + Duration::from_secs(5);
+    while pair.time < deadline {
+        pair.drive_client();
+        pair.drive_server();
+        if !pair.client_conn_mut(client_ch).is_handshaking() {
+            return true;
+        }
+        let next = [pair.client.next_wakeup(), pair.server.next_wakeup()]
+            .into_iter()
+            .flatten()
+            .min();
+        pair.time = match next {
+            Some(next) if next > pair.time => next,
+            _ => pair.time + Duration::from_millis(1),
+        };
+    }
+    false
+}
+
+/// A congestion window below one datagram blocks the client's first Initial, and nothing in
+/// flight can open it, so the handshake would hang until the idle timeout. Every controller
+/// starts at a window of at least two datagrams (RFC 9002, Section 7.2).
+#[test]
+fn handshake_with_initial_mtu_above_initial_window() {
+    let _guard = subscribe();
+    // Above the 14720-byte default initial window, and not a whole fraction of it.
+    const MTU: u16 = 16_000;
+    let mut bbr3 = Bbr3Config::default();
+    bbr3.probe_rng_seed([3; 16]);
+    let controllers: [(&str, Arc<dyn ControllerFactory + Send + Sync>); 3] = [
+        ("cubic", Arc::new(crate::congestion::CubicConfig::default())),
+        (
+            "new_reno",
+            Arc::new(crate::congestion::NewRenoConfig::default()),
+        ),
+        ("bbr3", Arc::new(bbr3)),
+    ];
+    for (name, controller) in controllers {
+        assert!(
+            handshake_at_initial_mtu(MTU, controller),
+            "{name}: handshake at a {MTU}-byte initial MTU did not finish"
+        );
+    }
+}

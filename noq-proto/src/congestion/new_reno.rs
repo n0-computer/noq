@@ -24,9 +24,12 @@ pub struct NewReno {
 
 impl NewReno {
     /// Construct a state using the given `config` and current time `now`
+    ///
+    /// The window starts at the configured initial window, or at the minimum window of two
+    /// datagrams of `current_mtu` if that is larger, so the first datagram always fits.
     pub fn new(config: Arc<NewRenoConfig>, now: Instant, current_mtu: u16) -> Self {
         Self {
-            window: config.initial_window,
+            window: config.initial_window.max(2 * u64::from(current_mtu)),
             ssthresh: u64::MAX,
             recovery_start_time: now,
             current_mtu: current_mtu as u64,
@@ -163,7 +166,7 @@ impl Controller for NewReno {
     }
 
     fn initial_window(&self) -> u64 {
-        self.config.initial_window
+        self.config.initial_window.max(self.minimum_window())
     }
 
     fn into_any(self: Box<Self>) -> Box<dyn Any> {
@@ -182,6 +185,9 @@ impl NewRenoConfig {
     /// Default limit on the amount of outstanding data in bytes.
     ///
     /// Recommended value: `min(10 * max_datagram_size, max(2 * max_datagram_size, 14720))`
+    ///
+    /// The controller starts at no less than two datagrams of the current MTU, so a large initial MTU cannot leave the
+    /// first datagram blocked.
     pub fn initial_window(&mut self, value: u64) -> &mut Self {
         self.initial_window = value;
         self
