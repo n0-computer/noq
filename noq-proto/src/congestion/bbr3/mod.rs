@@ -938,7 +938,7 @@ impl Bbr3 {
         );
     }
 
-    /// equivalent to BBRUpdateACKAggregation <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.5.9>
+    /// equivalent to BBRUpdateACKAggregation <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.5.9>
     fn update_ack_aggregation(&mut self, newly_acked: u64, now: Instant) {
         let interval;
         if let Some(extra_acked_interval_start) = self.extra_acked_interval_start {
@@ -958,12 +958,17 @@ impl Bbr3 {
             .extra_acked_delivered
             .saturating_sub(expected_delivered);
         extra = Ord::min(extra, self.cwnd);
-        if self.full_bw_reached {
-            self.extra_acked_filter.update_max(self.round_count, extra);
-            self.extra_acked = self.extra_acked_filter.get_max();
+        // In Startup, just remember 1 round: the same filter with a one-round window, as in
+        // draft-07 and Linux v3, so a smaller excess later in the round does not replace the
+        // round's largest.
+        let filter_len = if self.full_bw_reached {
+            EXTRA_ACKED_FILTER_LEN as u64
         } else {
-            self.extra_acked = extra; // In startup, just remember 1 round
-        }
+            1
+        };
+        self.extra_acked_filter.set_window(filter_len);
+        self.extra_acked_filter.update_max(self.round_count, extra);
+        self.extra_acked = self.extra_acked_filter.get_max();
     }
 
     /// equivalent to BBRCheckFullBWReached <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-5.3.1.2-6>
@@ -7646,6 +7651,36 @@ mod test {
             "cwnd grew to {}",
             sim.bbr.cwnd
         );
+    }
+
+    /// In Startup the ACK-aggregation estimate is the largest excess of the last round, not of
+    /// the latest ACK: a quiet ACK later in the round must not shrink the cwnd headroom an
+    /// aggregated one measured.
+    /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.5.9>
+    #[test]
+    fn startup_keeps_the_rounds_largest_aggregation() {
+        let mut sim = scripted();
+        // 1.2 MB/s over a 10ms RTT.
+        sim.round(0, 10, 10 * MS);
+        let first = sim.pn;
+        sim.send(10 * MS, 40);
+        // Twice the expected volume arrives in one ACK, which starts the next round.
+        sim.ack(20 * MS, first..first + 20, false);
+        let round = sim.bbr.round_count;
+        let aggregated = sim.bbr.extra_acked;
+        assert!(aggregated > 10 * 1200, "extra_acked {aggregated}");
+        // A late ACK of the same flight resets the aggregation epoch in the same round.
+        sim.ack(50 * MS, [first + 20], false);
+        assert_eq!(sim.bbr.round_count, round);
+        assert_eq!(sim.bbr.state, BbrState::Startup);
+        assert_eq!(sim.bbr.extra_acked, aggregated);
+
+        // The estimate covers one round, so two rounds of ACKs at the expected rate age it out.
+        for i in 0..2 {
+            sim.round(60 * MS + i * 20 * MS, 10, 10 * MS);
+        }
+        assert!(sim.bbr.round_count >= round + 2);
+        assert!(sim.bbr.extra_acked < aggregated);
     }
 
     /// An application sending one packet per burst, idle in between. The transport polls after

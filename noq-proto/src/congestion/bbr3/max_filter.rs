@@ -22,6 +22,11 @@ impl MaxFilter {
         self.samples[0].value.unwrap_or(0)
     }
 
+    /// Sets how many rounds a sample stays in the window, from the next update on.
+    pub(super) fn set_window(&mut self, window: u64) {
+        self.window = window;
+    }
+
     /// Update the tracked maximum with a new `measurement` at `current_round`.
     ///
     /// `current_round` represents a sequence number counting upwards from 0 monotonically
