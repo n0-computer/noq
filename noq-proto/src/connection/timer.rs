@@ -1,11 +1,14 @@
 #[cfg(test)]
 use alloc::vec::Vec;
 
-use identity_hash::{IdentityHashable, IntMap};
+use identity_hash::IdentityHashable;
 
 use crate::{
-    Instant,
-    connection::qlog::{QlogSink, QlogSinkWithTime},
+    Instant, IntMap,
+    connection::{
+        paths::PathIdKey,
+        qlog::{QlogSink, QlogSinkWithTime},
+    },
 };
 
 use super::PathId;
@@ -84,18 +87,6 @@ impl PathTimer {
         Self::MaxAckDelay,
         Self::PathDrained,
     ];
-}
-
-/// Newtype around [`PathId`] that implements [`IdentityHashable`].
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Default)]
-struct PathIdKey(PathId);
-
-impl IdentityHashable for PathIdKey {}
-
-impl core::hash::Hash for PathIdKey {
-    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
-        state.write_u32(self.0.0);
-    }
 }
 
 /// Keeps track of the nearest timeout for each `Timer`

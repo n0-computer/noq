@@ -1,9 +1,8 @@
 //! Connection statistics
 
-use rustc_hash::FxHashMap;
-
 use crate::Duration;
 use crate::FrameType;
+use crate::FxHashMap;
 
 use super::PathId;
 

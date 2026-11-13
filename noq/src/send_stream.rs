@@ -7,7 +7,7 @@ use std::{
 
 use bytes::Bytes;
 use pin_project_lite::pin_project;
-use proto::{ClosedStream, ConnectionError, FinishError, StreamId};
+use proto::{ClosedStream, ConnectionError, FinishError, StreamAffinity, StreamId};
 use thiserror::Error;
 use tokio::sync::futures::OwnedNotified;
 
@@ -32,7 +32,7 @@ use crate::{
 ///
 /// [`reset()`]: SendStream::reset
 /// [`finish()`]: SendStream::finish
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SendStream {
     conn: ConnectionRef,
     stream: StreamId,
@@ -237,6 +237,43 @@ impl SendStream {
     pub fn priority(&self) -> Result<i32, ClosedStream> {
         let mut conn = self.conn.lock_without_waking("SendStream::priority");
         conn.inner.send_stream(self.stream).priority()
+    }
+
+    /// Sets a new affinity for this stream's application data.
+    ///
+    /// Stream affinity allows setting the exact network path over which the STREAM frames
+    /// for a particular stream are sent. Setting the affinity to a path that can not carry
+    /// any data will mean the stream's data can not be transmitted. This is equivalent to
+    /// setting the affinity to [`StreamAffinity::Block`]. It is up to the application to
+    /// monitor for path changes and update a stream's affinity if a
+    /// [`StreamAffinity::Sticky`] path closes.
+    ///
+    /// Note that blocking stream frames from this API is not ideal: it uses up data from
+    /// the connection-wide [send window] before further writes to the stream are
+    /// blocked. Therefore it should be used as a last resort only, it is better not to
+    /// create a stream if no suitable network path exists. If the desired network path
+    /// disappears before the entire stream is delivered consider using
+    /// [`SendStream::reset`] as an alternative to blocking the stream data.
+    ///
+    /// Packet scheduling affects all QUIC frames, not only application data. It functions
+    /// entirely independent of stream affinity. It may decide to stop scheduling packets on
+    /// a path depending on many circumstances, e.g. because of increased packet loss on a
+    /// path, while the path might still be able to carry packets. When packet scheduling
+    /// stops using a path **no** packets are sent on that path, regardless of what stream
+    /// affinity indicates.
+    ///
+    /// Setting stream affinity to be sticky to a path on which no packets are sent means no
+    /// application data will be sent for the stream. The same caveats as above apply in
+    /// this case. If a path becomes incapable of transmitting packets entirely it will
+    /// usually be closed after a short while.
+    ///
+    /// [send window]: crate::TransportConfig::send_window
+    pub fn set_affinity(&self, affinity: StreamAffinity) -> Result<(), ClosedStream> {
+        self.conn
+            .lock_and_wake("SendStream::set_affinity")
+            .inner
+            .send_stream(self.stream)
+            .set_affinity(affinity)
     }
 
     /// Completes when the peer stops the stream or reads the stream to completion

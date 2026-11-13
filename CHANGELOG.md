@@ -2,7 +2,129 @@
 
 All notable changes to noq will be documented in this file.
 
-## [1.3.0](https://github.com/n0-computer/noq/compare/noq-v1.2.0..1.3.0) - 2026-09-09
+## [1.4.0](https://github.com/n0-computer/noq/compare/noq-v1.3.0..1.4.0) - 2026-10-20
+
+### ⛰️  Features
+
+- *(proto)* Add `{Connection,Path}Stats::sent_{packets,bytes}` ([#740](https://github.com/n0-computer/noq/issues/740)) - ([89ed00c](https://github.com/n0-computer/noq/commit/89ed00c31297c2127d1697a7b63983d60fd02ecb))
+- *(proto)* Expose BBR bandwidth estimate in path stats ([#823](https://github.com/n0-computer/noq/issues/823)) - ([dcb8949](https://github.com/n0-computer/noq/commit/dcb8949c3bd6fbb39469e8f415b07e0b179fe2e4))
+- *(udp)* Deprecate `UdpSocketState::send` ([#823](https://github.com/n0-computer/noq/issues/823)) - ([31032ff](https://github.com/n0-computer/noq/commit/31032ff12dc56b52cfff787e80adce3c0c0d6786))
+
+### 🐛 Bug Fixes
+
+- *(noq)* Wake endpoint waiters when the driver is dropped ([#824](https://github.com/n0-computer/noq/issues/824)) - ([cf1bc66](https://github.com/n0-computer/noq/commit/cf1bc6686cf1d5c4fde0b7ae8d7b7c95705a86fc))
+- *(noq)* Surface non-`WouldBlock` recv errors from `poll_recv` ([#823](https://github.com/n0-computer/noq/issues/823)) - ([099284e](https://github.com/n0-computer/noq/commit/099284e75b4d5dcb4910526bb6f1ce05976ce7c8))
+- *(noq)* Ignore EMSGSIZE error triggered by ICMP Frag Needed (Path To Big) ([#823](https://github.com/n0-computer/noq/issues/823)) - ([c3cac8a](https://github.com/n0-computer/noq/commit/c3cac8afa73f86994bf7372929fe12d48fe2b07e))
+- *(noq)* Reuse one receive buffer per batch instead of allocating per datagram ([#823](https://github.com/n0-computer/noq/issues/823)) - ([941eef9](https://github.com/n0-computer/noq/commit/941eef952f81d300fecbbf8c574c3b146a79d364))
+- *(proto)* Report time threshold losses correctly in qlog ([#827](https://github.com/n0-computer/noq/issues/827)) - ([475b142](https://github.com/n0-computer/noq/commit/475b14225955c3376a83fbdf2a15aaca5ab2daa2))
+- *(proto)* Match unspecified local IP when sending connection close ([#822](https://github.com/n0-computer/noq/issues/822)) - ([34ec969](https://github.com/n0-computer/noq/commit/34ec96917cb21300d929145520aeb40870ddc814))
+- *(proto)* Do not coalesce into a too small datagram tail ([#792](https://github.com/n0-computer/noq/issues/792)) - ([f916a5c](https://github.com/n0-computer/noq/commit/f916a5c57df07516da1400079acec879072d223a))
+- *(proto)* Yield error on too many gaps in assembler ([#823](https://github.com/n0-computer/noq/issues/823)) - ([61302fd](https://github.com/n0-computer/noq/commit/61302fd3f06ed8987984cbf62e66c9a34ac7c474))
+- *(proto)* Congestion: saturate CUBIC window increment to avoid overflow ([#823](https://github.com/n0-computer/noq/issues/823)) - ([d7f3a88](https://github.com/n0-computer/noq/commit/d7f3a883bdd8a96affb9dea50f90778f71ca62fa))
+- *(proto)* Allow the cwnd to be filled exactly ([#823](https://github.com/n0-computer/noq/issues/823)) - ([9612584](https://github.com/n0-computer/noq/commit/9612584d78ecc448f71a17c829442163c9b8d132))
+- *(proto)* Pass CID length/lifetime to Connection::new directly ([#823](https://github.com/n0-computer/noq/issues/823)) - ([9fc7f70](https://github.com/n0-computer/noq/commit/9fc7f7086d7fbce668c792136e086f0752f04a90))
+- *(proto)* Bound assembler chunk count regardless of over-allocation ([#823](https://github.com/n0-computer/noq/issues/823)) - ([b08b5e1](https://github.com/n0-computer/noq/commit/b08b5e1ad4952f2a1547104eaee15695321be71f))
+- *(proto)* Check limits when processing already retired CIDs ([#823](https://github.com/n0-computer/noq/issues/823)) - ([78a4b2e](https://github.com/n0-computer/noq/commit/78a4b2eed587efce4ff022b3ffd12b29a1a7c6ad))
+- *(proto)* Limit total memory used to buffer incoming datagrams ([#823](https://github.com/n0-computer/noq/issues/823)) - ([2ea64e1](https://github.com/n0-computer/noq/commit/2ea64e1378b2d541c6691c9f4c5f20b7d61b082a))
+- *(proto)* Limit total memory used to buffer outgoing datagrams ([#823](https://github.com/n0-computer/noq/issues/823)) - ([09dd4ee](https://github.com/n0-computer/noq/commit/09dd4ee6c7245ca5d7c418331e002c0b4b6b9806))
+- *(proto)* Treat an equal-size delivery as evidence against a preceding loss burst ([#823](https://github.com/n0-computer/noq/issues/823)) - ([dd77a46](https://github.com/n0-computer/noq/commit/dd77a46be41f26f26b54b62323455f270c7f1add))
+- *(proto)* Apply RFC 9000 §12.4 packet-type rules to CONNECTION_CLOSE ([#823](https://github.com/n0-computer/noq/issues/823)) - ([5fecec8](https://github.com/n0-computer/noq/commit/5fecec88f4835bcf62050c37a2b7ab3e882059fe))
+- *(proto)* Allow the cwnd to be filled exactly - ([acfec5f](https://github.com/n0-computer/noq/commit/acfec5f04cd9e3923bc3b5c47b5d7667bee1e5ee))
+- *(proto)* Issue flow control credit once for streams both stopped and reset ([#842](https://github.com/n0-computer/noq/issues/842)) - ([13b93f7](https://github.com/n0-computer/noq/commit/13b93f70aec5cd0155fff794204fc256523db799))
+- *(quinn-udp)* Avoid permanent `EWOULDBLOCK` from macOS `sendmsg` kernel bug - ([3d59275](https://github.com/n0-computer/noq/commit/3d59275b295e18b9a6126f70aa4f3a5959655e2a))
+- *(quinn-udp)* Add a per-send `EMSGSIZE` safety net - ([b33c61c](https://github.com/n0-computer/noq/commit/b33c61c0d086e6c18de9615385de5420b19c44ca))
+- *(udp)* Handle EIO from sendmsg in the cmsg fallback ([#823](https://github.com/n0-computer/noq/issues/823)) - ([68e27fa](https://github.com/n0-computer/noq/commit/68e27fa85fc3c5f14b8b503880eb305a88685cbd))
+- *(udp)* Avoid permanent `EWOULDBLOCK` from macOS `sendmsg` kernel bug ([#823](https://github.com/n0-computer/noq/issues/823)) - ([9c42264](https://github.com/n0-computer/noq/commit/9c42264c58571de45f648d87dbf45fde6315c39c))
+- *(udp)* Add a per-send `EMSGSIZE` safety net ([#823](https://github.com/n0-computer/noq/issues/823)) - ([49477cf](https://github.com/n0-computer/noq/commit/49477cf094c9b80d5a8a87f62a0e36ac5d7be36b))
+- *(udp)* Read cmsg payloads unaligned ([#823](https://github.com/n0-computer/noq/issues/823)) - ([215f49e](https://github.com/n0-computer/noq/commit/215f49ecad7faf4b2f0a392652b53df6fed7201f))
+
+### 🚜 Refactor
+
+- *(proto)* Take items from core and alloc where std re-exports them ([#838](https://github.com/n0-computer/noq/issues/838)) - ([71c390c](https://github.com/n0-computer/noq/commit/71c390caa7e0655383aae58603e3714c8a7ccad8))
+- *(proto)* Factor out DatagramBuffer for queues in either direction ([#823](https://github.com/n0-computer/noq/issues/823)) - ([1c51be5](https://github.com/n0-computer/noq/commit/1c51be56cb2814e6983e37648eab08196c020304))
+- *(proto)* Name the hash map types through crate-root aliases ([#845](https://github.com/n0-computer/noq/issues/845)) - ([117e54c](https://github.com/n0-computer/noq/commit/117e54cb84c89b1bea4502957ff754da4e193aa7))
+
+### 📚 Documentation
+
+- *(noq)* Document why the receive batch is copied into a reusable buffer ([#823](https://github.com/n0-computer/noq/issues/823)) - ([246c7e4](https://github.com/n0-computer/noq/commit/246c7e4a8a65f30d2d0f846f7a690c548ab89364))
+- *(noq)* Document cancellation safety for accept_uni, accept_bi and read_datagram ([#823](https://github.com/n0-computer/noq/issues/823)) - ([56522d8](https://github.com/n0-computer/noq/commit/56522d838fcb3f25e56d88f85283d170816e9cb9))
+- *(quinn)* Document cancellation safety for accept_uni, accept_bi and read_datagram - ([8663c76](https://github.com/n0-computer/noq/commit/8663c761776fb3bf10265ab649991b9503e22491))
+- Adjust contributor guidelines and add new ai policy ([#832](https://github.com/n0-computer/noq/issues/832)) - ([1137456](https://github.com/n0-computer/noq/commit/11374569dec9d62bf1b4b54dbf35bd7a9d54669f))
+
+### ⚡ Performance
+
+- *(proto)* Replace the assembler BinaryHeap with a sorted VecDeque ([#823](https://github.com/n0-computer/noq/issues/823)) - ([4523eaa](https://github.com/n0-computer/noq/commit/4523eaa63c54278f4a381caeaf3bb43a379a67b3))
+
+### 🧪 Testing
+
+- *(proto)* Fix flaky open_path_validation_fails_server_side ([#797](https://github.com/n0-computer/noq/issues/797)) - ([1a26a8b](https://github.com/n0-computer/noq/commit/1a26a8b064d21e316fe6769f068617975bd8a27b))
+- *(proto)* Keep test connections on their initial keys ([#798](https://github.com/n0-computer/noq/issues/798)) - ([c9b1ac9](https://github.com/n0-computer/noq/commit/c9b1ac98988bee5886e4ecb754e67e50e5e728fe))
+- *(proto)* Test that CONNECTION_CLOSE is sent even when congestion blocked ([#823](https://github.com/n0-computer/noq/issues/823)) - ([a17c35e](https://github.com/n0-computer/noq/commit/a17c35e55ab5c85a7f3aedc7d2127915ee3a3e59))
+- *(proto)* `port connection_close_while_congestion_blocked` to noq's api - ([f268351](https://github.com/n0-computer/noq/commit/f2683512842299dcc6f99fa78471f9efdee6ab8d))
+
+### ⚙️ Miscellaneous Tasks
+
+- *(ci)* Bump android tool versions and bump rustls due to RUSTSEC ([#821](https://github.com/n0-computer/noq/issues/821)) - ([92361d2](https://github.com/n0-computer/noq/commit/92361d2283346c9b6a414016c080a170e4d4049b))
+- *(ci)* Use safer self-repo syntax ([#830](https://github.com/n0-computer/noq/issues/830)) - ([230cfde](https://github.com/n0-computer/noq/commit/230cfde328f4faa26eb3c3dc815cefe19fe8e7b9))
+- *(ci)* Set pinact cooldown to only 6 days ([#829](https://github.com/n0-computer/noq/issues/829)) - ([5af2505](https://github.com/n0-computer/noq/commit/5af2505d962b57a2f36ae1b7f0ba6e6a36a49276))
+- *(deps)* Bump bytes from 1.11.1 to 1.12.0 - ([19380de](https://github.com/n0-computer/noq/commit/19380de0d3a31c08bb82eb58210bb12dc9e5bd2a))
+- *(deps)* Bump actions/checkout from 6 to 7 - ([9fcc80e](https://github.com/n0-computer/noq/commit/9fcc80ebd95f5a640303ffb9229340a4eb36136f))
+- *(deps)* Bump anyhow from 1.0.102 to 1.0.103 - ([bed3c76](https://github.com/n0-computer/noq/commit/bed3c76f25787c72fd2539255b3d5e762bd86553))
+- *(deps)* Bump rustls from 0.23.38 to 0.23.41 - ([953b466](https://github.com/n0-computer/noq/commit/953b466747e667a9dfda0596b8051a0644f8333d))
+- *(deps)* Bump rustc-hash from 2.1.2 to 2.1.3 - ([c43591c](https://github.com/n0-computer/noq/commit/c43591cd1307dbd995a6765c8d84320cf0936ebe))
+- *(deps)* Bump aws-lc-rs from 1.16.3 to 1.17.1 - ([75339b2](https://github.com/n0-computer/noq/commit/75339b2c16b7b800980e3fac0673e2035bbfe654))
+- *(deps)* Bump rustls-pki-types from 1.14.0 to 1.15.0 - ([74d329c](https://github.com/n0-computer/noq/commit/74d329ce19b4090d724abf152ef23eaab64e9526))
+- *(deps)* Bump rand from 0.10.1 to 0.10.2 - ([974df91](https://github.com/n0-computer/noq/commit/974df919e1456d1ab3f51dd5a9a5bbd7d39a202c))
+- *(deps)* Bump tinyvec from 1.11.0 to 1.12.0 - ([e070976](https://github.com/n0-computer/noq/commit/e0709760798ee3fc5179a1180b5db49be4f4ec46))
+- *(deps)* Bump bytes from 1.12.0 to 1.12.1 - ([f8b8795](https://github.com/n0-computer/noq/commit/f8b87955347296dd74413ea8da56d49f99cbd677))
+- *(deps)* Bump serde_with from 3.20.0 to 3.21.0 - ([d7f2002](https://github.com/n0-computer/noq/commit/d7f2002b20438d07374ab43119e1eee578ad193b))
+- *(deps)* Bump hdrhistogram from 7.5.4 to 7.6.0 - ([949ea47](https://github.com/n0-computer/noq/commit/949ea473cbf95f56ea51c599fc9143628a5118d8))
+- *(deps)* Bump thiserror from 2.0.18 to 2.0.19 - ([8970c06](https://github.com/n0-computer/noq/commit/8970c0659c7ddccbf163991e35ed51b4b545b14c))
+- *(deps)* Bump actions/setup-node from 6 to 7 - ([445eb15](https://github.com/n0-computer/noq/commit/445eb15cd2a8872744f696c0ef5fe1c7980b865c))
+- *(deps)* Bump futures-io from 0.3.32 to 0.3.33 - ([068e710](https://github.com/n0-computer/noq/commit/068e710ecbc567f3ace52fb7c242eb3d41621d63))
+- *(deps)* Bump cfg_aliases from 0.2.1 to 0.2.2 - ([b4831b1](https://github.com/n0-computer/noq/commit/b4831b10da61856086164d5f64be9905bc523ea7))
+- *(deps)* Bump rustls from 0.23.41 to 0.23.42 - ([fec2f89](https://github.com/n0-computer/noq/commit/fec2f8960df489767bfccef5b08b72013f1b992a))
+- *(deps)* Bump rustls-pki-types from 1.15.0 to 1.15.1 - ([56b4d79](https://github.com/n0-computer/noq/commit/56b4d79591c8234d0c34804960a7ea6896b9f2bf))
+- *(deps)* Bump tokio from 1.52.0 to 1.53.1 - ([3873a9e](https://github.com/n0-computer/noq/commit/3873a9e208128a36c5d9e08de81c7ae30560479b))
+- *(deps)* Bump serde_json from 1.0.150 to 1.0.151 - ([59c0a3c](https://github.com/n0-computer/noq/commit/59c0a3c1f006d3561e86c509a8445d081a140df8))
+- *(deps)* Bump aws-lc-rs from 1.17.1 to 1.17.3 - ([6202d9b](https://github.com/n0-computer/noq/commit/6202d9b9034111d8704de77c15f4fa5ee4a72e05))
+- *(deps)* Bump libc from 0.2.185 to 0.2.189 - ([81040ed](https://github.com/n0-computer/noq/commit/81040ed2108664edead7f928e576c9067305c135))
+- *(noq)* Replace `tracing_futures` with `tracing::instrument` ([#823](https://github.com/n0-computer/noq/issues/823)) - ([d37a591](https://github.com/n0-computer/noq/commit/d37a59171c0fb4d3617d67221f72bd2c0ad57276))
+- *(proto)* Fix typo ([#823](https://github.com/n0-computer/noq/issues/823)) - ([56a8508](https://github.com/n0-computer/noq/commit/56a85081c3f8b0d45c764e67f70a0c1cf570debf))
+- *(proto)* Route locally-created CIDs via RouteDatagramTo ([#823](https://github.com/n0-computer/noq/issues/823)) - ([fdd4087](https://github.com/n0-computer/noq/commit/fdd408710fe4d2eadd6d9962ff1edfd2cf20118d))
+- *(proto)* Fix typo - ([ba29458](https://github.com/n0-computer/noq/commit/ba294586bd91bba94a9085d83a599e486b9d0656))
+- *(udp)* Deprecate `UdpSocketState::send` - ([148d760](https://github.com/n0-computer/noq/commit/148d760d8845dc6315d554a39a1f1f83a4134bfe))
+- Pass CID length/lifetime to Connection::new directly - ([c9008d0](https://github.com/n0-computer/noq/commit/c9008d05a9ca349d90d695fadaf23665d6be9134))
+- Route locally-created CIDs via RouteDatagramTo - ([97a5386](https://github.com/n0-computer/noq/commit/97a5386e06b8574fb013b462ae1a6f2b0c4dba3e))
+- Treat an equal-size delivery as evidence against a preceding loss burst ([#2792](https://github.com/n0-computer/noq/issues/2792)) - ([b0afb6e](https://github.com/n0-computer/noq/commit/b0afb6e6fb2261ee1c6a1f69f396627e80ff4fb7))
+- Apply RFC 9000 §12.4 packet-type rules to CONNECTION_CLOSE ([#2804](https://github.com/n0-computer/noq/issues/2804)) - ([d5d5b97](https://github.com/n0-computer/noq/commit/d5d5b978c2b82e95beba3ed652c80e903e716a90))
+- Replace the assembler BinaryHeap with a sorted VecDeque ([#2803](https://github.com/n0-computer/noq/issues/2803)) - ([ba18f6c](https://github.com/n0-computer/noq/commit/ba18f6c12ad96a66c92d38471eb3370b7bd68337))
+
+### Build
+
+- *(deps)* Bump h2 from 0.4.13 to 0.4.17 ([#2797](https://github.com/n0-computer/noq/issues/2797)) - ([d6f30fa](https://github.com/n0-computer/noq/commit/d6f30fa11f6f80c938e9d3c0586d9527fedd52dc))
+
+### Congestion
+
+- Saturate CUBIC window increment to avoid overflow - ([a1931ab](https://github.com/n0-computer/noq/commit/a1931ab8c37e09d915ad1dcb846624ccd72e04a9))
+
+### Proto
+
+- Yield error on too many gaps in assembler - ([fed0321](https://github.com/n0-computer/noq/commit/fed0321a9a672819662caab37f5662f1ad91308e))
+- Bound assembler chunk count regardless of over-allocation - ([4b88c94](https://github.com/n0-computer/noq/commit/4b88c9403a3bfebd7910dd1f6173882d5bbbebce))
+- Extract method for checking CID retirements - ([d0f66d2](https://github.com/n0-computer/noq/commit/d0f66d22941a89f3d82a61a137bc9da286fc3f05))
+- Check limits when processing already retired CIDs - ([77a74a9](https://github.com/n0-computer/noq/commit/77a74a92901dd2ecae60eeab35b8f76a8e01c030))
+- Expose BBR bandwidth estimate in path stats ([#2802](https://github.com/n0-computer/noq/issues/2802)) - ([766cca4](https://github.com/n0-computer/noq/commit/766cca4822fbd009481d339767d8d85769c2a5f3))
+
+### Quinn-proto
+
+- Extract register_connection from add_connection - ([c8b02d1](https://github.com/n0-computer/noq/commit/c8b02d1a9dda7aa93222c476079a7fd06160667b))
+
+### Quinn-udp
+
+- Handle EIO from sendmsg in the cmsg fallback - ([8983761](https://github.com/n0-computer/noq/commit/89837617fe4f207dffd1179809c3ef6e7ee4293e))
+
+## [noq-v1.3.0](https://github.com/n0-computer/noq/compare/noq-v1.2.0..noq-v1.3.0) - 2026-09-09
 
 ### ⛰️  Features
 
@@ -11,6 +133,7 @@ All notable changes to noq will be documented in this file.
 ### ⚙️ Miscellaneous Tasks
 
 - Update PR template to mention API changes ([#796](https://github.com/n0-computer/noq/issues/796)) - ([24312a7](https://github.com/n0-computer/noq/commit/24312a79839fd3252a7cc3d2a0a3f6c613a74083))
+- Release - ([c1f4115](https://github.com/n0-computer/noq/commit/c1f411562e6078852749b8bcf1190523096a107f))
 
 ## [noq-v1.2.0](https://github.com/n0-computer/noq/compare/noq-v1.1.0..noq-v1.2.0) - 2026-08-24
 

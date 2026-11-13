@@ -12,7 +12,6 @@ use core::{
     str,
 };
 use std::{
-    collections::{HashMap, HashSet},
     net::ToSocketAddrs,
     sync::{LazyLock, Mutex},
 };
@@ -27,12 +26,12 @@ use rustls::{
 };
 use tracing::{debug, info, info_span, trace};
 
-use crate::crypto::rustls::{QuicClientConfig, QuicServerConfig, configured_provider};
 use crate::connection::timer::Timer;
+use crate::crypto::rustls::{QuicClientConfig, QuicServerConfig, configured_provider};
 use crate::{
     ClientConfig, ClosePathError, ClosedPath, Connection, ConnectionError, ConnectionEvent,
     ConnectionHandle, ConnectionStats, DatagramEvent, Datagrams, Dir, Duration, EcnCodepoint,
-    Endpoint, EndpointConfig, EndpointEvent, Event, FourTuple, Incoming, Instant,
+    Endpoint, EndpointConfig, EndpointEvent, Event, FourTuple, HashMap, HashSet, Incoming, Instant,
     MultipathNotNegotiated, NetworkChangeHint, PathAbandonReason, PathError, PathId, PathStats,
     PathStatus, RecvStream, SendStream, ServerConfig, SetPathStatusError, Side, StreamId, Streams,
     SystemTime, TokenLog, TokenReuseError, Transmit, TransportConfig, VarInt,
