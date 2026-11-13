@@ -588,7 +588,7 @@ mod tests {
 mod proptests {
     use super::*;
 
-    use crate::tests::subscribe;
+    use crate::test_util::subscribe;
     use proptest::prelude::*;
     use test_strategy::{Arbitrary, proptest};
     use tracing::trace;

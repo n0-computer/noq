@@ -7,12 +7,10 @@ use assert_matches::assert_matches;
 
 use crate::{
     ConnectionError, Duration, Event, SystemTime, TimeSource, TokenStore, TransportErrorCode,
-    VarInt,
+    VarInt, test_util::subscribe,
 };
 
-use super::util::{
-    IncomingConnectionBehavior, Pair, client_config, server_config, subscribe, validate_incoming,
-};
+use super::util::{IncomingConnectionBehavior, Pair, client_config, server_config, validate_incoming};
 
 use bytes::Bytes;
 #[cfg(all(target_family = "wasm", target_os = "unknown"))]

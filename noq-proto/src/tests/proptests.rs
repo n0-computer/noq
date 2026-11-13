@@ -16,8 +16,9 @@ use tracing::error;
 use crate::{
     ClientConfig, Connection, ConnectionClose, ConnectionError, Event, PathStatus, Side,
     TransportConfig, TransportErrorCode,
+    test_util::subscribe,
     tests::random_interaction::{TestOp, run_random_interaction},
-    tests::util::{ManyToManyRouting, Pair, Routing, client_config, server_config, subscribe},
+    tests::util::{ManyToManyRouting, Pair, Routing, client_config, server_config},
 };
 
 // These TransportConfig constants are designed to match iroh for now.

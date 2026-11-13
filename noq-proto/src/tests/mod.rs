@@ -40,12 +40,12 @@ use crate::{
     frame::{self, Frame, FrameStruct},
     packet::{FixedLengthConnectionIdParser, Header, InitialHeader, PacketNumber, PartialDecode},
     shared::{ConnectionEventInner, DatagramConnectionEvent},
+    test_util::subscribe,
     tests::util::{BwLimitConfig, BwLimitedRouting},
     transport_parameters::TransportParameters,
 };
 
 mod util;
-pub(crate) use util::subscribe;
 use util::{
     CERTIFIED_KEY, ConnPair, DEFAULT_MTU, IncomingConnectionBehavior, Pair, client_config,
     client_config_with_certs, client_config_with_deterministic_pns, client_crypto_with_alpn,
