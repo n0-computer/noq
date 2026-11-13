@@ -149,7 +149,11 @@ pub(crate) mod hash_map {
     pub(crate) type OccupiedEntry<'a, K, V> = std::collections::hash_map::OccupiedEntry<'a, K, V>;
 }
 
-// Deal with float math
+/// Float math that needs `std`
+///
+/// Some `f64` methods are in `std` but not in `core`. A build without `std` must replace
+/// them with a crate such as `libm`. Only this module calls them, to keep the replacement in
+/// one place.
 pub(crate) mod math {
     #[expect(clippy::disallowed_methods)]
     pub(crate) fn round(x: f64) -> f64 {
