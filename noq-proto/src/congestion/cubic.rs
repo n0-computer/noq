@@ -3,7 +3,7 @@ use core::{any::Any, cmp};
 
 use super::{BASE_DATAGRAM_SIZE, Controller, ControllerFactory};
 use crate::connection::RttEstimator;
-use crate::{Duration, Instant};
+use crate::{Duration, Instant, math};
 
 /// CUBIC Constants.
 ///
@@ -50,14 +50,14 @@ impl State {
     // K = cbrt(w_max * (1 - beta_cubic) / C) (Eq. 2)
     fn cubic_k(&self, max_datagram_size: u64) -> f64 {
         let w_max = self.w_max / max_datagram_size as f64;
-        (w_max * (1.0 - BETA_CUBIC) / C).cbrt()
+        math::cbrt(w_max * (1.0 - BETA_CUBIC) / C)
     }
 
     // W_cubic(t) = C * (t - K)^3 + w_max (Eq. 1)
     fn w_cubic(&self, t: Duration, max_datagram_size: u64) -> f64 {
         let w_max = self.w_max / max_datagram_size as f64;
 
-        (C * (t.as_secs_f64() - self.k).powi(3) + w_max) * max_datagram_size as f64
+        (C * math::powi(t.as_secs_f64() - self.k, 3) + w_max) * max_datagram_size as f64
     }
 
     // W_est(t) = w_max * beta_cubic + 3 * (1 - beta_cubic) / (1 + beta_cubic) *
