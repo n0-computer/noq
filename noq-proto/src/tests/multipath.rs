@@ -412,6 +412,50 @@ fn open_path_key_update() -> TestResult {
     Ok(())
 }
 
+/// Packet numbers are per path, so an old-key packet still in flight on one path can carry a
+/// higher number than the first new-key packet on another. It must be decrypted with the previous
+/// keys, not taken for a further key update and dropped.
+#[test]
+fn key_update_keeps_late_old_key_packets_on_another_path() -> TestResult {
+    let _guard = subscribe();
+    let mut pair = ConnPair::builder().enable_multipath().connect();
+
+    // Number path 0's packets well past where the new path starts.
+    for _ in 0..20 {
+        pair.ping_path(Client, PathId::ZERO)?;
+        pair.drive();
+    }
+    let server_addr = pair.routes.public_server_addr();
+    let path_id = pair.open_path(
+        Client,
+        FourTuple::from_remote(server_addr),
+        PathStatus::Backup,
+    )?;
+    pair.drive();
+    assert_matches!(
+        pair.poll(Client),
+        Some(Event::Path(PathEvent::Established { id })) if id == path_id
+    );
+
+    // An old-key packet on path 0, held back behind a new-key packet on the new path.
+    pair.ping_path(Client, PathId::ZERO)?;
+    let now = pair.time;
+    pair.client.drive(now);
+    pair.client.delay_outbound();
+    pair.force_key_update(Client);
+    pair.ping_path(Client, path_id)?;
+    pair.client.drive(now);
+    pair.client.finish_delay();
+    pair.drive();
+
+    assert_eq!(
+        pair.path_stats(Client, PathId::ZERO).unwrap().lost_packets,
+        0
+    );
+    assert_eq!(pair.path_stats(Client, path_id).unwrap().lost_packets, 0);
+    Ok(())
+}
+
 /// Client starts opening a path but the server fails to validate the path
 ///
 /// The client should receive an event closing the path.
