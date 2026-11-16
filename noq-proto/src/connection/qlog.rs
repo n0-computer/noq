@@ -1,6 +1,6 @@
 //! Implements support for emitting qlog events.
 //!
-//! This uses the [`qlog`] crate to emit qlog events. The n0-qlog crate, and thus this
+//! This uses the [n0-qlog] crate to emit qlog events. The n0-qlog crate, and thus this
 //! implementation, is currently based on [draft-ietf-quic-qlog-main-schema-13] an
 //! [draft-ietf-quic-qlog-quic-events-12].
 //!
@@ -129,7 +129,7 @@ impl QlogStream {
     }
 }
 
-/// A [`QlogStream`] that may be either dynamically disabled or compiled out entirely
+/// A qlog output stream that may be either dynamically disabled or compiled out entirely.
 #[derive(Clone, Default)]
 pub(crate) struct QlogSink {
     #[cfg(feature = "qlog")]
