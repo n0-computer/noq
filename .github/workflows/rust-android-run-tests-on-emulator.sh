@@ -9,7 +9,7 @@ any_failures=0
 
 # Already built by the "Build unit tests for Android" step, this only collects the paths.
 tests=$(cargo ndk -t "$TARGET" test --locked --no-run --message-format=json \
-    | jq -r 'select(.executable != null) | .executable')
+    | jq -r 'select(.executable != null and .profile.test) | .executable')
 if [[ -z "$tests" ]]; then
     echo "no test executables found" >&2
     exit 1
