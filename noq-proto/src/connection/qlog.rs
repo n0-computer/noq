@@ -199,6 +199,7 @@ impl QlogSink {
 
     pub(super) fn emit_packet_lost(
         &self,
+        path_id: PathId,
         pn: u64,
         info: &SentPacket,
         loss_delay: Duration,
@@ -216,6 +217,7 @@ impl QlogSink {
                     packet_number: Some(pn),
                     packet_type: packet_type(space, false),
                     length: Some(info.size),
+                    path_id: Some(path_id.as_u32() as u64),
                     ..Default::default()
                 }),
                 frames: None,
@@ -228,7 +230,8 @@ impl QlogSink {
                 is_mtu_probe_packet: None,
             };
 
-            stream.emit_event(EventData::QuicPacketLost(event), now);
+            let tuple_id = Some(fmt_tuple_id(path_id.as_u32() as u64));
+            stream.emit_event_with_tuple_id(EventData::QuicPacketLost(event), now, tuple_id);
         }
     }
 
