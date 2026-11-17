@@ -206,21 +206,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "async-global-executor"
-version = "2.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "05b1b633a2115cd122d73b955eadd9916c18c8f510ec9cd1686404c60ad1c29c"
-dependencies = [
- "async-channel",
- "async-executor",
- "async-io",
- "async-lock",
- "blocking",
- "futures-lite",
- "once_cell",
-]
-
-[[package]]
 name = "async-io"
 version = "2.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1180,12 +1165,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gcc"
-version = "0.3.55"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8f5f3913fa0bfe7ee1fd8248b6b9f42a5af4b9d65ec2dd2c3c26132b950ecfc2"
-
-[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1824,7 +1803,6 @@ dependencies = [
  "anyhow",
  "async-executor",
  "async-fs",
- "async-global-executor",
  "async-io",
  "aws-lc-fips-sys",
  "aws-lc-sys",
@@ -1836,8 +1814,6 @@ dependencies = [
  "derive_more",
  "directories-next",
  "futures-io",
- "gcc",
- "http",
  "lazy_static",
  "noq-proto",
  "noq-udp",
