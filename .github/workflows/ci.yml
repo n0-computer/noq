@@ -195,8 +195,13 @@ jobs:
       # If the Wasm file contains any 'import "env"' declarations, then
       # some non-Wasm-compatible code made it into the final code.
       - name: Ensure no 'import "env"' in noq-proto Wasm
+        shell: bash
         run: |
-          ! wasm-tools print --skeleton target/wasm32-unknown-unknown/debug/deps/noq_proto-*.wasm | grep 'import "env"'
+          wasm=$(cargo test --locked -p noq-proto --target wasm32-unknown-unknown --no-run --message-format=json \
+            | jq -r 'select(.executable != null and .target.kind == ["lib"]) | .executable')
+          test -f "$wasm"
+          skeleton=$(wasm-tools print --skeleton "$wasm")
+          ! grep 'import "env"' <<< "$skeleton"
       - name: Ensure no 'import "env"' in noq Wasm
         run: |
           ! wasm-tools print --skeleton target/wasm32-unknown-unknown/debug/noq.wasm | grep 'import "env"'
@@ -323,6 +328,7 @@ jobs:
 
       - name: Set up Android Emulator and run tests
         env:
+          RUSTC_WRAPPER: "sccache"
           TARGET: ${{ matrix.target }}
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
