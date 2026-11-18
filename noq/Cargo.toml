@@ -63,26 +63,31 @@ __all_without_fips = ["lock_tracking", "aws-lc-rs", "rustls", "ring", "runtime-t
 async-io = { workspace = true, optional = true }
 bytes = { workspace = true }
 derive_more = { workspace = true }
-# Enables futures::io::{AsyncRead, AsyncWrite} support for streams
 futures-io = { workspace = true, optional = true }
-rustc-hash = { workspace = true }
 pin-project-lite = { workspace = true }
 proto = { package = "noq-proto", path = "../noq-proto", version = "1.3.0", default-features = false }
+rustc-hash = { workspace = true }
 rustls = { workspace = true, optional = true }
 smol = { workspace = true, optional = true }
 thiserror = { workspace = true }
-tracing =  { workspace = true }
 tokio = { workspace = true }
+tokio-stream = { version = "0.1.15", features = ["sync"] }
+tracing =  { workspace = true }
 udp = { package = "noq-udp", path = "../noq-udp", version = "1.3.0", default-features = false, features = ["tracing"] }
 
-# Fix minimal dependencies for indirect deps
-async-fs = { workspace = true, optional = true }
+# Fix minimal dependencies for indirect deps. cfg(false) avoid being
+# flagged by cargo::unused_dependencies but does get used for version
+# resolution.
+[target.'cfg(false)'.dependencies]
 async-executor = { workspace = true, optional = true }
+async-fs = { workspace = true, optional = true }
+async-global-executor = { workspace = true, optional = true }
 aws-lc-fips-sys = { workspace = true, optional = true }
 aws-lc-sys = { workspace = true, optional = true }
+gcc = { workspace = true, optional = true }
+http = { workspace = true, optional = true }
 lazy_static = { workspace = true, optional = true }
 sharded-slab = { workspace = true, optional = true }
-tokio-stream = { version = "0.1.15", features = ["sync"] }
 
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
 socket2 = { workspace = true }
