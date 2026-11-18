@@ -358,3 +358,90 @@ fn app_limited_flow_after_bulk_keeps_the_link_estimate() {
         "a frame took {slowest_frame:?} to leave"
     );
 }
+
+/// What the link does with the one datagram [`late_or_lost_datagram`] takes off it.
+#[derive(Clone, Copy, Debug)]
+enum Fate {
+    /// Delivers it 30 ms late, after the client has declared it lost.
+    Late,
+    /// Drops it.
+    Lost,
+}
+
+/// Runs a bulk transfer until BBR cruises after a bandwidth probe, takes one client datagram off
+/// the link and gives it `fate`. Returns the client's congestion window just before and the
+/// lowest one in the 150 ms after, with the client's path stats at the end.
+///
+/// BBR lowers its short-term bounds after a loss only while it is not probing, so the datagram
+/// is taken in ProbeBW_CRUISE, which the pacing gain of 1 after the 0.9 of DOWN marks.
+fn late_or_lost_datagram(fate: Fate) -> (u64, u64, crate::PathStats) {
+    let mut builder = bbr3_pair_builder(LINK_RATE);
+    // Random packet-number skips would move the datagram relative to the round boundaries.
+    builder
+        .client_transport_cfg
+        .deterministic_packet_numbers(true);
+    builder
+        .server_transport_cfg
+        .deterministic_packet_numbers(true);
+    let mut pair = builder.connect();
+    bulk_transfer(&mut pair, 2_000_000);
+    let stream = pair.streams(Client).open(Dir::Uni).unwrap();
+    let give_up = pair.time + Duration::from_secs(10);
+    let mut sent_at = Vec::new();
+    let (mut probed, mut drained) = (false, false);
+    let mut event = None;
+    let mut lowest = u64::MAX;
+    loop {
+        let _ = pair.send_stream(Client, stream).write(&[0; 20_000]);
+        let deadline = pair.time + Duration::from_millis(5);
+        drive_until(&mut pair, deadline, &mut sent_at);
+        drain(&mut pair, stream);
+        let (rate, window) = client_rate_and_window(&pair);
+        let gain = rate as f64 / client_bandwidth_estimate(&pair) as f64;
+        match event {
+            Some((at, _)) if pair.time >= at + Duration::from_millis(150) => break,
+            Some(_) => lowest = lowest.min(window),
+            None => {
+                assert!(pair.time < give_up, "BBR never cruised after a probe");
+                probed |= gain > 1.2;
+                drained |= probed && gain < 0.95;
+                if drained && gain > 0.95 {
+                    event = Some((pair.time, window));
+                    let (recv_time, datagram) = pair.server.inbound.pop_last().unwrap();
+                    if let Fate::Late = fate {
+                        let late = recv_time + Duration::from_millis(30);
+                        pair.server.inbound.push(late, datagram);
+                    }
+                }
+            }
+        }
+    }
+    let stats = pair.conn_mut(Client).path_stats(PathId::ZERO).unwrap();
+    let (_, before) = event.unwrap();
+    (before, lowest, stats)
+}
+
+/// A datagram the link delivers past the reordering threshold is declared lost, and its late
+/// ACK undoes BBR's response before the round ends, so the window is not cut. The same datagram
+/// dropped outright cuts the window when its round ends.
+/// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.5.11.2>
+#[test]
+fn late_datagram_undoes_the_loss_response() {
+    let _guard = subscribe();
+
+    let (before, lowest, stats) = late_or_lost_datagram(Fate::Late);
+    assert_eq!(stats.lost_packets, 1);
+    assert_eq!(stats.spurious_congestion_events, 1);
+    assert!(
+        lowest as f64 >= 0.95 * before as f64,
+        "a spurious loss cut cwnd from {before} to {lowest}"
+    );
+
+    let (before, lowest, stats) = late_or_lost_datagram(Fate::Lost);
+    assert_eq!(stats.lost_packets, 1);
+    assert_eq!(stats.spurious_congestion_events, 0);
+    assert!(
+        (lowest as f64) < 0.8 * before as f64,
+        "a real loss left cwnd at {lowest} of {before}"
+    );
+}
