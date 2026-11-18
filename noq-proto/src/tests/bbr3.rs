@@ -304,3 +304,57 @@ fn keepalives_keep_the_bandwidth_estimate() {
         "bandwidth estimate fell from {learned} to {after_idle} B/s over idle keepalives"
     );
 }
+
+/// An application-limited flow in ProbeBW keeps the estimate a bulk transfer taught it, and
+/// its frames leave without pacing delay.
+///
+/// After a bulk transfer has filled the 10 Mbit/s link, the flow sends 8 kB frames at 30 fps,
+/// about a fifth of the link. Its delivery-rate samples cover one frame after an idle gap, so
+/// they measure the application, not the path. They must not lower `max_bw`, which only probe
+/// cycles that end on a sample that is not application-limited age.
+/// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.5.5>
+#[test]
+fn app_limited_flow_after_bulk_keeps_the_link_estimate() {
+    const FRAME_BYTES: usize = 8000;
+    const INTERVAL: Duration = Duration::from_millis(33);
+    const FRAMES: u32 = 300;
+
+    let _guard = subscribe();
+    let mut pair = bbr3_pair_builder(LINK_RATE).connect();
+    bulk_transfer(&mut pair, 2_000_000);
+    let learned = client_bandwidth_estimate(&pair);
+
+    let stream = pair.streams(Client).open(Dir::Uni).unwrap();
+    let start = pair.time;
+    let mut sent_at = Vec::new();
+    let mut lowest_estimate = u64::MAX;
+    let mut slowest_frame = Duration::ZERO;
+    for frame in 0..FRAMES {
+        let written_at = start + INTERVAL * frame;
+        drive_until(&mut pair, written_at, &mut sent_at);
+        sent_at.clear();
+        let written = pair
+            .send_stream(Client, stream)
+            .write(&[0; FRAME_BYTES])
+            .unwrap();
+        assert_eq!(written, FRAME_BYTES);
+        drive_until(&mut pair, written_at + INTERVAL, &mut sent_at);
+        drain(&mut pair, stream);
+        lowest_estimate = lowest_estimate.min(client_bandwidth_estimate(&pair));
+        // The frame's last datagram, ignoring ACK-only packets sent after it.
+        let mut frame_sent_at = core::mem::take(&mut sent_at);
+        frame_sent_at.sort();
+        if let Some(&last) = frame_sent_at.get(FRAME_BYTES.div_ceil(1200) - 1) {
+            slowest_frame = slowest_frame.max(last - written_at);
+        }
+    }
+
+    assert!(
+        lowest_estimate as f64 >= 0.8 * learned as f64,
+        "estimate fell from {learned} to {lowest_estimate} B/s on an application-limited flow"
+    );
+    assert!(
+        slowest_frame <= Duration::from_millis(5),
+        "a frame took {slowest_frame:?} to leave"
+    );
+}
