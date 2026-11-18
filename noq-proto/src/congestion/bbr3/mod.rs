@@ -1990,12 +1990,13 @@ impl Bbr3 {
         if core::mem::take(&mut self.ack_ends_recovery) {
             self.in_recovery = false;
             self.rto_recovery = false;
-            // Leaving loss recovery restores the cwnd it started with, bounded by the model as
-            // the end of ACK processing bounds it in the draft.
+            // Leaving loss recovery restores the cwnd it started with. In the draft that happens
+            // before the ACK's SetCwnd, which then bounds the restored window by max_inflight
+            // and the model. Here the ACK's SetCwnd has already run, so run it again without
+            // adding the ACK's bytes a second time.
             // <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.6.4.4>
             self.restore_cwnd();
-            self.bound_cwnd_for_probe_rtt();
-            self.bound_cwnd_for_model();
+            self.set_cwnd(0);
         }
     }
 
@@ -7996,6 +7997,36 @@ mod test {
             sim.bbr.cwnd >= before,
             "cwnd {} after recovery, {before} before",
             sim.bbr.cwnd
+        );
+    }
+
+    /// Leaving recovery restores the window the episode started with, but no further than
+    /// `max_inflight`. Here the ACK that ends the episode also measures a lower min RTT, which
+    /// shrinks the BDP below the restored window.
+    /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.6.4.4>
+    #[test]
+    fn recovery_exit_keeps_the_max_inflight_cap() {
+        let mut sim = probed();
+        // The probe's feedback has ended, so a loss only opens a recovery episode.
+        sim.bbr.check_probe_loss = false;
+        let first = sim.pn;
+        sim.send(10 * MS, 10);
+        sim.lose(15 * MS, first);
+        assert!(sim.bbr.in_recovery);
+        let saved = sim.bbr.prior_cwnd;
+        sim.ack(20 * MS, first + 1..sim.pn, false);
+        assert!(sim.bbr.in_recovery);
+
+        // A packet sent after the episode began is acknowledged after 2ms, which ends it.
+        sim.send(21 * MS, 1);
+        sim.ack(23 * MS, [sim.pn - 1], false);
+        assert!(!sim.bbr.in_recovery);
+        assert_eq!(sim.bbr.min_rtt, Duration::from_millis(2));
+        assert!(
+            sim.bbr.cwnd <= sim.bbr.max_inflight,
+            "cwnd {} above max_inflight {}, restored from {saved}",
+            sim.bbr.cwnd,
+            sim.bbr.max_inflight
         );
     }
 
