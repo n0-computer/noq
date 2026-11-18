@@ -327,8 +327,8 @@ impl CubicConfig {
     ///
     /// Recommended value: `min(10 * max_datagram_size, max(2 * max_datagram_size, 14720))`
     ///
-    /// The controller starts at no less than two datagrams of the current MTU, so a large initial MTU cannot leave the
-    /// first datagram blocked.
+    /// The controller starts at no less than two datagrams of the current MTU, so a large initial
+    /// MTU cannot leave the first datagram blocked.
     pub fn initial_window(&mut self, value: u64) -> &mut Self {
         self.initial_window = value;
         self
