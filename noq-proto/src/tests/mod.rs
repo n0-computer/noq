@@ -5893,6 +5893,7 @@ fn bbr_marking_versus_dropping() -> TestResult {
     let _guard = subscribe();
     let run = |marks_ce| -> TestResult<_> {
         let mut transport = TransportConfig::default();
+        transport.deterministic_packet_numbers(true);
         let mut bbr3 = Bbr3Config::default();
         bbr3.probe_rng_seed([3; 16]);
         transport.congestion_controller_factory(Arc::new(bbr3));
@@ -5930,8 +5931,9 @@ fn bbr_marking_versus_dropping() -> TestResult {
 
     let (marking_goodput, marking) = run(true)?;
     let (dropping_goodput, dropping) = run(false)?;
-    // Measured at 3.8ms mean delay for marking and 7.4ms for dropping, 0.73s and 1.60s past the
-    // marking threshold, and 12 drops when marking against 36 to 40 when dropping. The
+    // Measured at 4.0ms mean delay for marking and 7.6ms for dropping, 0.78s and 1.66s past the
+    // marking threshold, and 27 drops when marking against 57 when dropping. The drops rose
+    // from 12 and 40 when Startup began to keep its round's largest ACK aggregation. The
     // controller before classic ECN dropped 44 packets when marking, at 7.4ms and 1.6s.
     assert!(marking.marked > 0);
     assert!(marking.dropped * 2 < dropping.dropped);
