@@ -9164,6 +9164,7 @@ mod test {
             lowest_cruise_max_bw / BW
         );
     }
+
     /// A recovery episode is undone at most once, and a spurious event with no episode to undo
     /// restores nothing.
     #[test]
@@ -9185,5 +9186,84 @@ mod test {
         sim.bbr.inflight_longterm = 7000;
         sim.bbr.on_spurious_congestion_event();
         assert_eq!(sim.bbr.inflight_longterm, 7000);
+    }
+
+    /// Reno coexistence ends the wait for the next probe after as many rounds as the BDP holds
+    /// packets, when that comes before the wall-clock wait. The draft compares the BDP in bytes
+    /// with a round count, which would always wait the full 63 rounds.
+    /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.3.3.8>
+    #[test]
+    fn reno_coexistence_bounds_the_probe_wait_in_rounds() {
+        let mut sim = scripted();
+        // 10 packets per 10ms round: a 10-packet BDP.
+        sim.round(0, 10, 10 * MS);
+        sim.bbr.full_bw_reached = true;
+        sim.bbr.enter_probe_bw(sim.at(10 * MS));
+        let reno_rounds = sim.bbr.target_inflight() / 1200;
+        assert_eq!(reno_rounds, 10);
+
+        let mut now = 10 * MS;
+        while sim.bbr.state != BbrState::ProbeBw(ProbeBwSubstate::Refill) {
+            sim.round(now, 10, 10 * MS);
+            now += 10 * MS;
+            assert!(
+                now < 500 * MS,
+                "no probe after {} rounds",
+                (now - 10 * MS) / (10 * MS)
+            );
+        }
+        assert_eq!(sim.bbr.rounds_since_bw_probe, reno_rounds);
+        assert!(Duration::from_nanos(now - 10 * MS) < sim.bbr.bw_probe_wait);
+    }
+
+    /// With the QUIC ACK frequency extension, the offload budget adds what the peer may hold
+    /// back before it acknowledges: the smaller of its ack-eliciting threshold and the requested
+    /// max_ack_delay at max_bw.
+    /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.5.8>
+    #[test]
+    fn offload_budget_follows_ack_frequency() {
+        let mut sim = scripted();
+        // 1.2 MB/s.
+        sim.round(0, 10, 10 * MS);
+        assert_eq!(sim.bbr.max_bw, 1_200_000.0);
+        let quantum = sim.bbr.send_quantum;
+
+        // 25ms at 1.2 MB/s is 30,000 bytes, more than 10 packets.
+        sim.bbr
+            .on_ack_frequency_update(10, Duration::from_millis(25));
+        sim.bbr.update_offload_budget();
+        assert_eq!(sim.bbr.offload_budget, quantum + 10 * 1200);
+
+        // 5ms at 1.2 MB/s is 6000 bytes, fewer than 100 packets.
+        sim.bbr
+            .on_ack_frequency_update(100, Duration::from_millis(5));
+        sim.bbr.update_offload_budget();
+        assert_eq!(sim.bbr.offload_budget, quantum + 6000);
+    }
+
+    /// InflightAtLoss finds where inside a lost aggregate the loss rate crossed LossThresh.
+    /// <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-07.html#section-5.5.10.2>
+    #[test]
+    fn inflight_at_loss_interpolates_within_the_lost_packet() {
+        // A 12,000-byte aggregate was lost, with 120,000 bytes in flight once it was sent and
+        // nothing lost before it.
+        let sample = InflightSample {
+            tx_in_flight: 120_000,
+            lost: 12_000,
+            is_app_limited: false,
+        };
+        assert!(sample.is_too_high());
+        // 2% of the 108,000 bytes before it may be lost, so the loss rate crossed the threshold
+        // 2160 / 0.98 bytes into the aggregate.
+        assert_eq!(sample.inflight_at_loss(12_000), 110_204);
+
+        // When the loss before a 1200-byte packet already exceeded the threshold, the bound
+        // falls below the inflight before it: 8800 bytes were lost where 1976 were allowed.
+        let sample = InflightSample {
+            tx_in_flight: 100_000,
+            lost: 10_000,
+            is_app_limited: false,
+        };
+        assert_eq!(sample.inflight_at_loss(1200), 91_836);
     }
 }
