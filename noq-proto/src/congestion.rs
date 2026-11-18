@@ -197,6 +197,15 @@ pub trait Controller: Send + Sync + core::fmt::Debug {
         self.on_packet_lost(lost_bytes, packet.number, now);
     }
 
+    /// One packet left flight without being acknowledged or lost
+    ///
+    /// The transport stopped tracking a packet whose fate says nothing about congestion: a lost
+    /// PMTU probe (RFC 9000 §14.4), or a packet in a space whose keys were discarded or whose
+    /// 0-RTT data was rejected. A controller that tracks sent packets should forget it and drop
+    /// it from its inflight count, without a congestion response.
+    #[allow(unused_variables)]
+    fn on_packet_discarded(&mut self, bytes: u16, packet: PacketId) {}
+
     /// Packets were incorrectly deemed lost
     ///
     /// This function is called when all packets that were deemed lost (for instance because

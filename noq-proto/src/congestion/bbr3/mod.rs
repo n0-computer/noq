@@ -2165,6 +2165,21 @@ impl Controller for Bbr3 {
         Self::on_packet_lost(self, lost_bytes, packet.number, packet.space, now);
     }
 
+    /// A lost PMTU probe or a packet of a discarded space leaves flight without counting as
+    /// delivered or lost. Left in the queue, it would hold every packet after it there until it
+    /// expires after `ROUND_COUNT_WINDOW` rounds.
+    fn on_packet_discarded(&mut self, bytes: u16, packet: PacketId) {
+        let packets = &mut self.packets[packet.space as usize];
+        let Ok(index) = packets.binary_search_by_key(&packet.number, |p| p.packet_number) else {
+            return;
+        };
+        if let Some(p) = packets.remove(index)
+            && !p.acknowledged
+        {
+            self.inflight = self.inflight.saturating_sub(u64::from(bytes));
+        }
+    }
+
     fn on_congestion_event_space(
         &mut self,
         now: Instant,
@@ -7874,6 +7889,33 @@ mod test {
         assert_eq!(queue(&sim), 100);
         sim.ack(31 * MS, [100], false);
         assert_eq!(queue(&sim), 0);
+    }
+
+    /// A packet that leaves flight without an ACK or a loss, such as a lost PMTU probe, leaves
+    /// the tracking queue at once, so the packets acknowledged after it do too. It counts as
+    /// neither delivered nor lost and starts no recovery.
+    /// <https://www.rfc-editor.org/rfc/rfc9000#section-14.4>
+    #[test]
+    fn discarded_packet_leaves_the_tracking_queue() {
+        let mut sim = scripted();
+        let queue = |sim: &Sim| sim.bbr.packets[SpaceKind::Data as usize].len();
+        sim.round(0, 10, 10 * MS);
+        let (delivered, lost) = (sim.bbr.delivered, sim.bbr.lost);
+
+        let probe = sim.pn;
+        sim.send(20 * MS, 10);
+        let i = sim.flight.iter().position(|p| p.pn == probe).unwrap();
+        sim.flight.remove(i);
+        sim.inflight -= sim.mss;
+        sim.bbr
+            .on_packet_discarded(sim.mss as u16, PacketId::data(probe));
+        assert_eq!(sim.bbr.inflight, 9 * sim.mss);
+
+        sim.ack(30 * MS, probe + 1..probe + 10, false);
+        assert_eq!(queue(&sim), 0);
+        assert_eq!(sim.bbr.delivered, delivered + 9 * sim.mss);
+        assert_eq!(sim.bbr.lost, lost);
+        assert!(!sim.bbr.in_recovery);
     }
 
     /// The ACK that declares persistent congestion does not also end the recovery it cuts the

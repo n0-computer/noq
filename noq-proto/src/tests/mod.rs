@@ -3136,6 +3136,49 @@ fn connect_lost_mtu_probes_do_not_trigger_congestion_control() {
     assert_eq!(server_path_stats.congestion_events, 0);
 }
 
+/// A lost PMTU probe leaves flight without a congestion response, so the controller hears of
+/// it as discarded rather than lost, and can stop tracking it.
+/// <https://www.rfc-editor.org/rfc/rfc9000#section-14.4>
+#[test]
+fn lost_mtu_probes_reach_the_controller_as_discarded() {
+    let _guard = subscribe();
+    let factory = Arc::new(PacketRecorderFactory::default());
+    let mut transport = TransportConfig::default();
+    transport.deterministic_packet_numbers(true);
+    transport.congestion_controller_factory(factory.clone());
+    let transport = Arc::new(transport);
+
+    let mut server_cfg = server_config();
+    server_cfg.transport = transport.clone();
+    let mut pair = Pair::new(Default::default(), server_cfg);
+    pair.mtu = 1200;
+    let mut client_cfg = client_config();
+    client_cfg.transport = transport;
+    let (client_ch, _) = pair.connect_with(client_cfg);
+    pair.drive();
+    let probes = pair
+        .client_conn_mut(client_ch)
+        .path_stats(PathId::ZERO)
+        .unwrap()
+        .lost_plpmtud_probes;
+    assert_eq!(probes, 9);
+
+    // The client's controller is the first one built.
+    let log = factory.logs.lock().unwrap()[0].clone();
+    let events = check_packet_identity(&log);
+    let discarded = events
+        .iter()
+        .filter(|e| matches!(e, PacketEvent::Discarded { packet } if packet.space == Space::Data))
+        .count();
+    assert_eq!(discarded as u64, probes);
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, PacketEvent::Lost { .. } | PacketEvent::Congestion { .. })),
+        "a lost probe reached the controller as congestion"
+    );
+}
+
 #[test]
 fn connect_detects_mtu() {
     let _guard = subscribe();
@@ -5051,6 +5094,9 @@ enum PacketEvent {
     Lost {
         packet: PacketId,
     },
+    Discarded {
+        packet: PacketId,
+    },
     Congestion {
         sent: Instant,
         largest: PacketId,
@@ -5100,6 +5146,10 @@ impl Controller for PacketRecorder {
 
     fn on_packet_space_lost(&mut self, _lost_bytes: u16, packet: PacketId, _now: Instant) {
         self.push(PacketEvent::Lost { packet });
+    }
+
+    fn on_packet_discarded(&mut self, _bytes: u16, packet: PacketId) {
+        self.push(PacketEvent::Discarded { packet });
     }
 
     fn on_congestion_event_space(
@@ -5212,6 +5262,13 @@ fn check_packet_identity(log: &PacketLog) -> Vec<PacketEvent> {
                 assert!(sent.contains_key(&packet), "{packet:?} lost but never sent");
                 assert!(resolved.insert(packet), "{packet:?} resolved twice");
                 lost.insert(packet);
+            }
+            PacketEvent::Discarded { packet } => {
+                assert!(
+                    sent.contains_key(&packet),
+                    "{packet:?} discarded but never sent"
+                );
+                assert!(resolved.insert(packet), "{packet:?} resolved twice");
             }
             PacketEvent::Congestion {
                 sent: at,

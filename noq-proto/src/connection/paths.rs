@@ -138,6 +138,19 @@ impl PathState {
             }
         }
     }
+
+    /// Removes a packet from flight that was neither acknowledged nor lost, and tells the
+    /// controller of the path it was sent on, see [`PathData::discard_in_flight`]
+    pub(super) fn discard_in_flight(&mut self, space: SpaceKind, pn: u64, packet: &SentPacket) {
+        for path_data in [&mut self.data]
+            .into_iter()
+            .chain(self.prev.as_mut().map(|(_, data)| data))
+        {
+            if path_data.discard_in_flight(space, pn, packet) {
+                return;
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -461,6 +474,28 @@ impl PathData {
             return false;
         }
         self.in_flight.remove(packet);
+        true
+    }
+
+    /// Removes `packet` with number `pn` in `space` from flight without an acknowledgement or a
+    /// congestion signal, as for a lost PMTU probe or a packet whose space was discarded, or
+    /// returns `false` if it was sent before this path was established.
+    ///
+    /// The controller learned of the send if the packet was ack-eliciting, so it hears of the
+    /// discard too.
+    pub(super) fn discard_in_flight(
+        &mut self,
+        space: SpaceKind,
+        pn: u64,
+        packet: &SentPacket,
+    ) -> bool {
+        if !self.remove_in_flight(packet) {
+            return false;
+        }
+        if packet.ack_eliciting && packet.size != 0 {
+            self.congestion
+                .on_packet_discarded(packet.size, congestion::PacketId { space, number: pn });
+        }
         true
     }
 

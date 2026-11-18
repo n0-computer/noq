@@ -3614,10 +3614,11 @@ impl Connection {
                 .take(packet)
                 .unwrap(); // safe: lost_mtu_probe is omitted from lost_packets, and
             // therefore must not have been removed yet
+            // A lost probe says nothing about congestion, RFC 9000 §14.4.
             self.paths
                 .get_mut(&path_id)
                 .unwrap()
-                .remove_in_flight(&info);
+                .discard_in_flight(SpaceKind::Data, packet, &info);
             self.path_data_mut(path_id).mtud.on_probe_lost();
             let path_stats = self.path_stats.get_mut(path_id);
             path_stats.lost_plpmtud_probes += 1;
@@ -4233,6 +4234,7 @@ impl Connection {
             }
         }
         self.crypto_state.spaces[space].keys = None;
+        let space_kind = space;
         let space = &mut self.spaces[space];
         let pns = space.for_path(PathId::ZERO);
         pns.time_of_last_ack_eliciting_packet = None;
@@ -4243,8 +4245,8 @@ impl Connection {
             .paths
             .get_mut(&PathId::ZERO)
             .expect("PathId::ZERO is alive while Initial/Handshake spaces exist");
-        for (_, packet) in sent_packets.into_iter() {
-            path.data.remove_in_flight(&packet);
+        for (pn, packet) in sent_packets.into_iter() {
+            path.data.discard_in_flight(space_kind, pn, &packet);
         }
 
         self.set_loss_detection_timer(now, PathId::ZERO)
@@ -4715,11 +4717,11 @@ impl Connection {
                         .for_path(PathId::ZERO)
                         .sent_packets,
                 );
-                for (_, info) in zero_rtt.into_iter() {
+                for (pn, info) in zero_rtt.into_iter() {
                     self.paths
                         .get_mut(&PathId::ZERO)
                         .unwrap()
-                        .remove_in_flight(&info);
+                        .discard_in_flight(SpaceKind::Data, pn, &info);
                     self.spaces[SpaceId::Data].pending |= info.retransmits;
                 }
                 self.streams.retransmit_all_for_0rtt();
@@ -4791,11 +4793,12 @@ impl Connection {
                             let sent_packets = mem::take(
                                 &mut self.spaces[SpaceId::Data].for_path(path_id).sent_packets,
                             );
-                            for (_, packet) in sent_packets.into_iter() {
-                                self.paths
-                                    .get_mut(&path_id)
-                                    .unwrap()
-                                    .remove_in_flight(&packet);
+                            for (pn, packet) in sent_packets.into_iter() {
+                                self.paths.get_mut(&path_id).unwrap().discard_in_flight(
+                                    SpaceKind::Data,
+                                    pn,
+                                    &packet,
+                                );
                             }
                         } else {
                             self.crypto_state.accepted_0rtt = true;
