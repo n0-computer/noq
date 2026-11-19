@@ -1056,6 +1056,16 @@ impl PathAck {
             ecn,
         }
     }
+
+    /// Returns a conservative upper bound on the encoded size of a `PATH_ACK`/`PATH_ACK_ECN`
+    /// frame covering `range_count` ACK ranges, optionally with ECN counts.
+    ///
+    /// This is a rough upper estimate (every varint is assumed to take its maximum encoded
+    /// size), it does not squeeze every last byte out. It is useful to check whether a
+    /// `PathAck` frame would fit a budget without first having to build it.
+    pub(crate) fn size_bound(range_count: usize, ecn: Option<&EcnCounts>) -> usize {
+        ack_size_bound(true, range_count, ecn)
+    }
 }
 
 #[derive(derive_more::Display)]
@@ -1170,6 +1180,46 @@ impl Ack {
             FrameType::Ack
         }
     }
+
+    /// Returns a conservative upper bound on the encoded size of an `ACK`/`ACK_ECN` frame
+    /// covering `range_count` ACK ranges, optionally with ECN counts.
+    ///
+    /// This is a rough upper estimate (every varint is assumed to take its maximum encoded
+    /// size), it does not squeeze every last byte out. It is useful to check whether an `Ack`
+    /// frame would fit a budget without first having to build it.
+    pub(crate) fn size_bound(range_count: usize, ecn: Option<&EcnCounts>) -> usize {
+        ack_size_bound(false, range_count, ecn)
+    }
+}
+
+/// Maximum encoded size, in bytes, of a QUIC variable-length integer.
+const MAX_VARINT_SIZE: usize = 8;
+
+/// Shared conservative upper bound computation for [`Ack::size_bound`] and
+/// [`PathAck::size_bound`].
+///
+/// `range_count` is the number of ACK ranges the frame would need to encode, and `ecn`
+/// indicates whether ECN counts would also be included.
+fn ack_size_bound(is_path_ack: bool, range_count: usize, ecn: Option<&EcnCounts>) -> usize {
+    // Frame type.
+    let mut size = if is_path_ack {
+        FrameType::PathAckEcn.size().max(FrameType::PathAck.size())
+    } else {
+        FrameType::AckEcn.size().max(FrameType::Ack.size())
+    };
+    if is_path_ack {
+        // Path ID.
+        size += MAX_VARINT_SIZE;
+    }
+    // Largest acknowledged, ACK delay, ACK range count, first ACK range.
+    size += 4 * MAX_VARINT_SIZE;
+    // Each additional range beyond the first one needs a gap and a range length.
+    size += range_count.saturating_sub(1) * 2 * MAX_VARINT_SIZE;
+    if ecn.is_some() {
+        // ECT(0), ECT(1), and CE counts.
+        size += 3 * MAX_VARINT_SIZE;
+    }
+    size
 }
 
 #[derive(derive_more::Display)]
