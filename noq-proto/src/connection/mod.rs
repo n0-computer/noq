@@ -1079,17 +1079,16 @@ impl Connection {
 
         // Schedule an ACK_FREQUENCY frame if a new one needs to be sent.
         if let Some(config) = &self.config.ack_frequency_config {
-            let rtt = self
-                .paths
-                .values()
-                .map(|p| p.data.rtt.get())
-                .min()
-                .expect("one path exists");
-            self.spaces[SpaceId::Data].pending.ack_frequency = self
-                .ack_frequency
-                .should_send_ack_frequency(rtt, config, &self.peer_params)
-                && self.highest_space == SpaceKind::Data
-                && self.peer_supports_ack_frequency();
+            // A peer may abandon our last path (draft-ietf-quic-multipath-21, section 3.4),
+            // leaving the map empty while the NoAvailablePath grace close keeps the connection
+            // alive and pollable.
+            if let Some(rtt) = self.paths.values().map(|p| p.data.rtt.get()).min() {
+                self.spaces[SpaceId::Data].pending.ack_frequency = self
+                    .ack_frequency
+                    .should_send_ack_frequency(rtt, config, &self.peer_params)
+                    && self.highest_space == SpaceKind::Data
+                    && self.peer_supports_ack_frequency();
+            }
         }
 
         let mut next_path_id = self.paths.first_entry().map(|e| *e.key());
