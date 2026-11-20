@@ -15,6 +15,9 @@ workspace = ".."
 # comment in that file for more information.
 default = ["rustls", "ring", "tracing-log", "bloom"]
 arbitrary = ["dep:arbitrary"]
+# On wasm32-unknown-unknown, selects getrandom's browser entropy source. Final binaries that
+# do not provide their own getrandom backend enable this; libraries should leave it off.
+wasm_js = ["getrandom/wasm_js"]
 # Enables conveniences like `EndpointConfig::default`, and together with
 # enabling the `rustls` feature, this also enables the `aws-lc-rs` crypto provider
 # for the rustls TLS backend, making `Endpoint::client` and `Endpoint::server` available,
@@ -80,7 +83,7 @@ tracing = { workspace = true }
 # wasm-bindgen is assumed for a wasm*-*-unknown target
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
 ring = { workspace = true, optional = true, features = ["wasm32_unknown_unknown_js"] }
-getrandom = { workspace = true, features = ["wasm_js"] }
+getrandom = { workspace = true }
 rustls-pki-types = { workspace = true, features = ["web"] } # only added as dependency to enforce the `web` feature for this target
 web-time = { workspace = true }
 
@@ -95,6 +98,8 @@ tracing-subscriber = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dev-dependencies]
+# Tests are a final binary, so they select the browser entropy source.
+getrandom = { workspace = true, features = ["wasm_js"] }
 # ensure we set the wasm_js feature even for the older version of getrandom used in proptest in Wasm
 getrandom_0_3 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
 
