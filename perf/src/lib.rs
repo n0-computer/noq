@@ -5,7 +5,8 @@ use std::{io, net::SocketAddr, num::ParseIntError, str::FromStr, sync::Arc, time
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 use noq::{
-    AckFrequencyConfig, TransportConfig, VarInt,
+    AckFrequencyConfig, Endpoint, EndpointConfig, Runtime, ServerConfig, SocketRoute, TokioRuntime,
+    TransportConfig, VarInt,
     congestion::{self, ControllerFactory},
     udp::UdpSocketState,
 };
@@ -20,6 +21,8 @@ pub mod noprotection;
 
 pub mod client;
 pub mod server;
+#[cfg(all(feature = "af-xdp", target_os = "linux"))]
+pub mod xdp;
 
 // Common options between client and server binary
 #[derive(Parser)]
@@ -86,6 +89,16 @@ pub struct CommonOpt {
     #[cfg(feature = "qlog")]
     #[clap(long = "qlog")]
     pub qlog_dir: Option<PathBuf>,
+    /// Use an endpoint with multiple sockets, with the UDP socket as its only socket
+    ///
+    /// The AF_XDP socket always uses such an endpoint, so this isolates the cost of the
+    /// endpoint type when comparing UDP with AF_XDP.
+    #[clap(long)]
+    pub multi_socket: bool,
+    /// AF_XDP options
+    #[cfg(all(feature = "af-xdp", target_os = "linux"))]
+    #[command(flatten)]
+    pub xdp: xdp::XdpOpt,
 }
 
 impl CommonOpt {
@@ -130,6 +143,42 @@ impl CommonOpt {
         }
 
         Ok(transport)
+    }
+
+    /// Creates the endpoint, on a UDP socket or, with `--xdp`, on AF_XDP sockets
+    pub fn bind_endpoint(
+        &self,
+        addr: SocketAddr,
+        config: EndpointConfig,
+        server_config: Option<ServerConfig>,
+    ) -> Result<Endpoint> {
+        let runtime = Arc::new(TokioRuntime);
+        #[cfg(all(feature = "af-xdp", target_os = "linux"))]
+        if self.xdp.interface.is_some() {
+            let sockets = self.xdp.bind(addr)?;
+            return Ok(Endpoint::new_with_multiple_sockets(
+                config,
+                server_config,
+                sockets,
+                runtime,
+            )?);
+        }
+        let socket = self.bind_socket(addr)?;
+        if self.multi_socket {
+            let socket = runtime.wrap_udp_socket_next(socket)?;
+            let route = SocketRoute::new(match addr {
+                SocketAddr::V4(_) => "0.0.0.0/0".parse().expect("valid"),
+                SocketAddr::V6(_) => "::/0".parse().expect("valid"),
+            })
+            .with_default(true);
+            return Ok(Endpoint::new_with_multiple_sockets(
+                config,
+                server_config,
+                vec![(socket, vec![route])],
+                runtime,
+            )?);
+        }
+        Ok(Endpoint::new(config, server_config, socket, runtime)?)
     }
 
     pub fn bind_socket(&self, addr: SocketAddr) -> Result<std::net::UdpSocket> {

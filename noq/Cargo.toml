@@ -48,6 +48,8 @@ rustls-log = ["rustls?/logging"]
 qlog = ["proto/qlog"]
 # Use private Apple APIs to send multiple packets in a single syscall.
 fast-apple-datapath = ["udp/fast-apple-datapath"]
+# Provides the `xdp` module with AF_XDP sockets (Linux only, requires the tokio runtime)
+af-xdp = ["runtime-tokio", "dep:libc"]
 
 # Backwards-compatibility features
 rustls-ring = ["rustls", "ring"]
@@ -57,7 +59,7 @@ rustls-aws-lc-rs = ["rustls", "aws-lc-rs"]
 # Don't rely on these whatsoever. They may disappear at any time.
 
 __rustls-post-quantum-test =  ["rustls/prefer-post-quantum", "rustls", "aws-lc-rs", "proto/__rustls-post-quantum-test"]
-__all_without_fips = ["lock_tracking", "aws-lc-rs", "rustls", "ring", "runtime-tokio", "runtime-smol", "tracing-log", "rustls-log", "bloom", "platform-verifier", "qlog", "fast-apple-datapath"]
+__all_without_fips = ["lock_tracking", "aws-lc-rs", "rustls", "ring", "runtime-tokio", "runtime-smol", "tracing-log", "rustls-log", "bloom", "platform-verifier", "qlog", "fast-apple-datapath", "af-xdp"]
 
 [dependencies]
 async-io = { workspace = true, optional = true }
@@ -93,6 +95,9 @@ sharded-slab = { workspace = true, optional = true }
 
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
 socket2 = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { version = "0.2.175", optional = true }
 
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
 web-time = { workspace = true }

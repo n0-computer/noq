@@ -9,7 +9,7 @@ use std::{
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use clap::Parser;
-use noq::{TokioRuntime, crypto::rustls::QuicClientConfig};
+use noq::crypto::rustls::QuicClientConfig;
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use tokio::sync::Semaphore;
 use tracing::{debug, error, info};
@@ -96,12 +96,13 @@ pub async fn run(opt: Opt) -> Result<()> {
 
     info!("local addr {:?}", bind_addr);
 
-    let socket = opt.common.bind_socket(bind_addr)?;
-
     let mut endpoint_cfg = noq::EndpointConfig::default();
     endpoint_cfg.max_udp_payload_size(opt.common.max_udp_payload_size)?;
 
-    let endpoint = noq::Endpoint::new(endpoint_cfg, None, socket, Arc::new(TokioRuntime))?;
+    let endpoint = opt
+        .common
+        .bind_endpoint(bind_addr, endpoint_cfg, None)
+        .context("creating endpoint")?;
 
     let default_provider = rustls::crypto::ring::default_provider();
     let provider = Arc::new(rustls::crypto::CryptoProvider {

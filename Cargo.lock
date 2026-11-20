@@ -1847,6 +1847,7 @@ dependencies = [
  "http",
  "ipnet",
  "lazy_static",
+ "libc",
  "noq-proto",
  "noq-udp",
  "pin-project-lite",

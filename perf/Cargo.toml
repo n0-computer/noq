@@ -23,6 +23,8 @@ qlog = ["noq/qlog"]
 # WARNING: it requires special compilation flags
 #    RUSTFLAGS="--cfg tokio_unstable" cargo build -r -p perf -F tokio-console
 tokio-console = ["console-subscriber"]
+# Enable AF_XDP sockets (`--xdp`), Linux only
+af-xdp = ["noq/af-xdp"]
 
 [dependencies]
 anyhow = { workspace = true }

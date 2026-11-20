@@ -53,6 +53,8 @@ mod runtime;
 mod send_stream;
 mod sender;
 mod work_limiter;
+#[cfg(all(feature = "af-xdp", target_os = "linux"))]
+pub mod xdp;
 
 #[cfg(not(wasm_browser))]
 pub(crate) use std::time::{Duration, Instant};

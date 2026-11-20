@@ -3,7 +3,7 @@ use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use clap::Parser;
-use noq::{TokioRuntime, crypto::rustls::QuicServerConfig};
+use noq::crypto::rustls::QuicServerConfig;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, pem::PemObject};
 use tracing::{debug, error, info};
 
@@ -74,12 +74,12 @@ pub async fn run(opt: Opt) -> Result<()> {
     });
     config.transport_config(Arc::new(transport));
 
-    let socket = opt.common.bind_socket(opt.listen)?;
-
     let mut endpoint_cfg = noq::EndpointConfig::default();
     endpoint_cfg.max_udp_payload_size(opt.common.max_udp_payload_size)?;
 
-    let endpoint = noq::Endpoint::new(endpoint_cfg, Some(config), socket, Arc::new(TokioRuntime))
+    let endpoint = opt
+        .common
+        .bind_endpoint(opt.listen, endpoint_cfg, Some(config))
         .context("creating endpoint")?;
 
     info!("listening on {}", endpoint.local_addr().unwrap());
