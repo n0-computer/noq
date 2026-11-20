@@ -162,8 +162,13 @@ impl<T: Copy> Ring<T> {
 
     /// Writes `value` into the next free slot; [`Ring::submit`] publishes it
     ///
-    /// The caller checks [`Ring::free`] first.
+    /// The caller makes sure there is a free slot, by checking [`Ring::free`] first or, for the
+    /// fill ring, because it never owns more frames than the ring has entries.
     pub(super) fn push(&mut self, value: T) {
+        if self.local.wrapping_sub(self.remote) > self.mask {
+            // The cached consumer index is stale if the caller did not call `free`.
+            self.remote = self.consumer().load(Ordering::Acquire);
+        }
         debug_assert!(self.local.wrapping_sub(self.remote) <= self.mask);
         let index = (self.local & self.mask) as usize;
         // SAFETY: `index` is within the ring, and the slot is ours until we publish it.
@@ -463,4 +468,45 @@ fn xdp_options(fd: &OwnedFd) -> io::Result<u32> {
     let options: libc::xdp_options =
         getsockopt(fd.as_fd(), libc::XDP_OPTIONS).map_err(|e| context(e, "reading options"))?;
     Ok(options.flags)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds a ring over anonymous memory, with the kernel's side driven by the test
+    fn anonymous_ring(size: u32) -> Ring<u64> {
+        let mmap = Mmap::new(64 + size as usize * size_of::<u64>(), None, 0).unwrap();
+        let at = |offset: usize| {
+            // SAFETY: all offsets are inside the mapping.
+            unsafe { NonNull::new_unchecked(mmap.ptr.as_ptr().add(offset)) }
+        };
+        Ring {
+            producer: at(0).cast(),
+            consumer: at(4).cast(),
+            flags: at(8).cast(),
+            descs: at(64).cast(),
+            mask: size - 1,
+            local: 0,
+            remote: 0,
+            _mmap: mmap,
+            _marker: PhantomData,
+        }
+    }
+
+    #[test]
+    fn push_without_free_refreshes_the_consumer_index() {
+        let mut ring = anonymous_ring(4);
+        for addr in 0..4 {
+            ring.push(addr);
+        }
+        ring.submit();
+        // The kernel consumes two entries; the fill ring pushes without calling `free`.
+        ring.consumer().store(2, Ordering::Release);
+        ring.push(4);
+        ring.push(5);
+        ring.submit();
+        assert_eq!(ring.producer().load(Ordering::Acquire), 6);
+        assert_eq!(ring.free(), 0);
+    }
 }
