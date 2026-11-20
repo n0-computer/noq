@@ -107,41 +107,65 @@ Notes on veth:
 
 ## Two machines with real NICs
 
-1. Pick an interface with an IPv4 address on a shared link, for example `eth0` with
-   10.0.0.1 on the server and 10.0.0.2 on the client.
-2. Make sure the QUIC traffic arrives on the queues the sockets are bound to. Either reduce
-   the NIC to one queue:
+Three short scripts prepare each machine; run them on both. `<iface>` is the port that
+reaches the peer, `<peer-ip>` the other machine's address on that link.
 
-   ```sh
-   ethtool -L eth0 combined 1
-   ```
+```sh
+perf/xdp-check.sh <iface> <peer-ip>               # read-only, no root; prints the noq-perf commands
+sudo perf/xdp-enable.sh <iface> <local-ip> 4433   # server (port 4434 on the client)
+perf/xdp-check.sh <iface> <peer-ip>               # again: commands now with --xdp-queues 1
+sudo perf/xdp-disable.sh <iface>                  # afterwards
+```
 
-   or steer the flow to queue 0 and keep the other queues for other traffic, on the server:
+`xdp-check.sh` checks that the route to the peer goes out via `<iface>` (otherwise noq
+finds no ARP entry there and drops every send as `tx_no_neighbor`), that the ARP table has
+the peer's MAC on `<iface>`, other interfaces in the same subnet (ARP flux), the queues,
+ntuple support and rules, the MTU and an attached XDP program. It ends with the server and
+client command lines, including `--xdp-gateway <peer MAC>` as a fallback for a missing ARP
+entry.
 
-   ```sh
-   ethtool -K eth0 ntuple on
-   ethtool -N eth0 flow-type udp4 dst-ip 10.0.0.1 dst-port 4433 action 0
-   ```
+`xdp-enable.sh <iface> <local-ip> [port] [queue]` prints every command before running it:
 
-   and on the client, for its local address:
+- `ethtool -K <iface> ntuple on` and a rule at location `LOC` (default 0) that steers UDP to
+  `<local-ip>:<port>` to `queue` (default 0); run noq-perf with `--xdp-queues queue+1`.
+  Without ntuple support it changes nothing and tells you to bind every queue
+  (`--xdp-queues <number of queues>`, all sockets receive, the first one sends).
+- `arp_ignore=1` and `arp_announce=2` on every interface in the subnet of `<iface>`, so that
+  only `<iface>` answers ARP for its address. Set per interface, since the effective value is
+  the maximum of `all` and the interface's. The original values go to
+  `/run/noq-xdp-<iface>.sysctl`.
+- `ip neigh flush` on those interfaces, so the peer's MAC is learned again on the right port.
 
-   ```sh
-   ethtool -K eth0 ntuple on
-   ethtool -N eth0 flow-type udp4 dst-ip 10.0.0.2 dst-port 4434 action 0
-   ```
+`xdp-disable.sh <iface>` deletes rule `LOC`, restores the saved sysctl values and detaches a
+leftover `noq_xdp` program. It leaves ntuple on, since turning it off would delete other
+rules too. Neither script changes addresses, routes, links or channel counts.
 
-   `ethtool -n eth0` lists the rules, `ethtool -N eth0 delete <id>` removes one.
+Notes:
 
-   or bind all queues with `--xdp-queues $(ethtool -l eth0 | awk '/Combined/{print $2}' | tail -1)`.
-   With several queues, all sockets receive but the first one sends everything.
-3. Fill the neighbor tables (`ping -c1 <peer>`), or pass `--xdp-gateway <peer MAC>` if the
-   peer is reached through a router.
-4. Run the server and the client as in the veth example, once with `--xdp eth0` and once
-   without, and compare.
+- Drivers with native XDP and AF_XDP zero-copy include i40e, ice, ixgbe, mlx5 and igc (`ethtool
+  -i <iface>`). Others fall back to copy mode, and drivers without native XDP (r8169, e1000e,
+  Wi-Fi) to generic mode, which is not representative. The server logs `zero_copy=true|false`
+  at `RUST_LOG=noq::xdp=info`; `--xdp-bind zerocopy` fails if zero-copy is unsupported.
+- Many drivers refuse XDP with LRO on (`ethtool -K <iface> lro off`) or with an MTU above
+  about 3498 (single-buffer XDP).
+- Run noq-perf with `sudo`: root has CAP_IPC_LOCK, so RLIMIT_MEMLOCK does not limit the 16 MiB
+  UMEM per queue (see Privileges).
 
-Check `ethtool -i eth0` for the driver; drivers with native XDP and AF_XDP zero-copy include
-i40e, ice, ixgbe, mlx5 and igc. `--xdp-bind zerocopy` fails if the driver does not support
-it; the server logs `zero_copy=true|false` at `RUST_LOG=noq::xdp=info`.
+### Troubleshooting
+
+The `AF_XDP queue N: XdpStats { .. }` lines on stderr show what goes wrong.
+
+| Symptom | Meaning |
+|---|---|
+| `tx_no_neighbor` grows | No MAC for the peer on `--xdp <iface>`: wrong interface (the route to the peer uses another one) or no ARP entry. Run `xdp-check.sh`; ping the peer or pass `--xdp-gateway <MAC>`. |
+| `tx_packets` grows, `rx_packets` stays 0 | Nothing arrives at the socket: the peer sends to another port's MAC (ARP flux, check `ip neigh show <local-ip>` on the peer), the NIC steers the flow to a queue without a socket (add the rule or raise `--xdp-queues`), or the peer is not running or a firewall drops the packets. |
+| `kernel_rx_fill_ring_empty` grows | The kernel had no free frame to receive into: the receiver does not keep up, packets are dropped. |
+| `kernel_rx_ring_full` grows | The RX ring was full: the application does not read fast enough. |
+| `kernel_rx_dropped` grows | The kernel dropped frames for other reasons, for example frames larger than the UMEM frame. |
+| `tx_too_big` grows | Datagrams larger than the interface MTU, usually MTU probes; harmless in small numbers. |
+| `tx_blocked` grows | Sends waited for TX frames or ring slots: the NIC is the bottleneck. |
+| Attaching fails | Another XDP program is attached (`ip -d link show <iface>`), LRO is on, or the MTU is too large. |
+| UMEM registration fails | RLIMIT_MEMLOCK too low: run with sudo or grant `cap_ipc_lock`. |
 
 ## What to measure
 
