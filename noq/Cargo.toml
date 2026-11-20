@@ -61,9 +61,11 @@ __all_without_fips = ["lock_tracking", "aws-lc-rs", "rustls", "ring", "runtime-t
 
 [dependencies]
 async-io = { workspace = true, optional = true }
+atomic-waker = { workspace = true }
 bytes = { workspace = true }
 derive_more = { workspace = true }
 futures-io = { workspace = true, optional = true }
+ipnet = { workspace = true }
 pin-project-lite = { workspace = true }
 proto = { package = "noq-proto", path = "../noq-proto", version = "1.3.0", default-features = false }
 rustc-hash = { workspace = true }
@@ -155,6 +157,8 @@ allowed_external_types = [
     "noq_udp::*",
     "bytes::bytes::Bytes",
     "futures_core::stream::Stream",
+    "ipnet",
+    "ipnet::*",
     "rustls",
     "tokio::io::async_read::AsyncRead",
     "tokio::io::async_write::AsyncWrite",
