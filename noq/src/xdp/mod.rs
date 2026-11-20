@@ -324,6 +324,19 @@ impl XdpInterface {
         #[allow(deprecated)]
         let fd = AsyncFd::new(fd)?;
         iface.program.register(queue, fd.as_fd())?;
+        // A transmit needs a free frame and a TX ring slot per segment, so a larger one would
+        // never fit and its sender would retry forever.
+        let max_segments = iface
+            .config
+            .max_segments
+            .min(tx_frames.len())
+            .min(iface.config.ring_size as usize);
+        let max_segments = NonZeroUsize::new(max_segments).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "no UMEM frames left for sending",
+            )
+        })?;
         info!(
             interface = %iface.config.interface,
             queue,
@@ -342,6 +355,7 @@ impl XdpInterface {
                 umem,
                 iface: self.shared.clone(),
                 queue,
+                max_segments,
                 stats: Counters::default(),
                 warned_no_neighbor: AtomicBool::new(false),
             }),
@@ -379,6 +393,8 @@ struct SocketShared {
     umem: Umem,
     iface: Arc<InterfaceShared>,
     queue: u32,
+    /// [`XdpConfig::max_segments`], capped to what fits the TX frames and ring
+    max_segments: NonZeroUsize,
     stats: Counters,
     warned_no_neighbor: AtomicBool,
 }
@@ -656,7 +672,7 @@ impl UdpSender for XdpSender {
     }
 
     fn max_transmit_segments(&self) -> NonZeroUsize {
-        NonZeroUsize::new(self.shared.iface.config.max_segments).unwrap_or(NonZeroUsize::MIN)
+        self.shared.max_segments
     }
 }
 
