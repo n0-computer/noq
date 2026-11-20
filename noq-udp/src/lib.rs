@@ -35,6 +35,7 @@ use std::os::windows::io::AsSocket;
 use std::{
     io,
     net::{IpAddr, Ipv6Addr, SocketAddr},
+    sync::atomic::{AtomicU8, AtomicU64, Ordering},
 };
 #[cfg(not(wasm_browser))]
 use std::{sync::Mutex, time::Instant};
@@ -88,6 +89,55 @@ mod log {
 
 #[cfg(not(wasm_browser))]
 pub use imp::UdpSocketState;
+
+/// The DSCP that every socket of this process marks its packets with.
+///
+/// noq-udp sets the whole IPv4 TOS or IPv6 traffic class byte of each
+/// packet with a control message that carries the ECN codepoint, which
+/// replaces whatever the socket was set to with `IP_TOS` or `IPV6_TCLASS`.
+/// This puts the DSCP into the upper six bits of that byte, next to the ECN
+/// bits, which stay as noq-proto sets them. Unix only; a no-op on Windows.
+static DSCP: AtomicU8 = AtomicU8::new(0);
+
+/// The datagrams received by every socket of this process, and those of them with a DSCP other than 0.
+static RECEIVED: [AtomicU64; 2] = [AtomicU64::new(0), AtomicU64::new(0)];
+
+/// Sets the DSCP, 0 to 63, that the packets of every socket in this process carry from now on.
+///
+/// 0, the default, is best effort, as without it.
+pub fn set_dscp(dscp: u8) {
+    DSCP.store(dscp & 0x3f, Ordering::Relaxed);
+}
+
+/// Returns the DSCP set with [`set_dscp`].
+pub fn dscp() -> u8 {
+    DSCP.load(Ordering::Relaxed)
+}
+
+/// Returns how many datagrams the sockets of this process received, and how many of them carried a DSCP other than 0.
+///
+/// Counts only where the platform reports the received TOS or traffic class (Linux, the BSDs, Apple).
+pub fn received_dscp() -> (u64, u64) {
+    (
+        RECEIVED[0].load(Ordering::Relaxed),
+        RECEIVED[1].load(Ordering::Relaxed),
+    )
+}
+
+/// Counts `datagrams` received with the TOS or traffic class byte `tos`.
+#[cfg(all(unix, not(posix_minimal)))]
+pub(crate) fn count_received(datagrams: usize, tos: u8) {
+    RECEIVED[0].fetch_add(datagrams as u64, Ordering::Relaxed);
+    if tos >> 2 != 0 {
+        RECEIVED[1].fetch_add(datagrams as u64, Ordering::Relaxed);
+    }
+}
+
+/// Returns the TOS or traffic class byte for a packet with the ECN bits `ecn`.
+#[cfg(all(unix, not(posix_minimal)))]
+pub(crate) fn tos(ecn: libc::c_int) -> libc::c_int {
+    libc::c_int::from(dscp()) << 2 | (ecn & 0b11)
+}
 
 /// Number of UDP packets to send/receive at a time
 #[cfg(not(wasm_browser))]
