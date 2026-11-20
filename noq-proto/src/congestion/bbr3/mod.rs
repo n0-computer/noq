@@ -10,7 +10,7 @@ use crate::RttEstimator;
 use crate::congestion::bbr3::max_filter::MaxFilter;
 use crate::congestion::{BASE_DATAGRAM_SIZE, Controller, ControllerFactory, ControllerMetrics};
 use crate::connection::SpaceKind;
-use crate::{Duration, Instant};
+use crate::{Duration, Instant, math};
 
 /// equivalent to BBR.MaxBwFilterLen <https://www.ietf.org/archive/id/draft-ietf-ccwg-bbr-05.html#section-2.10>
 const MAX_BW_FILTER_LEN: usize = 2;
@@ -753,8 +753,10 @@ impl Bbr3 {
             && rate_sample.delivery_rate > 0.0
             && (rate_sample.delivery_rate >= self.max_bw || !rate_sample.is_app_limited)
         {
-            self.max_bw_filter
-                .update_max(self.cycle_count, rate_sample.delivery_rate.round() as u64);
+            self.max_bw_filter.update_max(
+                self.cycle_count,
+                math::round(rate_sample.delivery_rate) as u64,
+            );
 
             self.max_bw = self.max_bw_filter.get_max() as f64;
         }
@@ -1375,7 +1377,7 @@ impl Bbr3 {
         // bytes using the current SMSS. A threshold of 0 requires an immediate ACK per packet,
         // so the delayed-ACK term contributes nothing in that case.
         let threshold_bytes = self.ack_eliciting_threshold.saturating_mul(self.smss);
-        let delay_bytes = (self.max_ack_delay.as_secs_f64() * self.max_bw).round() as u64;
+        let delay_bytes = math::round(self.max_ack_delay.as_secs_f64() * self.max_bw) as u64;
         let delayed_ack_term = Ord::min(threshold_bytes, delay_bytes);
 
         self.offload_budget = base.saturating_add(delayed_ack_term);
@@ -1400,7 +1402,7 @@ impl Bbr3 {
         if self.min_rtt == Duration::from_secs(u64::MAX) {
             return self.initial_cwnd;
         }
-        self.bdp = (bw * self.min_rtt.as_secs_f64()).round() as u64;
+        self.bdp = math::round(bw * self.min_rtt.as_secs_f64()) as u64;
         (gain * self.bdp as f64) as u64
     }
 
@@ -1859,9 +1861,10 @@ impl Bbr3 {
         ControllerMetrics {
             congestion_window: self.window(),
             ssthresh: None,
-            pacing_rate: Some(self.pacing_rate.round() as u64),
+            pacing_rate: Some(math::round(self.pacing_rate) as u64),
             send_quantum: Some(self.send_quantum),
-            bandwidth_estimate: (self.max_bw > 0.0).then_some((self.max_bw * 8.0).round() as u64),
+            bandwidth_estimate: (self.max_bw > 0.0)
+                .then_some(math::round(self.max_bw * 8.0) as u64),
         }
     }
 
@@ -2111,7 +2114,7 @@ mod test {
                 mss,
                 fwd_ns: rtt_ns / 2,
                 ret_ns: rtt_ns / 2,
-                btl_service_ns: (mss as f64 / bw * 1e9).round() as u64,
+                btl_service_ns: math::round(mss as f64 / bw * 1e9) as u64,
             }
         }
 
@@ -2168,7 +2171,8 @@ mod test {
 
                     // pace the next send at BBR's chosen pacing rate
                     let pacing = self.bbr.pacing_rate.max(1.0);
-                    self.next_send_ns = send_ns + (self.mss as f64 / pacing * 1e9).round() as u64;
+                    self.next_send_ns =
+                        send_ns + math::round(self.mss as f64 / pacing * 1e9) as u64;
                     self.pn += 1;
 
                     if on_send(&mut self.bbr).is_break() {
@@ -2335,7 +2339,7 @@ mod test {
         const LOSS_PERIOD: u64 = 25;
 
         // bottleneck serialization time for one MSS-sized packet
-        let btl_service_ns: u64 = (MSS as f64 / BW * 1e9).round() as u64;
+        let btl_service_ns: u64 = math::round(MSS as f64 / BW * 1e9) as u64;
 
         // Drive the production default configuration.
         let mut bbr = Bbr3::new(Arc::new(Bbr3Config::default()), MSS as u16);
@@ -2629,7 +2633,7 @@ mod test {
         let mut pn: u64 = 0;
 
         // bottleneck serialization time per MSS; cut on the DRAIN edge
-        let mut btl_service_ns: u64 = (MSS as f64 / BW * 1e9).round() as u64;
+        let mut btl_service_ns: u64 = math::round(MSS as f64 / BW * 1e9) as u64;
 
         let mut drain_start_round: Option<u64> = None;
         // per-round (round_count, inflight, bdp) while in DRAIN
@@ -2666,7 +2670,7 @@ mod test {
                 });
 
                 let pacing = bbr.pacing_rate.max(1.0);
-                next_send_ns = send_ns + (MSS as f64 / pacing * 1e9).round() as u64;
+                next_send_ns = send_ns + math::round(MSS as f64 / pacing * 1e9) as u64;
                 pn += 1;
             } else if let Some(p) = flight.pop_front() {
                 now_ns = now_ns.max(p.ack_ns);
@@ -2686,7 +2690,7 @@ mod test {
                 // STARTUP -> DRAIN edge: cut the link (over-estimate), record round
                 if bbr.state == BbrState::Drain && drain_start_round.is_none() {
                     drain_start_round = Some(bbr.drain_start_round);
-                    btl_service_ns = (MSS as f64 / (BW * DRAIN_BW_FACTOR) * 1e9).round() as u64;
+                    btl_service_ns = math::round(MSS as f64 / (BW * DRAIN_BW_FACTOR) * 1e9) as u64;
                     // Re-drain the queued STARTUP backlog at the new (slower) link
                     // rate. A FIFO bottleneck serves already-queued packets at the
                     // rate in force when they are served, not the rate at enqueue,
@@ -2892,7 +2896,7 @@ mod test {
         const LOSS_PERIOD: u64 = 25;
 
         // bottleneck serialization time for one MSS-sized packet
-        let btl_service_ns: u64 = (MSS as f64 / BW * 1e9).round() as u64;
+        let btl_service_ns: u64 = math::round(MSS as f64 / BW * 1e9) as u64;
 
         // Drive the production default configuration.
         let mut bbr = Bbr3::new(Arc::new(Bbr3Config::default()), MSS as u16);
@@ -2971,7 +2975,7 @@ mod test {
 
                 // pace the next send at BBR's chosen pacing rate
                 let pacing = bbr.pacing_rate.max(1.0);
-                next_send_ns = send_ns + (MSS as f64 / pacing * 1e9).round() as u64;
+                next_send_ns = send_ns + math::round(MSS as f64 / pacing * 1e9) as u64;
                 pn += 1;
             } else if let Some(p) = flight.pop_front() {
                 now_ns = now_ns.max(p.ack_ns);
@@ -3105,7 +3109,7 @@ mod test {
         const ROUNDS_TO_OBSERVE: u64 = 160;
 
         // bottleneck serialization time for one MSS-sized packet
-        let btl_service_ns: u64 = (MSS as f64 / BW * 1e9).round() as u64;
+        let btl_service_ns: u64 = math::round(MSS as f64 / BW * 1e9) as u64;
 
         // Drive the production default configuration.
         let mut bbr = Bbr3::new(Arc::new(Bbr3Config::default()), MSS as u16);
@@ -3186,7 +3190,7 @@ mod test {
 
                 // pace the next send at BBR's chosen pacing rate
                 let pacing = bbr.pacing_rate.max(1.0);
-                next_send_ns = send_ns + (MSS as f64 / pacing * 1e9).round() as u64;
+                next_send_ns = send_ns + math::round(MSS as f64 / pacing * 1e9) as u64;
                 pn += 1;
             } else if let Some(p) = flight.pop_front() {
                 now_ns = now_ns.max(p.ack_ns);
@@ -3811,7 +3815,7 @@ mod test {
         const FWD_NS: u64 = RTT_NS / 2;
         const RET_NS: u64 = RTT_NS / 2;
 
-        let btl_service_ns: u64 = (MSS as f64 / BW * 1e9).round() as u64;
+        let btl_service_ns: u64 = math::round(MSS as f64 / BW * 1e9) as u64;
 
         let mut bbr = Bbr3::new(Arc::new(Bbr3Config::default()), MSS as u16);
         assert_eq!(bbr.state, BbrState::Startup);
@@ -3860,7 +3864,7 @@ mod test {
                 });
 
                 let pacing = bbr.pacing_rate.max(1.0);
-                next_send_ns = send_ns + (MSS as f64 / pacing * 1e9).round() as u64;
+                next_send_ns = send_ns + math::round(MSS as f64 / pacing * 1e9) as u64;
                 pn += 1;
             } else if let Some(p) = flight.pop_front() {
                 now_ns = now_ns.max(p.ack_ns);
@@ -3990,7 +3994,7 @@ mod test {
                 });
 
                 let pacing = bbr.pacing_rate.max(1.0);
-                next_send_ns = send_ns + (MSS as f64 / pacing * 1e9).round() as u64;
+                next_send_ns = send_ns + math::round(MSS as f64 / pacing * 1e9) as u64;
                 pn += 1;
             } else if let Some(p) = flight.pop_front() {
                 now_ns = now_ns.max(p.ack_ns);
@@ -4095,7 +4099,7 @@ mod test {
         const AGG_NS: u64 = 1_000_000;
 
         // bottleneck serialization time for one MSS-sized packet
-        let btl_service_ns: u64 = (MSS as f64 / BW * 1e9).round() as u64;
+        let btl_service_ns: u64 = math::round(MSS as f64 / BW * 1e9) as u64;
 
         // Drive the production default configuration.
         let mut bbr = Bbr3::new(Arc::new(Bbr3Config::default()), MSS as u16);
@@ -4162,7 +4166,7 @@ mod test {
 
                 // pace the next send at BBR's chosen pacing rate
                 let pacing = bbr.pacing_rate.max(1.0);
-                next_send_ns = send_ns + (MSS as f64 / pacing * 1e9).round() as u64;
+                next_send_ns = send_ns + math::round(MSS as f64 / pacing * 1e9) as u64;
                 pn += 1;
             } else if let Some(first) = flight.pop_front() {
                 // Gather the whole aggregation burst: every in-flight packet sharing this
@@ -4314,7 +4318,7 @@ mod test {
         const AGG_NS: u64 = 1_000_000;
 
         // bottleneck serialization time for one MSS-sized packet
-        let btl_service_ns: u64 = (MSS as f64 / BW * 1e9).round() as u64;
+        let btl_service_ns: u64 = math::round(MSS as f64 / BW * 1e9) as u64;
 
         // Drive the production default configuration.
         let mut bbr = Bbr3::new(Arc::new(Bbr3Config::default()), MSS as u16);
@@ -4400,7 +4404,7 @@ mod test {
 
                 // pace the next send at BBR's chosen pacing rate
                 let pacing = bbr.pacing_rate.max(1.0);
-                next_send_ns = send_ns + (MSS as f64 / pacing * 1e9).round() as u64;
+                next_send_ns = send_ns + math::round(MSS as f64 / pacing * 1e9) as u64;
                 pn += 1;
             } else if let Some(first) = flight.pop_front() {
                 // Gather the whole aggregation burst: every in-flight packet sharing this
@@ -4632,7 +4636,7 @@ mod test {
         const RET_NS: u64 = PROP_NS / 2;
 
         // bottleneck serialization time for one MSS-sized packet
-        let btl_service_ns: u64 = (MSS as f64 / BW * 1e9).round() as u64;
+        let btl_service_ns: u64 = math::round(MSS as f64 / BW * 1e9) as u64;
 
         // Seed the probe RNG so the PROBE_BW bw-probe wait (hence the cruise sojourn length) is
         // deterministic and the pair-count target below is not flaky.
@@ -4734,7 +4738,7 @@ mod test {
 
                 // pace the next send at BBR's chosen pacing rate
                 let pacing = bbr.pacing_rate.max(1.0);
-                next_send_ns = send_ns + (MSS as f64 / pacing * 1e9).round() as u64;
+                next_send_ns = send_ns + math::round(MSS as f64 / pacing * 1e9) as u64;
                 pn += 1;
             } else if let Some(first) = flight.pop_front() {
                 // Gather every packet sharing this release instant: a delayed-ACK pair carries
@@ -4964,7 +4968,7 @@ mod test {
         let mut pn: u64 = 0;
 
         // bottleneck serialization time for one MSS-sized packet; lowered 10x at the bump.
-        let mut btl_service_ns: u64 = (MSS as f64 / BW_LO * 1e9).round() as u64;
+        let mut btl_service_ns: u64 = math::round(MSS as f64 / BW_LO * 1e9) as u64;
         // The 10x jump fires once PROBE_BW has been reached AND inflight_longterm is finite (the
         // seeding loss has set it). Only then does the exponential-slope machinery have a base.
         let mut bumped = false;
@@ -5021,7 +5025,7 @@ mod test {
                 });
                 // pace the next send at BBR's chosen pacing rate
                 let pacing = bbr.pacing_rate.max(1.0);
-                next_send_ns = send_ns + (MSS as f64 / pacing * 1e9).round() as u64;
+                next_send_ns = send_ns + math::round(MSS as f64 / pacing * 1e9) as u64;
                 pn += 1;
             } else if let Some(p) = flight.pop_front() {
                 now_ns = now_ns.max(p.event_ns);
@@ -5063,7 +5067,7 @@ mod test {
                     bump_max_bw = bbr.max_bw;
                     bump_round = bbr.round_count;
                     up_rounds.push((bbr.inflight_longterm, bbr.bw_probe_up_rounds));
-                    btl_service_ns = (MSS as f64 / BW_HI * 1e9).round() as u64;
+                    btl_service_ns = math::round(MSS as f64 / BW_HI * 1e9) as u64;
                 }
 
                 // Record (inflight_longterm, bw_probe_up_rounds) once per PROBE_UP round-start
@@ -5224,7 +5228,7 @@ mod test {
         let mut pn: u64 = 0;
 
         // bottleneck serialization time for one MSS-sized packet; raised 10x at the cut.
-        let mut btl_service_ns: u64 = (MSS as f64 / BW_HI * 1e9).round() as u64;
+        let mut btl_service_ns: u64 = math::round(MSS as f64 / BW_HI * 1e9) as u64;
         // The 10x cut fires once PROBE_BW has been reached at the high rate (max_bw ~= BW_HI).
         let mut cut = false;
         // max_bw / cycle_count captured at the cut (the high-rate operating point).
@@ -5279,7 +5283,7 @@ mod test {
                 });
                 // pace the next send at BBR's chosen pacing rate
                 let pacing = bbr.pacing_rate.max(1.0);
-                next_send_ns = send_ns + (MSS as f64 / pacing * 1e9).round() as u64;
+                next_send_ns = send_ns + math::round(MSS as f64 / pacing * 1e9) as u64;
                 pn += 1;
             } else if let Some(p) = flight.pop_front() {
                 now_ns = now_ns.max(p.event_ns);
@@ -5307,7 +5311,7 @@ mod test {
                     cut = true;
                     cut_max_bw = bbr.max_bw;
                     cut_cycle = bbr.cycle_count;
-                    btl_service_ns = (MSS as f64 / BW_LO * 1e9).round() as u64;
+                    btl_service_ns = math::round(MSS as f64 / BW_LO * 1e9) as u64;
                 }
 
                 // After the cut, watch the short-term model descend and the long-term filter
@@ -5511,7 +5515,7 @@ mod test {
                 });
                 // pace the next send at BBR's chosen pacing rate
                 let pacing = bbr.pacing_rate.max(1.0);
-                next_send_ns = send_ns + (MSS as f64 / pacing * 1e9).round() as u64;
+                next_send_ns = send_ns + math::round(MSS as f64 / pacing * 1e9) as u64;
                 pn += 1;
             } else if let Some(p) = flight.pop_front() {
                 now_ns = now_ns.max(p.event_ns);
@@ -5684,7 +5688,7 @@ mod test {
         let mut btl_free_ns: u64 = 0;
         let mut inflight: u64 = 0;
         let mut pn: u64 = 0;
-        let btl_service_ns: u64 = (MSS as f64 / BW * 1e9).round() as u64;
+        let btl_service_ns: u64 = math::round(MSS as f64 / BW * 1e9) as u64;
 
         // Pre-loss PROBE_UP snapshot, taken the first time the flow is in PROBE_UP,
         // before any reordering is introduced.
@@ -5729,7 +5733,7 @@ mod test {
                 });
                 // pace the next send at BBR's chosen pacing rate
                 let pacing = bbr.pacing_rate.max(1.0);
-                next_send_ns = send_ns + (MSS as f64 / pacing * 1e9).round() as u64;
+                next_send_ns = send_ns + math::round(MSS as f64 / pacing * 1e9) as u64;
                 pn += 1;
 
                 // First time in PROBE_UP: snapshot the pre-loss model, then stop sending and begin
@@ -5964,7 +5968,7 @@ mod test {
         let mut btl_free_ns: u64 = 0;
         let mut inflight: u64 = 0;
         let mut pn: u64 = 0;
-        let btl_service_ns: u64 = (MSS as f64 / BW * 1e9).round() as u64;
+        let btl_service_ns: u64 = math::round(MSS as f64 / BW * 1e9) as u64;
 
         // Pre-loss PROBE_UP snapshot, taken the first time the flow is in PROBE_UP,
         // before the RTO is introduced.
@@ -6010,7 +6014,7 @@ mod test {
                 });
                 // pace the next send at BBR's chosen pacing rate
                 let pacing = bbr.pacing_rate.max(1.0);
-                next_send_ns = send_ns + (MSS as f64 / pacing * 1e9).round() as u64;
+                next_send_ns = send_ns + math::round(MSS as f64 / pacing * 1e9) as u64;
                 pn += 1;
 
                 // First time in PROBE_UP: snapshot the pre-loss model, then stop sending so a full
@@ -6225,7 +6229,7 @@ mod test {
         const ROUNDS_CAP: u64 = 120;
 
         // bottleneck serialization time for one MSS-sized packet
-        let btl_service_ns: u64 = (MSS as f64 / BW * 1e9).round() as u64;
+        let btl_service_ns: u64 = math::round(MSS as f64 / BW * 1e9) as u64;
 
         // Drive the production default configuration.
         let mut bbr = Bbr3::new(Arc::new(Bbr3Config::default()), MSS as u16);
@@ -6299,7 +6303,7 @@ mod test {
 
                 // pace the next send at BBR's chosen pacing rate
                 let pacing = bbr.pacing_rate.max(1.0);
-                next_send_ns = send_ns + (MSS as f64 / pacing * 1e9).round() as u64;
+                next_send_ns = send_ns + math::round(MSS as f64 / pacing * 1e9) as u64;
                 pn += 1;
             } else if let Some(p) = flight.pop_front() {
                 now_ns = now_ns.max(p.ack_ns);
@@ -6520,7 +6524,7 @@ mod test {
         let mut btl_free_ns: u64 = 0;
         let mut inflight: u64 = 0;
         let mut pn: u64 = 0;
-        let btl_service_ns: u64 = (MSS as f64 / BW * 1e9).round() as u64;
+        let btl_service_ns: u64 = math::round(MSS as f64 / BW * 1e9) as u64;
 
         // Episode 1: the value inflight_longterm was clamped to when the first PROBE_UP loss made
         // it finite (from u64::MAX). Marks the "established" precondition and switches
@@ -6569,7 +6573,7 @@ mod test {
                     ack_ns,
                 });
                 let pacing = bbr.pacing_rate.max(1.0);
-                next_send_ns = send_ns + (MSS as f64 / pacing * 1e9).round() as u64;
+                next_send_ns = send_ns + math::round(MSS as f64 / pacing * 1e9) as u64;
                 pn += 1;
             } else if let Some(p) = flight.pop_front() {
                 now_ns = now_ns.max(p.ack_ns);
@@ -6737,7 +6741,7 @@ mod test {
         const APP_WINDOW: u64 = 200 * MSS;
 
         // bottleneck serialization time for one MSS-sized packet
-        let btl_service_ns: u64 = (MSS as f64 / BW * 1e9).round() as u64;
+        let btl_service_ns: u64 = math::round(MSS as f64 / BW * 1e9) as u64;
 
         // Production default, but pin the probe RNG: once app-limiting lifts at the
         // PROBE_REFILL -> PROBE_UP edge the flow does genuine PROBE_BW cycling, whose
@@ -6842,7 +6846,7 @@ mod test {
 
                 // pace the next send at BBR's chosen pacing rate
                 let pacing = bbr.pacing_rate.max(1.0);
-                next_send_ns = send_ns + (MSS as f64 / pacing * 1e9).round() as u64;
+                next_send_ns = send_ns + math::round(MSS as f64 / pacing * 1e9) as u64;
                 pn += 1;
             } else if let Some(p) = flight.pop_front() {
                 now_ns = now_ns.max(p.ack_ns);
