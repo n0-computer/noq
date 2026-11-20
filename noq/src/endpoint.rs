@@ -800,9 +800,10 @@ impl State {
         let get_time = || runtime.now();
         buffer.limiter.start_cycle(get_time);
         let mut poll = |socket: &mut dyn AsyncUdpSocket, received_connection_packet: &mut bool| {
-            buffer.poll_recv(cx, socket, runtime, &mut |metas, datagrams| {
-                *received_connection_packet |=
-                    recv_state.handle_received(inner, sender, ipv6, now, metas, datagrams);
+            buffer.poll_recv(cx, socket, runtime, &mut |metas, datagrams, events| {
+                recv_state.handle_received(inner, sender, ipv6, now, metas, datagrams, events);
+                *received_connection_packet |= !events.is_empty();
+                events.dispatch();
                 true
             })
         };
@@ -1106,7 +1107,9 @@ impl RecvState {
     /// Hands a batch of received datagrams to the endpoint
     ///
     /// With `ipv6`, the endpoint keeps addresses as IPv6, so IPv4 sources become IPv4-mapped.
-    /// Returns whether a datagram was routed to an existing connection.
+    /// Events for existing connections are added to `events` rather than sent, so that the
+    /// caller can send them after releasing the endpoint lock.
+    #[allow(clippy::too_many_arguments)]
     fn handle_received(
         &mut self,
         endpoint: &mut proto::Endpoint,
@@ -1115,8 +1118,8 @@ impl RecvState {
         now: Instant,
         metas: &mut [RecvMeta],
         datagrams: &mut BytesMut,
-    ) -> bool {
-        let mut received_connection_packet = false;
+        events: &mut PendingEvents,
+    ) {
         for meta in metas {
             if ipv6 {
                 meta.addr = SocketAddr::V6(ensure_ipv6(meta.addr));
@@ -1142,15 +1145,8 @@ impl RecvState {
                         }
                     }
                     Some(DatagramEvent::ConnectionEvent(handle, event)) => {
-                        // Ignoring errors from dropped connections that haven't yet
-                        // been cleaned up
-                        received_connection_packet = true;
-                        let _ = self
-                            .connections
-                            .senders
-                            .get_mut(&handle)
-                            .unwrap()
-                            .send(ConnectionEvent::Proto(event));
+                        let sender = &self.connections.senders[&handle];
+                        events.push(sender, event);
                     }
                     Some(DatagramEvent::Response(transmit)) => {
                         respond(transmit, &response_buffer, sender);
@@ -1159,7 +1155,41 @@ impl RecvState {
                 }
             }
         }
-        received_connection_packet
+    }
+}
+
+/// Events for connections, collected under the endpoint lock and sent after releasing it
+///
+/// Sending wakes the connection's task, which may wake a runtime worker thread. Doing that
+/// outside the lock keeps the time other receive tasks wait for it short.
+#[derive(Debug, Default)]
+struct PendingEvents(
+    Vec<(
+        mpsc::UnboundedSender<ConnectionEvent>,
+        proto::ConnectionEvent,
+    )>,
+);
+
+impl PendingEvents {
+    /// Adds `event` for the connection of `sender`
+    fn push(
+        &mut self,
+        sender: &mpsc::UnboundedSender<ConnectionEvent>,
+        event: proto::ConnectionEvent,
+    ) {
+        self.0.push((sender.clone(), event));
+    }
+
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Sends all events to their connections, in the order they were added
+    fn dispatch(&mut self) {
+        for (sender, event) in self.0.drain(..) {
+            // Ignoring errors from dropped connections that haven't yet been cleaned up
+            let _ = sender.send(ConnectionEvent::Proto(event));
+        }
     }
 }
 
@@ -1168,6 +1198,8 @@ struct RecvBuffer {
     buf: Box<[u8]>,
     /// Reused buffer that received datagrams are copied into and split into owned slices
     datagrams: BytesMut,
+    /// Reused buffer of the connection events of one batch
+    events: PendingEvents,
     limiter: WorkLimiter,
 }
 
@@ -1179,6 +1211,7 @@ impl RecvBuffer {
         Self {
             buf: vec![0; datagram_capacity * BATCH_SIZE].into(),
             datagrams: BytesMut::with_capacity(datagram_capacity),
+            events: PendingEvents::default(),
             limiter: WorkLimiter::new(RECV_TIME_BOUND),
         }
     }
@@ -1192,7 +1225,7 @@ impl RecvBuffer {
         cx: &mut Context<'_>,
         socket: &mut S,
         runtime: &dyn Runtime,
-        dispatch: &mut dyn FnMut(&mut [RecvMeta], &mut BytesMut) -> bool,
+        dispatch: &mut dyn FnMut(&mut [RecvMeta], &mut BytesMut, &mut PendingEvents) -> bool,
     ) -> io::Result<bool> {
         let mut metas = [RecvMeta::default(); BATCH_SIZE];
         let mut iovs: [IoSliceMut<'_>; BATCH_SIZE] = {
@@ -1223,7 +1256,11 @@ impl RecvBuffer {
                     for (meta, buf) in metas.iter().zip(iovs.iter()).take(msgs) {
                         self.datagrams.extend_from_slice(&buf[..meta.len]);
                     }
-                    if !dispatch(&mut metas[..msgs], &mut self.datagrams) {
+                    let keep_going =
+                        dispatch(&mut metas[..msgs], &mut self.datagrams, &mut self.events);
+                    // `dispatch` sends the events, unless it stopped early.
+                    self.events.0.clear();
+                    if !keep_going {
                         return Ok(false);
                     }
                 }
@@ -1313,7 +1350,8 @@ impl ReceiverControl {
 /// Receives from one receiver of a socket of an endpoint with multiple sockets
 ///
 /// One of these runs per receiver. It owns the receiver and polls it without the endpoint
-/// lock. It takes the lock only to hand a received batch to the endpoint.
+/// lock. It takes the lock only to hand a received batch to the endpoint, and sends the
+/// resulting connection events after releasing it.
 struct ReceiverDriver {
     endpoint: Arc<EndpointInner>,
     receiver: Box<dyn UdpReceiver>,
@@ -1334,27 +1372,31 @@ impl Future for ReceiverDriver {
         let mut endpoint_gone = false;
         let get_time = || runtime.now();
         this.buffer.limiter.start_cycle(get_time);
-        let result =
-            this.buffer
-                .poll_recv(cx, &mut *this.receiver, runtime, &mut |metas, datagrams| {
-                    let now = runtime.now();
-                    let mut guard = endpoint.state.lock().unwrap();
-                    if guard.driver_lost {
-                        endpoint_gone = true;
-                        return false;
-                    }
-                    let state = &mut *guard;
-                    let (inner, sender) = (&mut state.inner, &mut state.sender);
-                    state
-                        .recv_state
-                        .handle_received(inner, sender, state.ipv6, now, metas, datagrams);
-                    let has_incoming = !state.recv_state.incoming.is_empty();
-                    drop(guard);
-                    if has_incoming {
-                        endpoint.shared.incoming.notify_waiters();
-                    }
-                    true
-                });
+        let result = this.buffer.poll_recv(
+            cx,
+            &mut *this.receiver,
+            runtime,
+            &mut |metas, datagrams, events| {
+                let now = runtime.now();
+                let mut guard = endpoint.state.lock().unwrap();
+                if guard.driver_lost {
+                    endpoint_gone = true;
+                    return false;
+                }
+                let state = &mut *guard;
+                let (inner, sender) = (&mut state.inner, &mut state.sender);
+                state
+                    .recv_state
+                    .handle_received(inner, sender, state.ipv6, now, metas, datagrams, events);
+                let has_incoming = !state.recv_state.incoming.is_empty();
+                drop(guard);
+                events.dispatch();
+                if has_incoming {
+                    endpoint.shared.incoming.notify_waiters();
+                }
+                true
+            },
+        );
         this.buffer.limiter.finish_cycle(get_time);
         match result {
             _ if endpoint_gone => Poll::Ready(()),
