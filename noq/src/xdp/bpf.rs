@@ -233,7 +233,8 @@ fn attach_program(program: libc::c_int, ifindex: u32, mode: AttachMode) -> io::R
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Insn {
     code: u8,
-    /// Destination register in the low nibble, source register in the high nibble
+    /// The `dst_reg:4, src_reg:4` bitfield: destination register in the low nibble on
+    /// little-endian hosts, in the high nibble on big-endian hosts
     regs: u8,
     off: i16,
     imm: i32,
@@ -241,9 +242,15 @@ struct Insn {
 
 impl Insn {
     const fn new(code: u8, dst: u8, src: u8, off: i16, imm: i32) -> Self {
+        // C bitfields are laid out from the least significant bit on little-endian targets and
+        // from the most significant bit on big-endian ones.
+        let regs = match cfg!(target_endian = "little") {
+            true => (src << 4) | dst,
+            false => (dst << 4) | src,
+        };
         Self {
             code,
-            regs: (src << 4) | dst,
+            regs,
             off,
             imm,
         }
@@ -285,9 +292,9 @@ const TO_PASS: i16 = i16::MIN;
 /// on a queue without a registered socket also goes to the kernel, through the `XDP_PASS`
 /// fallback of `bpf_redirect_map`. IPv4 options make the program pass the packet too.
 fn program(local_addr: SocketAddrV4, xsk_map: libc::c_int) -> Vec<Insn> {
-    // Packet bytes are loaded in network order into little-endian registers, so compare
-    // against the byte-swapped value. BPF has no big-endian hosts that run XDP in practice,
-    // but `from_ne_bytes` keeps this correct on them too.
+    // Packet loads interpret bytes in host order, so the immediates are the wire bytes read in
+    // host order: byte-swapped on little-endian hosts, unchanged on big-endian ones such as
+    // s390x.
     let ethertype = i32::from(u16::from_ne_bytes([0x08, 0x00]));
     let port = i32::from(u16::from_ne_bytes(local_addr.port().to_be_bytes()));
     let addr = i32::from_ne_bytes(local_addr.ip().octets());
@@ -376,6 +383,12 @@ mod tests {
     fn insn_encodes_registers_in_nibbles() {
         let insn = Insn::new(LD_IMM64, 1, BPF_PSEUDO_MAP_FD, 0, 3);
         assert_eq!(insn.regs, 0x11);
+        let insn = Insn::new(MOV64_REG, 6, 1, 0, 0);
+        let expected = match cfg!(target_endian = "little") {
+            true => 0x16,
+            false => 0x61,
+        };
+        assert_eq!(insn.regs, expected);
         assert_eq!(size_of::<Insn>(), 8);
     }
 }
