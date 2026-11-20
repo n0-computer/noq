@@ -2,7 +2,43 @@
 
 All notable changes to noq will be documented in this file.
 
-## [1.4.0](https://github.com/n0-computer/noq/compare/noq-v1.3.0..1.4.0) - 2026-10-20
+## [1.5.0](https://github.com/n0-computer/noq/compare/noq-v1.4.0..1.5.0) - 2026-11-19
+
+### ⛰️  Features
+
+- *(noq-proto)* Deprecate send_fairness and remove unfair scheduling ([#835](https://github.com/n0-computer/noq/issues/835)) - ([a78daf8](https://github.com/n0-computer/noq/commit/a78daf871419d9ebec591d40ba5a08aff1eba854))
+- *(proto)* Implement `noq_proto::SendStream::set_affinity` ([#836](https://github.com/n0-computer/noq/issues/836)) - ([07047ff](https://github.com/n0-computer/noq/commit/07047ffa934760a8e9bd462f26fc457901a358c2))
+- Bump minor version number to fix semver CI ([#857](https://github.com/n0-computer/noq/issues/857)) - ([eece61a](https://github.com/n0-computer/noq/commit/eece61a9d0e2542e2122d6b83ab5191954038ae3))
+- Allow streams to set an affinity for a path, simple version ([#881](https://github.com/n0-computer/noq/issues/881)) - ([2f3ba68](https://github.com/n0-computer/noq/commit/2f3ba68ab18329697a5c4b8330ff1e93fa1b78ce))
+
+### 🐛 Bug Fixes
+
+- *(ci)* Bump deps for illumos ([#856](https://github.com/n0-computer/noq/issues/856)) - ([c1c4950](https://github.com/n0-computer/noq/commit/c1c49506745c5581d57fc986b5b6f17e02af5e69))
+- *(perf)* Don't enable qlog feature in perf binary ([#850](https://github.com/n0-computer/noq/issues/850)) - ([a80c82e](https://github.com/n0-computer/noq/commit/a80c82e49734aa76d6c7808238b9e7a0a900e627))
+- *(proto)* Coalesce contiguous chunks during defragment ([#866](https://github.com/n0-computer/noq/issues/866)) - ([3ff2822](https://github.com/n0-computer/noq/commit/3ff2822f9e6ef327501f75cd6bc0f7d0f3e9b76a))
+- *(proto)* Keep unread data when compacting an unordered stream ([#867](https://github.com/n0-computer/noq/issues/867)) - ([b70f1f2](https://github.com/n0-computer/noq/commit/b70f1f2e444d3afdfb7a0cdf2b3d9f14c859a2ea))
+- *(proto)* Track the key update boundary per path ([#869](https://github.com/n0-computer/noq/issues/869)) - ([bb9a5ed](https://github.com/n0-computer/noq/commit/bb9a5edca13c513003e875b02b9b0c4be667658d))
+- *(udp)* Handle receive errors before truncation flags in recv_single ([#884](https://github.com/n0-computer/noq/issues/884)) - ([04807b6](https://github.com/n0-computer/noq/commit/04807b674cff617cbac323256416dc4779ccf7c2))
+
+### 🧪 Testing
+
+- Increase local slow-tests timeout ([#860](https://github.com/n0-computer/noq/issues/860)) - ([9672cac](https://github.com/n0-computer/noq/commit/9672cac792ca3a8b0059f2c8adc80140973b761f))
+- Additional stream affinity tests ([#890](https://github.com/n0-computer/noq/issues/890)) - ([5773596](https://github.com/n0-computer/noq/commit/577359636cbf47fd3997d98c1ff47d77f20b497b))
+
+### ⚙️ Miscellaneous Tasks
+
+- *(ci)* Migrate CI runners mostly to blacksmith ([#861](https://github.com/n0-computer/noq/issues/861)) - ([2d7214a](https://github.com/n0-computer/noq/commit/2d7214a98e8df1f4263c820f8baa616fa3613b10))
+- *(ci)* Fix workflows for test binaries locations ([#896](https://github.com/n0-computer/noq/issues/896)) - ([4f5b094](https://github.com/n0-computer/noq/commit/4f5b094f98f9932044c0d0b25adb1561245e0885))
+- Use shared minimal-crates worksflow ([#862](https://github.com/n0-computer/noq/issues/862)) - ([70fdbfa](https://github.com/n0-computer/noq/commit/70fdbfa24ea2a96646572d40d58ea7d3a2e4d7e6))
+- Upgrade async-executor and allow warnings in patchbay build ([#888](https://github.com/n0-computer/noq/issues/888)) - ([99ad1cc](https://github.com/n0-computer/noq/commit/99ad1cc0c7a967f156b72ca7fa789919a68e2b1e))
+- Humantime is unmaintained ([#900](https://github.com/n0-computer/noq/issues/900)) - ([d2367f4](https://github.com/n0-computer/noq/commit/d2367f41c7342fcd3e8d620749a66dc370d731eb))
+- Update issue template checkboxes ([#897](https://github.com/n0-computer/noq/issues/897)) - ([bb1c63e](https://github.com/n0-computer/noq/commit/bb1c63ee620b622281bfad8330b9a5a14e73372a))
+
+### Deps
+
+- Bump tokio for RUSTSEC-2026-0386 ([#868](https://github.com/n0-computer/noq/issues/868)) - ([2f667bd](https://github.com/n0-computer/noq/commit/2f667bd06acefaf002f03bffeef43b94e07f6a9a))
+
+## [noq-v1.4.0](https://github.com/n0-computer/noq/compare/noq-v1.3.0..noq-v1.4.0) - 2026-10-20
 
 ### ⛰️  Features
 
@@ -99,6 +135,7 @@ All notable changes to noq will be documented in this file.
 - Treat an equal-size delivery as evidence against a preceding loss burst ([#2792](https://github.com/n0-computer/noq/issues/2792)) - ([b0afb6e](https://github.com/n0-computer/noq/commit/b0afb6e6fb2261ee1c6a1f69f396627e80ff4fb7))
 - Apply RFC 9000 §12.4 packet-type rules to CONNECTION_CLOSE ([#2804](https://github.com/n0-computer/noq/issues/2804)) - ([d5d5b97](https://github.com/n0-computer/noq/commit/d5d5b978c2b82e95beba3ed652c80e903e716a90))
 - Replace the assembler BinaryHeap with a sorted VecDeque ([#2803](https://github.com/n0-computer/noq/issues/2803)) - ([ba18f6c](https://github.com/n0-computer/noq/commit/ba18f6c12ad96a66c92d38471eb3370b7bd68337))
+- Release - ([34f75c4](https://github.com/n0-computer/noq/commit/34f75c49f93de5e2ff943483cabc5b6d0c5df918))
 
 ### Build
 
@@ -799,9 +836,15 @@ All notable changes to noq will be documented in this file.
 - *(proto)* Improve PTO calculations on shutdown ([#269](https://github.com/n0-computer/noq/issues/269)) - ([4dcb3a7](https://github.com/n0-computer/noq/commit/4dcb3a7f05d1b3eb5441334ed301fed316fd79aa))
 - *(quinn)* Expose per path ping method - ([6861f4f](https://github.com/n0-computer/noq/commit/6861f4f0b2d4b28db5a6d44cbd3d3708cf1725d7))
 - *(quinn)* Expose per path ping method ([#290](https://github.com/n0-computer/noq/issues/290)) - ([200a68a](https://github.com/n0-computer/noq/commit/200a68a0d92a6a3d6392ba229429bee7c0eb5b44))
+- *(quinn-proto)* Validate paths_blocked and path_cids_blocked frames - ([1ccc1dc](https://github.com/n0-computer/noq/commit/1ccc1dc4f859a8aface21b1adb6439b0d658f6b0))
+- *(quinn-proto)* Handle receiving of path availability frames ([#77](https://github.com/n0-computer/noq/issues/77)) - ([63d254b](https://github.com/n0-computer/noq/commit/63d254b996108cb50b11e30665ac9ce19b6cb747))
 - *(quinn-proto)* Use RTT from path challenges, implement path challenge resending ([#178](https://github.com/n0-computer/noq/issues/178)) - ([1fdbf69](https://github.com/n0-computer/noq/commit/1fdbf6912e03379f5a78bd7db602eecd54a10c65))
 - *(quinn-proto)* Retry client sent probes when the failures might be spurious ([#271](https://github.com/n0-computer/noq/issues/271)) - ([c8f5510](https://github.com/n0-computer/noq/commit/c8f55101b5b90eb01c0d54c9f6f2f12f338caeef))
 - *(test)* Set `dst_ip` for incoming datagrams in `TestEndpoint` ([#248](https://github.com/n0-computer/noq/issues/248)) - ([ad4c99f](https://github.com/n0-computer/noq/commit/ad4c99f126c9e0de3f331cf1eb645d1d305e2b5b))
+- Initial setup for high level open path api ([#81](https://github.com/n0-computer/noq/issues/81)) - ([e9e94af](https://github.com/n0-computer/noq/commit/e9e94af1a96c1075666c0cb5a11566777fea309d))
+- Merge iroh-0.11.x ([#109](https://github.com/n0-computer/noq/issues/109)) - ([e052000](https://github.com/n0-computer/noq/commit/e05200036bfb3c68bf51b3122ebe6471c4002fff))
+- Add `upgrade` function for weak connection handle - ([0d929df](https://github.com/n0-computer/noq/commit/0d929df5f69ddc660c8ce81e9c348af7972862db))
+- Add `upgrade` function for weak connection handle ([#110](https://github.com/n0-computer/noq/issues/110)) - ([70e2887](https://github.com/n0-computer/noq/commit/70e28875923db76f8dfbf4f058e682d56e6daea1))
 - Update multipath to latest released quinn (b2b930a) ([#128](https://github.com/n0-computer/noq/issues/128)) - ([81734b9](https://github.com/n0-computer/noq/commit/81734b917552e719ed4c2f9bd01e77b7999e041c))
 - Add `Connection::on_close` to get notified on close without keeping the connection alive ([#153](https://github.com/n0-computer/noq/issues/153)) - ([19817fc](https://github.com/n0-computer/noq/commit/19817fcc9b9f9a14473e2724262218aa59e42c69))
 - Add n0's version of quic nat hole punching ([#177](https://github.com/n0-computer/noq/issues/177)) - ([fc187cb](https://github.com/n0-computer/noq/commit/fc187cb1511e3905f8823ebe898cd101f4ce1d5e))
@@ -814,6 +857,7 @@ All notable changes to noq will be documented in this file.
 
 ### 🐛 Bug Fixes
 
+- *(ci)* Delete repo level project tracking ([#72](https://github.com/n0-computer/noq/issues/72)) - ([12218f9](https://github.com/n0-computer/noq/commit/12218f93dbfe52dbde4b2b2526f285a2c4acc121))
 - *(ci)* Daily mac os job ([#229](https://github.com/n0-computer/noq/issues/229)) - ([11a024b](https://github.com/n0-computer/noq/commit/11a024ba733c8eb00a5cb09b61a649127b52463d))
 - *(ci)* Windows deps - ([eb59f64](https://github.com/n0-computer/noq/commit/eb59f64ae57331968a1f506d78887c337484a048))
 - *(ci)* Windows deps ([#267](https://github.com/n0-computer/noq/issues/267)) - ([d1a6b5a](https://github.com/n0-computer/noq/commit/d1a6b5a3d174b4bf56e9cb7a5026ba0097f70c3a))
@@ -841,9 +885,12 @@ All notable changes to noq will be documented in this file.
 - *(proto)* Send the close frame on the available path ([#274](https://github.com/n0-computer/noq/issues/274)) - ([9d73ec4](https://github.com/n0-computer/noq/commit/9d73ec4a9476132cb0d38b09e63e2ceb85670b5c))
 - *(proto)* Actually use per path default configs - ([6dbfb68](https://github.com/n0-computer/noq/commit/6dbfb684e5a85e2900185debff579aaa8c5b23a8))
 - *(proto)* Actually use per path default configs ([#286](https://github.com/n0-computer/noq/issues/286)) - ([e8953c6](https://github.com/n0-computer/noq/commit/e8953c6f285cef31bb8cef2902eb2f7d7d8ae8ca))
+- *(quinn-proto)* Improve per path logic in poll_transmit - ([e8a83c4](https://github.com/n0-computer/noq/commit/e8a83c4e6c79ba019b74fcbbf7e77b93ef4f1033))
+- *(quinn-proto)* Correctly associate ACKs to paths ([#79](https://github.com/n0-computer/noq/issues/79)) - ([339b6cf](https://github.com/n0-computer/noq/commit/339b6cf9045d4e2198ff8c9eacfb99e2246e8362))
 - *(quinn-proto)* Set the hole punching round - ([56294fe](https://github.com/n0-computer/noq/commit/56294fe70799adf81b4144c11662e3c943723782))
 - *(quinn-proto)* Prevent O(N^2) behaviour when sending a lot of small values in SendBuffer ([#247](https://github.com/n0-computer/noq/issues/247)) - ([ad47fc6](https://github.com/n0-computer/noq/commit/ad47fc662163f8bb58b4552e4b2db9aeac923041))
 - *(udp/unix)* Don't panic on unknown address family - ([c1c5686](https://github.com/n0-computer/noq/commit/c1c56861cff978bcedddc4c4cd953eca1d1ef5b2))
+- Errors from merging - ([c5b5567](https://github.com/n0-computer/noq/commit/c5b556736cf8e5297b3d52eb58144318ca490dd6))
 - Key update on the first packet of a new PathId ([#165](https://github.com/n0-computer/noq/issues/165)) - ([34eee26](https://github.com/n0-computer/noq/commit/34eee26fc7fbc9ccb140380c0219ee387e70328d))
 - Reset tail-loss probes when discarding a space ([#171](https://github.com/n0-computer/noq/issues/171)) - ([3b3a5e8](https://github.com/n0-computer/noq/commit/3b3a5e8ec6f68cf8242b182f1ae58a6d65aa9449))
 - Accept or reject incoming frames based on `self.local_max_path_id` instead of `Connection::max_path_id` ([#183](https://github.com/n0-computer/noq/issues/183)) - ([5bd31b7](https://github.com/n0-computer/noq/commit/5bd31b72f83170c4c93bee8b0f667da521a2c1eb))
@@ -876,6 +923,7 @@ All notable changes to noq will be documented in this file.
 - *(quinn-proto)* Create an encodable type for non encodable frames ([#294](https://github.com/n0-computer/noq/issues/294)) - ([226ff0d](https://github.com/n0-computer/noq/commit/226ff0de42ebdbfd78c965046149e1c6e51b6048))
 - *(quinn-proto)* Use enum-assoc instead of manual macro for frametype - ([bacde87](https://github.com/n0-computer/noq/commit/bacde87c7195ec1a2428500cde16810371d55b01))
 - *(quinn-proto)* Use enum-assoc instead of manual macro for FrameType ([#298](https://github.com/n0-computer/noq/issues/298)) - ([7ce0396](https://github.com/n0-computer/noq/commit/7ce0396198789ff7b66b5d71bfc12fbd162589df))
+- Improve path ack handling - ([4fad7bb](https://github.com/n0-computer/noq/commit/4fad7bb7cffdbdace8848499e780322aaf6c3d6c))
 - Split path stats from connection stats - ([edb72f9](https://github.com/n0-computer/noq/commit/edb72f9e7ca6c606472836d4e7d4c2dfdf0bdd00))
 - Split path stats from connection stats ([#168](https://github.com/n0-computer/noq/issues/168)) - ([dced59e](https://github.com/n0-computer/noq/commit/dced59ee0ae406fa4445136c33c598448e0e738f))
 - Use constants for error codes - ([61c87ab](https://github.com/n0-computer/noq/commit/61c87aba64021f314d6252fc9a687a253c70a04e))
@@ -935,6 +983,9 @@ All notable changes to noq will be documented in this file.
 - *(deps)* Bump hex-literal from 1.0.0 to 1.1.0 - ([7fc33f4](https://github.com/n0-computer/noq/commit/7fc33f4143f1084e9839f858177fc9cb7720a084))
 - *(deps)* Bump bytes from 1.10.1 to 1.11.0 - ([ac22065](https://github.com/n0-computer/noq/commit/ac22065c2943e5578d191179d908ffcb0afa1b6e))
 - *(deps)* Bump actions/checkout from 5 to 6 - ([d2cdd65](https://github.com/n0-computer/noq/commit/d2cdd65ca44208f4820ff612f72578b8461efe7e))
+- Add project tracking ([#24](https://github.com/n0-computer/noq/issues/24)) - ([fd9f5c1](https://github.com/n0-computer/noq/commit/fd9f5c10244caf14d1e49d610849c38e3756513a))
+- Fixup - ([1bc4f51](https://github.com/n0-computer/noq/commit/1bc4f5176a2e2e8823390d5419f08d95042214d0))
+- Remove individual repo project tracking ([#34](https://github.com/n0-computer/noq/issues/34)) - ([d579a38](https://github.com/n0-computer/noq/commit/d579a38fab6b8a00f3925e966b02787486047676))
 - Unused var - ([c232f40](https://github.com/n0-computer/noq/commit/c232f40b993d09ab48ee0d4833119925ea594e73))
 - Only consider a path available if it has CIDs ([#173](https://github.com/n0-computer/noq/issues/173)) - ([6dcadf2](https://github.com/n0-computer/noq/commit/6dcadf2867a55d4b3b7425689f5ab4d20100a2c0))
 - Fix wasm builds ([#186](https://github.com/n0-computer/noq/issues/186)) - ([7854c50](https://github.com/n0-computer/noq/commit/7854c50e0ea22cd3a6592315b13fc189a4358a23))
@@ -956,6 +1007,13 @@ All notable changes to noq will be documented in this file.
 
 - Use the local max path ID instead of `Connection::max_path_id` in receive paths - ([b0e69b5](https://github.com/n0-computer/noq/commit/b0e69b534bb600ea3c0e2a27662aab950b2dc172))
 
+### WIP
+
+- Issue per-path CIDs and keep track of them - ([882fdf2](https://github.com/n0-computer/noq/commit/882fdf2370cd88d0f44ab080e20bbf5d44dade45))
+- Issue per-path CIDs and keep track of them ([#47](https://github.com/n0-computer/noq/issues/47)) - ([1e3b7e8](https://github.com/n0-computer/noq/commit/1e3b7e8e59515505d12f0a888861b6bd6a99709b))
+- Send CIDs for new paths correctly, if requested - ([ecd92e8](https://github.com/n0-computer/noq/commit/ecd92e8c613b4ee3354f6294909e6a6ca9662a2e))
+- Send on multiple paths - ([d056825](https://github.com/n0-computer/noq/commit/d056825cd10e7f4303481a4daa88b584b29e85f0))
+
 ### Deps
 
 - Switch to criterion for benching ([#262](https://github.com/n0-computer/noq/issues/262)) - ([65c66d5](https://github.com/n0-computer/noq/commit/65c66d5929a1ab39b780dcdadff03d54c26c6fa7))
@@ -970,15 +1028,15 @@ All notable changes to noq will be documented in this file.
 - Simplify cfg guards for runtime-smol - ([1ffd9cd](https://github.com/n0-computer/noq/commit/1ffd9cd83fef6970c34d26320bfd790f8b34b062))
 - Statically hide default_runtime() if unavailable - ([f90254a](https://github.com/n0-computer/noq/commit/f90254a4107d3cb600b83ca2e536ecba5023d051))
 
+### Wip
+
+- Allow server migrations - ([bc86957](https://github.com/n0-computer/noq/commit/bc86957aa4ccb72fad70e75a6ce9fc8198f09afc))
+
 ## [quinn-udp-0.5.14](https://github.com/n0-computer/noq/compare/quinn-udp-0.5.13..quinn-udp-0.5.14) - 2025-08-27
 
 ### ⛰️  Features
 
 - Add `Connection::set_send_window()` - ([8fb2a07](https://github.com/n0-computer/noq/commit/8fb2a07e199dc7681da2f0bbe27dc5d3a099fd2b))
-
-### 🐛 Bug Fixes
-
-- Errors from merging - ([c5b5567](https://github.com/n0-computer/noq/commit/c5b556736cf8e5297b3d52eb58144318ca490dd6))
 
 ### 📚 Documentation
 
@@ -1016,7 +1074,6 @@ All notable changes to noq will be documented in this file.
 - *(deps)* Bump url from 2.5.4 to 2.5.7 - ([d50768f](https://github.com/n0-computer/noq/commit/d50768f085141b788dac4fd9092962695520ae0a))
 - *(deps)* Bump actions/setup-java from 4 to 5 - ([476f769](https://github.com/n0-computer/noq/commit/476f7690e7cc679bb694f40fef59c74c5b88dbd1))
 - *(deps)* Bump serde_json from 1.0.142 to 1.0.143 - ([1b4d576](https://github.com/n0-computer/noq/commit/1b4d576a62360685929ad4a0ec9c63c108ce27c1))
-- Remove individual repo project tracking ([#34](https://github.com/n0-computer/noq/issues/34)) - ([d579a38](https://github.com/n0-computer/noq/commit/d579a38fab6b8a00f3925e966b02787486047676))
 - Add test cases for `set_send_window` - ([f6baf26](https://github.com/n0-computer/noq/commit/f6baf26aae3fa154120a019fc63b4d9c3c0ea3de))
 
 ### Bench
@@ -1035,33 +1092,16 @@ All notable changes to noq will be documented in this file.
 - Fix NewConnectionId size bound - ([446cd72](https://github.com/n0-computer/noq/commit/446cd72e38b079ccd0c867138044e073e87ca03c))
 - Inline StepRng implementation from rand - ([926e78d](https://github.com/n0-computer/noq/commit/926e78dfb68e41c7e378d37fbe02a2d615308247))
 
-### Wip
-
-- Allow server migrations - ([bc86957](https://github.com/n0-computer/noq/commit/bc86957aa4ccb72fad70e75a6ce9fc8198f09afc))
-
 ## [quinn-udp-0.5.13](https://github.com/n0-computer/noq/compare/quinn-proto-0.11.12..quinn-udp-0.5.13) - 2025-06-18
 
 ### ⛰️  Features
 
-- *(quinn-proto)* Validate paths_blocked and path_cids_blocked frames - ([1ccc1dc](https://github.com/n0-computer/noq/commit/1ccc1dc4f859a8aface21b1adb6439b0d658f6b0))
-- *(quinn-proto)* Handle receiving of path availability frames ([#77](https://github.com/n0-computer/noq/issues/77)) - ([63d254b](https://github.com/n0-computer/noq/commit/63d254b996108cb50b11e30665ac9ce19b6cb747))
 - Make the future returned from SendStream::stopped 'static - ([f1fe183](https://github.com/n0-computer/noq/commit/f1fe1832a7badcefd828f130753b6dec181020a2))
-- Initial setup for high level open path api ([#81](https://github.com/n0-computer/noq/issues/81)) - ([e9e94af](https://github.com/n0-computer/noq/commit/e9e94af1a96c1075666c0cb5a11566777fea309d))
-- Merge iroh-0.11.x ([#109](https://github.com/n0-computer/noq/issues/109)) - ([e052000](https://github.com/n0-computer/noq/commit/e05200036bfb3c68bf51b3122ebe6471c4002fff))
-- Add `upgrade` function for weak connection handle - ([0d929df](https://github.com/n0-computer/noq/commit/0d929df5f69ddc660c8ce81e9c348af7972862db))
-- Add `upgrade` function for weak connection handle ([#110](https://github.com/n0-computer/noq/issues/110)) - ([70e2887](https://github.com/n0-computer/noq/commit/70e28875923db76f8dfbf4f058e682d56e6daea1))
-
-### 🐛 Bug Fixes
-
-- *(ci)* Delete repo level project tracking ([#72](https://github.com/n0-computer/noq/issues/72)) - ([12218f9](https://github.com/n0-computer/noq/commit/12218f93dbfe52dbde4b2b2526f285a2c4acc121))
-- *(quinn-proto)* Improve per path logic in poll_transmit - ([e8a83c4](https://github.com/n0-computer/noq/commit/e8a83c4e6c79ba019b74fcbbf7e77b93ef4f1033))
-- *(quinn-proto)* Correctly associate ACKs to paths ([#79](https://github.com/n0-computer/noq/issues/79)) - ([339b6cf](https://github.com/n0-computer/noq/commit/339b6cf9045d4e2198ff8c9eacfb99e2246e8362))
 
 ### 🚜 Refactor
 
 - *(quinn)* Remove some usage of execute_poll - ([4f8a0f1](https://github.com/n0-computer/noq/commit/4f8a0f13cf7931ef9be573af5089c7a4a49387ae))
 - *(quinn)* Configure out `async_io::UdpSocket` when unused - ([e8dc5a2](https://github.com/n0-computer/noq/commit/e8dc5a2eda57163bfbaba52ba57bf5b7a0027e22))
-- Improve path ack handling - ([4fad7bb](https://github.com/n0-computer/noq/commit/4fad7bb7cffdbdace8848499e780322aaf6c3d6c))
 
 ### ⚙️ Miscellaneous Tasks
 
@@ -1073,7 +1113,6 @@ All notable changes to noq will be documented in this file.
 - *(udp)* Increase patch version to v0.5.13 - ([113fa61](https://github.com/n0-computer/noq/commit/113fa61de3fb4ff1c3622e53f530bd8d84d0a3bf))
 - Remove explicit write future structs - ([bce3284](https://github.com/n0-computer/noq/commit/bce32845dcb0a466a4e0e1b01c2a9cdf0bc5bf54))
 - Suppress large AcceptError clippy warning - ([c8ca79c](https://github.com/n0-computer/noq/commit/c8ca79c9c318e6a27e573e3b301193eff1c5463a))
-- Fixup - ([1bc4f51](https://github.com/n0-computer/noq/commit/1bc4f5176a2e2e8823390d5419f08d95042214d0))
 
 ### Proto
 
@@ -1143,10 +1182,6 @@ All notable changes to noq will be documented in this file.
 - Run macOS tests conditionally on runner OS - ([107dd92](https://github.com/n0-computer/noq/commit/107dd923759419d5eaacde5323338b0b77310f20))
 - Run `quinn-udp` fast-data-path tests - ([3f94660](https://github.com/n0-computer/noq/commit/3f9466020cff6f846550fdfc9c1d923fc53c29ca))
 
-### WIP
-
-- Send on multiple paths - ([d056825](https://github.com/n0-computer/noq/commit/d056825cd10e7f4303481a4daa88b584b29e85f0))
-
 ### Book
 
 - Fix example code - ([eec45e6](https://github.com/n0-computer/noq/commit/eec45e6b7629f76605966c7018eb37991b829976))
@@ -1215,12 +1250,6 @@ All notable changes to noq will be documented in this file.
 - Run quinn-udp tests with fast-apple-datapath - ([3c3d460](https://github.com/n0-computer/noq/commit/3c3d46037884b0bf2b7d64653f88681381489eea))
 - Powerset --clean-per-run - ([d5e63d8](https://github.com/n0-computer/noq/commit/d5e63d8c2869af9f5e8af7492b42696cab55848f))
 - Change how tokens are encrypted - ([b237cd7](https://github.com/n0-computer/noq/commit/b237cd766e808e17f893ddf573b6a08a655d98c2))
-
-### WIP
-
-- Issue per-path CIDs and keep track of them - ([882fdf2](https://github.com/n0-computer/noq/commit/882fdf2370cd88d0f44ab080e20bbf5d44dade45))
-- Issue per-path CIDs and keep track of them ([#47](https://github.com/n0-computer/noq/issues/47)) - ([1e3b7e8](https://github.com/n0-computer/noq/commit/1e3b7e8e59515505d12f0a888861b6bd6a99709b))
-- Send CIDs for new paths correctly, if requested - ([ecd92e8](https://github.com/n0-computer/noq/commit/ecd92e8c613b4ee3354f6294909e6a6ca9662a2e))
 
 ### Proto
 
@@ -1377,7 +1406,7 @@ All notable changes to noq will be documented in this file.
 - Fix missing re-exports - ([eebccff](https://github.com/n0-computer/noq/commit/eebccff309cb342c2faac3ea875ca81734685821))
 - Bump version to 0.11.6 - ([66546dd](https://github.com/n0-computer/noq/commit/66546ddd5aee10672e31bb166e57891a13863171))
 
-## [quinn-udp-0.5.7](https://github.com/n0-computer/noq/compare/quinn-udp-0.5.6..quinn-udp-0.5.7) - 2024-11-05
+## [quinn-udp-0.5.7](https://github.com/n0-computer/noq/compare/iroh-quinn-proto-0.12.0..quinn-udp-0.5.7) - 2024-11-05
 
 ### ⚙️ Miscellaneous Tasks
 
@@ -1387,7 +1416,19 @@ All notable changes to noq will be documented in this file.
 
 - Increase crate patch version to v0.5.7 - ([a0bcb35](https://github.com/n0-computer/noq/commit/a0bcb35334686d6af2c23c27d9885e9750f91376))
 
-## [quinn-udp-0.5.6](https://github.com/n0-computer/noq/compare/iroh-quinn-proto-0.12.0..quinn-udp-0.5.6) - 2024-10-28
+## [iroh-quinn-proto-0.12.0](https://github.com/n0-computer/noq/compare/iroh-quinn-udp-0.5.5..iroh-quinn-proto-0.12.0) - 2024-11-04
+
+### ⚙️ Miscellaneous Tasks
+
+- Release 0.12.0 quinn and quinn-proto - ([4332156](https://github.com/n0-computer/noq/commit/43321560144932baebcb575796c36968951fc6d4))
+
+## [iroh-quinn-udp-0.5.5](https://github.com/n0-computer/noq/compare/quinn-udp-0.5.6..iroh-quinn-udp-0.5.5) - 2024-11-04
+
+### ⛰️  Features
+
+- QUIC Address discovery extension ([#12](https://github.com/n0-computer/noq/issues/12)) - ([94e970d](https://github.com/n0-computer/noq/commit/94e970d4d64cd0add28fbfd7f333922adc8f7b8b))
+
+## [quinn-udp-0.5.6](https://github.com/n0-computer/noq/compare/quinn-udp-0.5.5..quinn-udp-0.5.6) - 2024-10-28
 
 ### #2008
 
@@ -1413,7 +1454,6 @@ All notable changes to noq will be documented in this file.
 
 - *(quinn-udp)* Increase crate patch version to v0.5.6 - ([e7ae563](https://github.com/n0-computer/noq/commit/e7ae56300a2782fa7b8a87821432d4cdce19791a))
 - *(workflows/features)* Only test FIPS features on Ubuntu - ([459322b](https://github.com/n0-computer/noq/commit/459322b1800f7ae5612a6b4b890c5cd1b6a499bf))
-- Add project tracking ([#24](https://github.com/n0-computer/noq/issues/24)) - ([fd9f5c1](https://github.com/n0-computer/noq/commit/fd9f5c10244caf14d1e49d610849c38e3756513a))
 - Check coverage on multiple platforms - ([19a5e9d](https://github.com/n0-computer/noq/commit/19a5e9dfd0594971856c45b62b365738ab1adf22))
 - Replace IP strings with address types - ([15a4dce](https://github.com/n0-computer/noq/commit/15a4dcef42bf10c84535ec7e8331db9e97918856))
 - Test-run benchmarks - ([c7a8758](https://github.com/n0-computer/noq/commit/c7a8758ab9639412b36fc43455ff1288526a58cd))
@@ -1440,18 +1480,6 @@ All notable changes to noq will be documented in this file.
 ### Quinn
 
 - Export endpoint::EndpointStats - ([43a9d76](https://github.com/n0-computer/noq/commit/43a9d768bedfd81bf87ca25ff11c7a3b091c4956))
-
-## [iroh-quinn-proto-0.12.0](https://github.com/n0-computer/noq/compare/iroh-quinn-udp-0.5.5..iroh-quinn-proto-0.12.0) - 2024-11-04
-
-### ⚙️ Miscellaneous Tasks
-
-- Release 0.12.0 quinn and quinn-proto - ([4332156](https://github.com/n0-computer/noq/commit/43321560144932baebcb575796c36968951fc6d4))
-
-## [iroh-quinn-udp-0.5.5](https://github.com/n0-computer/noq/compare/quinn-udp-0.5.5..iroh-quinn-udp-0.5.5) - 2024-11-04
-
-### ⛰️  Features
-
-- QUIC Address discovery extension ([#12](https://github.com/n0-computer/noq/issues/12)) - ([94e970d](https://github.com/n0-computer/noq/commit/94e970d4d64cd0add28fbfd7f333922adc8f7b8b))
 
 ## [quinn-udp-0.5.5](https://github.com/n0-computer/noq/compare/quinn-proto-0.11.8..quinn-udp-0.5.5) - 2024-09-03
 
@@ -2424,7 +2452,7 @@ All notable changes to noq will be documented in this file.
 - Use err_derive for public errors - ([dafe685](https://github.com/n0-computer/noq/commit/dafe6859955f6bde63127dc23589756076c1f73d))
 - Fix default values for settings - ([ba2eff5](https://github.com/n0-computer/noq/commit/ba2eff5fe923c66809d92f3d6f5e6500b31c6591))
 
-## [0.2.0](https://github.com/n0-computer/noq/compare/pre-quicr-quinn..0.2.0) - 2019-01-21
+## [0.2.0](https://github.com/n0-computer/noq/compare/0.1.0..0.2.0) - 2019-01-21
 
 ### Clippy
 
@@ -2432,12 +2460,6 @@ All notable changes to noq will be documented in this file.
 - :single_match - ([538154b](https://github.com/n0-computer/noq/commit/538154bc6d86f3338cb50f2b13c64bc50e3091e5))
 - :collapsible_if - ([208a162](https://github.com/n0-computer/noq/commit/208a1622bccb85dd415a917b6cf8f1825dfdee40))
 - :range_plus_one - ([c16c213](https://github.com/n0-computer/noq/commit/c16c2136c0deb235d29ccd2a1e6cb47e9e4f1b77))
-
-## [pre-quicr-quinn](https://github.com/n0-computer/noq/compare/0.1.0..pre-quicr-quinn) - 2018-07-29
-
-### ConnectionState
-
-- :decode_key() can now be private - ([92e8c4d](https://github.com/n0-computer/noq/commit/92e8c4d06d9c6d7412e33ca754c5a1cab4998284))
 
 ## [pre-quinn-quicr](https://github.com/n0-computer/noq/compare/pre-quicr-quinn..pre-quinn-quicr) - 2018-07-29
 
@@ -2557,5 +2579,11 @@ All notable changes to noq will be documented in this file.
 ### Transport_parameters
 
 - :Error: Fail - ([a69dd0b](https://github.com/n0-computer/noq/commit/a69dd0bd0193f2b8ea2580422e509fb34c72daa7))
+
+## [pre-quicr-quinn] - 2018-07-29
+
+### ConnectionState
+
+- :decode_key() can now be private - ([92e8c4d](https://github.com/n0-computer/noq/commit/92e8c4d06d9c6d7412e33ca754c5a1cab4998284))
 
 
