@@ -26,10 +26,10 @@ XQ=$((QUEUE + 1))
 if ethtool -k "$IFACE" | grep -q '^ntuple-filters: off \[fixed\]'; then
   XQ=$(find "/sys/class/net/$IFACE/queues" -maxdepth 1 -name 'rx-*' | wc -l)
   echo "$IFACE has no ntuple support, so no steering: bind every queue"
-elif ethtool -n "$IFACE" | grep -A8 "^Filter: $LOC$" | grep -q "Dest IP addr: $IP "; then
-  echo "rule $LOC for $IP already exists"
+elif ethtool -n "$IFACE" | grep -A8 "^Filter: $LOC$" | tr -s ' \t' ' ' | grep -A3 "Dest IP addr: $IP " | grep -q "Dest port: $PORT "; then
+  echo "rule $LOC for $IP:$PORT already exists"
 elif ethtool -n "$IFACE" | grep -q "^Filter: $LOC$"; then
-  echo "another rule is at location $LOC; delete it or set LOC"; exit 1
+  echo "another rule is at location $LOC (or for another port); run xdp-disable.sh or set LOC"; exit 1
 else
   run ethtool -K "$IFACE" ntuple on
   run ethtool -N "$IFACE" flow-type udp4 dst-ip "$IP" dst-port "$PORT" action "$QUEUE" loc "$LOC"

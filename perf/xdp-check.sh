@@ -4,6 +4,7 @@
 # Usage: perf/xdp-check.sh <iface> <peer-ip>
 # See AF_XDP.md, "Two machines with real NICs".
 set -euo pipefail
+PATH=$PATH:/usr/sbin:/sbin  # ethtool is often only in sbin
 IFACE=${1:?usage: xdp-check.sh <iface> <peer-ip>}
 PEER=${2:?usage: xdp-check.sh <iface> <peer-ip>}
 
@@ -47,7 +48,7 @@ echo "      on the peer, 'ip neigh show $LOCAL_IP' must show $(cat "/sys/class/n
 echo "      $(ethtool -i "$IFACE" 2>/dev/null | head -n1)"
 QUEUES=$(find "/sys/class/net/$IFACE/queues" -maxdepth 1 -name 'rx-*' | wc -l)
 echo "      $QUEUES receive queues"
-ntuple=$(ethtool -k "$IFACE" 2>/dev/null | sed -n 's/^ntuple-filters: //p')
+ntuple=$(ethtool -k "$IFACE" 2>/dev/null | sed -n 's/^ntuple-filters: //p' || true)
 echo "      ntuple-filters: ${ntuple:-not reported}"
 ethtool -n "$IFACE" 2>/dev/null | grep -E 'Filter|Dest IP|Dest port|Action' | sed 's/^/      /' || true
 mtu=$(cat "/sys/class/net/$IFACE/mtu")
@@ -57,12 +58,14 @@ prog=$(ip -d link show dev "$IFACE" | grep -o 'prog/xdp.*' || true)
 
 # With a steering rule for this address (xdp-enable.sh), one socket on queue 0 is enough;
 # otherwise bind every queue.
-if ethtool -n "$IFACE" 2>/dev/null | grep -q "Dest IP addr: $LOCAL_IP "; then XQ=1; else XQ=$QUEUES; fi
+# The rule steers one port, so noq-perf must use that port on this machine.
+PORT=$(ethtool -n "$IFACE" 2>/dev/null | grep -A4 "Dest IP addr: $LOCAL_IP " | sed -n 's/.*Dest port: \([0-9]*\).*/\1/p' | head -n1 || true)
+if [ -n "$PORT" ]; then XQ=1; else XQ=$QUEUES; fi
 [ "$XQ" = 1 ] || warn "no steering rule for $LOCAL_IP: binding all $XQ queues (xdp-enable.sh adds one if ntuple is supported)"
 
 BIN=${NOQ_PERF:-noq-perf}
 ARGS="--xdp $IFACE --xdp-queues $XQ${MAC:+ --xdp-gateway $MAC}"
 echo
-echo "This machine as server: sudo $BIN server --listen $LOCAL_IP:4433 $ARGS"
-echo "This machine as client: sudo $BIN client $PEER:4433 --local-addr $LOCAL_IP:4434 $ARGS"
+echo "This machine as server: sudo $BIN server --listen $LOCAL_IP:${PORT:-4433} $ARGS"
+echo "This machine as client: sudo $BIN client $PEER:4433 --local-addr $LOCAL_IP:${PORT:-4434} $ARGS"
 [ "$FAILED" = 0 ] || { echo "Fix the FAILs first."; exit 1; }
