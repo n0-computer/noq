@@ -13,6 +13,12 @@ use tracing::info;
 /// How often the AF_XDP socket counters are printed
 const STATS_INTERVAL: Duration = Duration::from_secs(5);
 
+/// UMEM frames per socket if `--xdp-frames` is not given and few queues are bound
+const DEFAULT_FRAMES: u32 = 4096;
+
+/// UMEM frames of all sockets together if `--xdp-frames` is not given: 256 MiB of 4 KiB frames
+const DEFAULT_TOTAL_FRAMES: u32 = 65536;
+
 #[derive(Parser)]
 pub struct XdpOpt {
     /// Send and receive over AF_XDP on this interface instead of a UDP socket
@@ -38,6 +44,12 @@ pub struct XdpOpt {
     /// Maximum number of datagrams per transmit (emulated GSO)
     #[clap(long = "xdp-segments", default_value = "32")]
     pub segments: usize,
+    /// Number of 4 KiB UMEM frames per socket, half for receiving and half for sending
+    ///
+    /// By default 4096 (16 MiB), but fewer with many queues, so that all sockets together use
+    /// at most 256 MiB: 2048 frames with 32 queues, 1040 with 63.
+    #[clap(long = "xdp-frames")]
+    pub frames: Option<u32>,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -70,6 +82,9 @@ impl XdpOpt {
         if local_addr.ip().is_unspecified() || local_addr.port() == 0 {
             bail!("AF_XDP needs a concrete local address and port, got {addr}");
         }
+        let frames = self
+            .frames
+            .unwrap_or_else(|| DEFAULT_FRAMES.min(DEFAULT_TOTAL_FRAMES / self.queues.max(1)));
         let mut config = XdpConfig::new(interface, local_addr)
             .attach_mode(match self.attach {
                 XdpAttach::Auto => AttachMode::Auto,
@@ -81,7 +96,8 @@ impl XdpOpt {
                 XdpBind::Copy => BindMode::Copy,
                 XdpBind::Zerocopy => BindMode::ZeroCopy,
             })
-            .max_segments(self.segments);
+            .max_segments(self.segments)
+            .frame_count(frames);
         if let Some(gateway) = self.gateway {
             config = config.gateway(gateway);
         }
@@ -89,7 +105,7 @@ impl XdpOpt {
         let sockets = (0..self.queues)
             .map(|queue| xdp.bind(queue))
             .collect::<std::io::Result<Vec<_>>>()?;
-        info!(interface, queues = self.queues, mac = %xdp.mac(), "using AF_XDP");
+        info!(interface, queues = self.queues, frames, mac = %xdp.mac(), "using AF_XDP");
         tokio::spawn(print_stats(sockets.clone()));
         // Every socket gets the default route, so the first one sends everything and all of
         // them receive.
@@ -106,8 +122,18 @@ async fn print_stats(sockets: Vec<XdpSocket>) {
     interval.tick().await;
     loop {
         interval.tick().await;
+        // With a socket on every queue, most stay idle; queue 0 sends, so it always prints.
         for socket in &sockets {
-            eprintln!("AF_XDP queue {}: {:?}", socket.queue(), socket.stats());
+            let stats = socket.stats();
+            let active = stats.rx_packets
+                + stats.tx_packets
+                + stats.kernel_rx_dropped.unwrap_or(0)
+                + stats.kernel_rx_ring_full.unwrap_or(0)
+                + stats.kernel_rx_fill_ring_empty.unwrap_or(0)
+                > 0;
+            if socket.queue() == 0 || active {
+                eprintln!("AF_XDP queue {}: {stats:?}", socket.queue());
+            }
         }
     }
 }

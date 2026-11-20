@@ -21,7 +21,8 @@ AF_XDP needs Linux 5.9 or later and:
 - CAP_NET_ADMIN to attach the program to the interface;
 - CAP_NET_RAW to create the AF_XDP socket;
 - CAP_IPC_LOCK, or an RLIMIT_MEMLOCK (`ulimit -l`) above the UMEM size, to register the
-  UMEM. Each socket has 16 MiB of UMEM by default, more than the common 8 MiB limit.
+  UMEM. Each socket has up to 16 MiB of UMEM by default (`--xdp-frames`), more than the
+  common 8 MiB limit.
 
 Running as root is simplest. Alternatively grant the capabilities to the binary:
 
@@ -47,7 +48,10 @@ AF_XDP options, on both `server` and `client`:
 | `--xdp-bind auto\|copy\|zerocopy` | Zero-copy or copy mode (default `auto`: zero-copy if supported) |
 | `--xdp-gateway <mac>` | MAC to send to if a destination's MAC is unknown |
 | `--xdp-segments <n>` | Datagrams per transmit, the emulated GSO batch (default 32) |
+| `--xdp-frames <n>` | 4 KiB UMEM frames per socket (default 4096, fewer with many queues: at most 256 MiB in total) |
 | `--multi-socket` | Without `--xdp`: put the UDP socket in an endpoint with multiple sockets |
+
+`noq-perf server --once` exits after its first connection ends.
 
 With `--xdp`, the local address must be a concrete IPv4 address of the interface with a
 port: `--listen 10.0.0.1:4433` on the server, `--local-addr 10.0.0.2:4434` on the client.
@@ -105,67 +109,137 @@ Notes on veth:
   numbers show that the path works and give a rough idea of per-packet cost; they are not a
   substitute for two machines.
 
-## Two machines with real NICs
+## Two machines on one LAN
 
-Three short scripts prepare each machine; run them on both. `<iface>` is the port that
-reaches the peer, `<peer-ip>` the other machine's address on that link.
+`perf/lan/` has three short scripts that compare kernel UDP with AF_XDP between two machines.
+They change no NIC settings, sysctls, addresses or routes; see below for what they do change.
 
-```sh
-perf/xdp-check.sh <iface> <peer-ip>               # read-only, no root; prints the noq-perf commands
-sudo perf/xdp-enable.sh <iface> <local-ip> 4433   # server (port 4434 on the client)
-perf/xdp-check.sh <iface> <peer-ip>               # again: commands now with --xdp-queues 1
-sudo perf/xdp-disable.sh <iface>                  # afterwards
-```
+### Steps
 
-`xdp-check.sh` checks that the route to the peer goes out via `<iface>` (otherwise noq
-finds no ARP entry there and drops every send as `tx_no_neighbor`), that the ARP table has
-the peer's MAC on `<iface>`, other interfaces in the same subnet (ARP flux), the queues,
-ntuple support and rules, the MTU and an attached XDP program. It ends with the server and
-client command lines, including `--xdp-gateway <peer MAC>` as a fallback for a missing ARP
-entry.
+1. Build on both machines. The scripts use `target/release/noq-perf` of the checkout they
+   are in; for another binary, run them as `sudo NOQ_PERF=/path/to/noq-perf perf/lan/...`.
 
-`xdp-enable.sh <iface> <local-ip> [port] [queue]` prints every command before running it:
+   ```sh
+   cargo build --release -p perf --features af-xdp
+   ```
 
-- `ethtool -K <iface> ntuple on` and a rule at location `LOC` (default 0) that steers UDP to
-  `<local-ip>:<port>` to `queue` (default 0); run noq-perf with `--xdp-queues queue+1`.
-  Without ntuple support it changes nothing and tells you to bind every queue
-  (`--xdp-queues <number of queues>`, all sockets receive, the first one sends).
-- `arp_ignore=1` and `arp_announce=2` on every interface in the subnet of `<iface>`, so that
-  only `<iface>` answers ARP for its address. Set per interface, since the effective value is
-  the maximum of `all` and the interface's. The original values go to
-  `/run/noq-xdp-<iface>.sysctl`.
-- `ip neigh flush` on those interfaces, so the peer's MAC is learned again on the right port.
+2. Pick the interface on each machine that the route to the other machine uses. Running a
+   script with only the interface prints this machine's address and MAC, to copy to the other
+   machine:
 
-`xdp-disable.sh <iface>` deletes rule `LOC`, restores the saved sysctl values and detaches a
-leftover `noq_xdp` program. It leaves ntuple on, since turning it off would delete other
-rules too. Neither script changes addresses, routes, links or channel counts.
+   ```sh
+   perf/lan/server.sh enp67s0f0
+   # this machine: enp67s0f0, ip 192.168.1.59/24, mac 50:7c:6f:16:22:38, 32 rx queues
+   ```
+
+3. Start the server, then the client (`[duration]` in seconds, default 10; further arguments
+   go to both client runs):
+
+   ```sh
+   # storage1
+   sudo perf/lan/server.sh enp67s0f0 192.168.1.39 3c:ec:ef:30:47:6c
+   # compute1
+   sudo perf/lan/client.sh eno1 192.168.1.59 50:7c:6f:16:22:38 10 --download-size 100M --upload-size 0
+   ```
+
+   The client runs over kernel UDP first, then over AF_XDP with the same arguments, and ends
+   with a summary of both. The server serves exactly these two connections and exits; start
+   both again for another round. The outputs are kept in `/tmp/noq-lan.*` on the client.
+
+4. If a script was killed (`kill -9`, lost SSH session), clean up on that machine:
+
+   ```sh
+   sudo perf/lan/cleanup.sh <iface> <peer-ip>
+   ```
+
+Before changing anything, each script checks that the interface exists and is up, that
+`ip route get <peer-ip>` goes directly (no gateway) via that interface, that the MAC is well
+formed and not this machine's own, and that `noq-perf` exists and was built with AF_XDP. It
+takes the local address from the route. Every command that changes the system is printed with
+a `+` before it runs.
+
+### What the scripts change, and how it is reverted
+
+| Change | Effect | Reverted by |
+|---|---|---|
+| `ip neigh replace <peer-ip> lladdr <peer-mac> dev <iface> nud permanent` | Traffic from this machine to `<peer-ip>` goes to `<peer-mac>`; nothing else is affected | The script on exit, also on Ctrl-C (`ip neigh del <peer-ip> dev <iface>`); `cleanup.sh` |
+| The XDP program `noq_xdp` on `<iface>`, only during the AF_XDP run | Every packet on the port passes through the program; QUIC packets to noq-perf's port go to noq, all others to the kernel as usual | The kernel, when noq-perf exits (it is attached through a BPF link); `cleanup.sh` |
+| `/tmp/noq-lan.*` on the client | The output of both runs | Delete it when done |
+
+`cleanup.sh` also undoes what the older `xdp-enable.sh` changed: it deletes the flow rule at
+location 0 if it steers UDP to an address of `<iface>` at port 4433 or 4434, and restores
+`arp_ignore`/`arp_announce` from `/run/noq-xdp-<iface>.sysctl` if that file exists. It leaves
+ntuple on, as `xdp-disable.sh` did; without rules it has no effect.
+
+Why the neighbor entry: when two ports of a machine are in one subnet, either may answer ARP
+for the other's address (ARP flux), and the peer then sends to the wrong port, where no XDP
+socket listens. Each side chooses the destination MAC of its own sends, so pinning the peer's
+MAC on both machines makes both directions use the right ports, for kernel UDP and AF_XDP
+alike. A permanent entry is not overwritten by ARP replies. noq reads it from
+`/proc/net/arp`; `--xdp-gateway <peer-mac>` is passed as well, as a fallback. Pass the MAC that
+the other machine's script prints, not one from `ip neigh`, which may be the wrong port's.
+
+### How the comparison is kept fair
+
+- Neither machine has an XDP program attached during the UDP run: the server serves the UDP
+  connection on port 4433 (`noq-perf server --once`), exits, and only then attaches XDP and
+  serves the AF_XDP connection on port 4434. The client attaches its own only for the
+  AF_XDP run. The client waits 3 seconds between the runs, and its handshake retries until the
+  server is ready.
+- Both runs use the same addresses, MACs, ports on the NICs and client arguments.
+- The AF_XDP endpoint is an endpoint with multiple sockets, the UDP one is not; pass
+  `--multi-socket` to both scripts (after the MAC on the server, after the duration on the
+  client) to rule that out. With `--xdp` it has no effect.
+
+### No flow steering: a socket on every queue
+
+The scripts do not configure the NIC (no `ethtool -N` rules, no channel changes). Instead
+noq-perf binds an AF_XDP socket on every receive queue (`--xdp-queues <number of rx queues>`),
+so whichever queue RSS picks for the flow is covered. All sockets receive; the one on queue 0
+sends. Only sockets that have seen traffic print their counters.
+
+Each socket has its own UMEM. By default noq-perf gives each socket 4096 frames of 4 KiB
+(16 MiB), but at most 256 MiB for all sockets together: 2048 frames (8 MiB) each with 32
+queues, 1040 frames (about 4 MiB) each with 63, about 256 MiB in total. Half of a socket's
+frames receive, half send. Fewer frames mean less buffering on the queue that carries the
+flow; if `kernel_rx_fill_ring_empty` or `tx_blocked` grows, raise `--xdp-frames` (passed
+after the duration on the client, after the MAC on the server). The UMEM is locked memory,
+which root may use without limit.
+
+### Attach mode
+
+The scripts attach XDP in native mode (driver mode), which gives representative numbers. On
+some drivers, including ixgbe and i40e, attaching or detaching a native XDP program
+reconfigures the NIC's rings, which briefly interrupts all traffic on that port, at the start
+and end of the AF_XDP run. `sudo ATTACH=generic perf/lan/...` on both machines uses
+generic mode, which does not touch the driver, but is slow and not representative.
 
 Notes:
 
 - Drivers with native XDP and AF_XDP zero-copy include i40e, ice, ixgbe, mlx5 and igc (`ethtool
   -i <iface>`). Others fall back to copy mode, and drivers without native XDP (r8169, e1000e,
-  Wi-Fi) to generic mode, which is not representative. The server logs `zero_copy=true|false`
-  at `RUST_LOG=noq::xdp=info`; `--xdp-bind zerocopy` fails if zero-copy is unsupported.
-- Many drivers refuse XDP with LRO on (`ethtool -K <iface> lro off`) or with an MTU above
-  about 3498 (single-buffer XDP).
-- Run noq-perf with `sudo`: root has CAP_IPC_LOCK, so RLIMIT_MEMLOCK does not limit the 16 MiB
-  UMEM per queue (see Privileges).
+  Wi-Fi) fail with native mode. The scripts log `zero_copy=true|false` at
+  `RUST_LOG=noq::xdp=info` (`sudo RUST_LOG=noq::xdp=info perf/lan/...`).
+- Many drivers refuse XDP with LRO on or with an MTU above about 3498 (single-buffer XDP).
+- In zero-copy mode, packets for the kernel are copied out of the UMEM during the AF_XDP run,
+  so other traffic on the port is slightly slower but works.
 
 ### Troubleshooting
 
-The `AF_XDP queue N: XdpStats { .. }` lines on stderr show what goes wrong.
+The `AF_XDP queue N: XdpStats { .. }` lines on stderr (every 5 seconds) show what goes wrong.
 
 | Symptom | Meaning |
 |---|---|
-| `tx_no_neighbor` grows | No MAC for the peer on `--xdp <iface>`: wrong interface (the route to the peer uses another one) or no ARP entry. Run `xdp-check.sh`; ping the peer or pass `--xdp-gateway <MAC>`. |
-| `tx_packets` grows, `rx_packets` stays 0 | Nothing arrives at the socket: the peer sends to another port's MAC (ARP flux, check `ip neigh show <local-ip>` on the peer), the NIC steers the flow to a queue without a socket (add the rule or raise `--xdp-queues`), or the peer is not running or a firewall drops the packets. |
-| `kernel_rx_fill_ring_empty` grows | The kernel had no free frame to receive into: the receiver does not keep up, packets are dropped. |
+| `tx_no_neighbor` grows | No MAC for the peer. Should not happen with the scripts (they pin it and pass `--xdp-gateway`); without them, ping the peer or pass `--xdp-gateway <MAC>`. |
+| `tx_packets` grows, `rx_packets` stays 0 on every queue | Nothing reaches the sockets: the peer sends to another port's MAC (check that the MAC given to the peer's script is this machine's on `<iface>`), the peer is not running, or a firewall drops the packets. |
+| `rx_packets` grows but the run stalls | The peer receives nothing: check the same on the other machine. |
+| `kernel_rx_fill_ring_empty` grows | The kernel had no free frame to receive into, packets are dropped: raise `--xdp-frames`, or the receiver does not keep up. |
 | `kernel_rx_ring_full` grows | The RX ring was full: the application does not read fast enough. |
 | `kernel_rx_dropped` grows | The kernel dropped frames for other reasons, for example frames larger than the UMEM frame. |
 | `tx_too_big` grows | Datagrams larger than the interface MTU, usually MTU probes; harmless in small numbers. |
-| `tx_blocked` grows | Sends waited for TX frames or ring slots: the NIC is the bottleneck. |
-| Attaching fails | Another XDP program is attached (`ip -d link show <iface>`), LRO is on, or the MTU is too large. |
-| UMEM registration fails | RLIMIT_MEMLOCK too low: run with sudo or grant `cap_ipc_lock`. |
+| `tx_blocked` grows | Sends waited for TX frames or ring slots: the NIC is the bottleneck, or raise `--xdp-frames`. |
+| Attaching fails | Another XDP program is attached (`ip -d link show <iface>`), LRO is on, the MTU is too large, or the driver has no native XDP (try `ATTACH=generic`). |
+| The client's AF_XDP run hangs in the handshake | The server's AF_XDP server did not start; see its output. |
 
 ## What to measure
 

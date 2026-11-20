@@ -21,6 +21,9 @@ pub struct Opt {
     /// TLS certificate in PEM format
     #[clap(short = 'c', long = "cert", requires = "key")]
     cert: Option<PathBuf>,
+    /// Exit after the first connection ends
+    #[clap(long)]
+    once: bool,
     /// Common options
     #[command(flatten)]
     common: CommonOpt,
@@ -87,12 +90,18 @@ pub async fn run(opt: Opt) -> Result<()> {
     let opt = Arc::new(opt);
 
     while let Some(handshake) = endpoint.accept().await {
+        let once = opt.once;
         let opt = opt.clone();
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             if let Err(e) = handle(handshake, opt).await {
                 error!("connection lost: {:#}", e);
             }
         });
+        if once {
+            task.await?;
+            endpoint.wait_idle().await;
+            break;
+        }
     }
 
     Ok(())
