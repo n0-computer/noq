@@ -26,7 +26,7 @@ AF_XDP needs Linux 5.9 or later and:
 Running as root is simplest. Alternatively grant the capabilities to the binary:
 
 ```sh
-sudo setcap cap_bpf,cap_net_admin,cap_net_raw+ep target/release/noq-perf
+sudo setcap cap_bpf,cap_net_admin,cap_net_raw,cap_ipc_lock+ep target/release/noq-perf
 ```
 
 `ip netns` in the scripts below needs root.
@@ -116,11 +116,21 @@ Notes on veth:
    ethtool -L eth0 combined 1
    ```
 
-   or steer the flow to queue 0 and keep the other queues for other traffic:
+   or steer the flow to queue 0 and keep the other queues for other traffic, on the server:
 
    ```sh
+   ethtool -K eth0 ntuple on
    ethtool -N eth0 flow-type udp4 dst-ip 10.0.0.1 dst-port 4433 action 0
    ```
+
+   and on the client, for its local address:
+
+   ```sh
+   ethtool -K eth0 ntuple on
+   ethtool -N eth0 flow-type udp4 dst-ip 10.0.0.2 dst-port 4434 action 0
+   ```
+
+   `ethtool -n eth0` lists the rules, `ethtool -N eth0 delete <id>` removes one.
 
    or bind all queues with `--xdp-queues $(ethtool -l eth0 | awk '/Combined/{print $2}' | tail -1)`.
    With several queues, all sockets receive but the first one sends everything.
