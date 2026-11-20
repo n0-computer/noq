@@ -19,7 +19,9 @@ AF_XDP needs Linux 5.9 or later and:
 
 - CAP_BPF and CAP_NET_ADMIN (or CAP_SYS_ADMIN) to load the XDP program and its XSKMAP;
 - CAP_NET_ADMIN to attach the program to the interface;
-- CAP_NET_RAW to create the AF_XDP socket.
+- CAP_NET_RAW to create the AF_XDP socket;
+- CAP_IPC_LOCK, or an RLIMIT_MEMLOCK (`ulimit -l`) above the UMEM size, to register the
+  UMEM. Each socket has 16 MiB of UMEM by default, more than the common 8 MiB limit.
 
 Running as root is simplest. Alternatively grant the capabilities to the binary:
 

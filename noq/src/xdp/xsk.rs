@@ -298,7 +298,15 @@ impl Xsk {
             flags: 0,
             tx_metadata_len: 0,
         };
-        setsockopt(&fd, libc::XDP_UMEM_REG, &reg).map_err(|e| context(e, "registering UMEM"))?;
+        setsockopt(&fd, libc::XDP_UMEM_REG, &reg).map_err(|e| {
+            let hint = match e.raw_os_error() {
+                Some(libc::ENOBUFS) => {
+                    " (exceeds RLIMIT_MEMLOCK, needs CAP_IPC_LOCK or `ulimit -l`)"
+                }
+                _ => "",
+            };
+            context(e, &format!("registering UMEM{hint}"))
+        })?;
         for opt in [
             libc::XDP_UMEM_FILL_RING,
             libc::XDP_UMEM_COMPLETION_RING,

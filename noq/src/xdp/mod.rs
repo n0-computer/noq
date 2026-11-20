@@ -21,7 +21,8 @@
 //! - Checksums are computed in software; received checksums are not verified.
 //! - Every socket has its own UMEM; sockets on several queues do not share one.
 //! - Requires Linux 5.9 or later, CAP_NET_ADMIN, CAP_NET_RAW and CAP_BPF (or root), and the
-//!   tokio runtime.
+//!   tokio runtime with its timer. The UMEM counts against RLIMIT_MEMLOCK unless the process
+//!   has CAP_IPC_LOCK.
 //!
 //! # Examples
 //!
@@ -162,7 +163,7 @@ impl XdpConfig {
 
     /// Sets the number of 4 KiB UMEM frames of each socket, 4096 by default
     ///
-    /// Half of the frames receive and half send.
+    /// Half of the frames, but at most [`XdpConfig::ring_size`], receive; the rest send.
     pub fn frame_count(mut self, count: u32) -> Self {
         self.frame_count = count;
         self
@@ -177,7 +178,8 @@ impl XdpConfig {
     /// Sets the maximum number of datagrams of one transmit, 32 by default
     ///
     /// The socket splits a transmit into frames and hands them to the kernel with one
-    /// syscall, which emulates GSO.
+    /// syscall, which emulates GSO. Each socket caps this to its number of sending frames and
+    /// to the ring size.
     pub fn max_segments(mut self, count: usize) -> Self {
         self.max_segments = count.max(1);
         self
