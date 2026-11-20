@@ -1,6 +1,9 @@
 //! Options for running the perf client and server over AF_XDP sockets.
 
-use std::{net::SocketAddr, time::Duration};
+use std::{
+    net::{Ipv4Addr, SocketAddr},
+    time::Duration,
+};
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, ValueEnum};
@@ -41,6 +44,11 @@ pub struct XdpOpt {
     /// Usually the peer's MAC on a point-to-point link, or the gateway's.
     #[clap(long = "xdp-gateway")]
     pub gateway: Option<MacAddr>,
+    /// MAC address to send to for one IPv4 address, as `<ip>=<mac>`; may be repeated
+    ///
+    /// Unlike `--xdp-gateway`, this takes precedence over the kernel's ARP table.
+    #[clap(long = "xdp-neighbor", value_name = "IP=MAC", value_parser = parse_neighbor)]
+    pub neighbors: Vec<(Ipv4Addr, MacAddr)>,
     /// Maximum number of datagrams per transmit (emulated GSO)
     #[clap(long = "xdp-segments", default_value = "32")]
     pub segments: usize,
@@ -101,6 +109,9 @@ impl XdpOpt {
         if let Some(gateway) = self.gateway {
             config = config.gateway(gateway);
         }
+        for &(ip, mac) in &self.neighbors {
+            config = config.neighbor(ip, mac);
+        }
         let xdp = XdpInterface::attach(config)?;
         let sockets = (0..self.queues)
             .map(|queue| xdp.bind(queue))
@@ -115,6 +126,16 @@ impl XdpOpt {
             .map(|socket| (Box::new(socket) as Box<dyn AsyncUdpSocketNext>, vec![route]))
             .collect())
     }
+}
+
+/// Parses `<ip>=<mac>` for `--xdp-neighbor`
+fn parse_neighbor(s: &str) -> Result<(Ipv4Addr, MacAddr), String> {
+    let (ip, mac) = s.split_once('=').ok_or("expected <ip>=<mac>")?;
+    let ip = ip
+        .parse()
+        .map_err(|e| format!("invalid IPv4 address {ip}: {e}"))?;
+    let mac = mac.parse().map_err(|e: std::io::Error| e.to_string())?;
+    Ok((ip, mac))
 }
 
 async fn print_stats(sockets: Vec<XdpSocket>) {
