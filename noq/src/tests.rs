@@ -2144,3 +2144,151 @@ impl crate::runtime::Runtime for PanicPropagatingRuntime {
         TokioRuntime.now()
     }
 }
+
+/// Builds a server endpoint from a rustls config.
+fn server_with_crypto(
+    configure: impl FnOnce(
+        rustls::ConfigBuilder<rustls::ServerConfig, rustls::WantsVerifier>,
+    ) -> rustls::ServerConfig,
+) -> Endpoint {
+    let builder = rustls::ServerConfig::builder_with_provider(Arc::new(default_provider()))
+        .with_protocol_versions(&[&rustls::version::TLS13])
+        .unwrap();
+    let crypto = crate::crypto::rustls::QuicServerConfig::try_from(configure(builder)).unwrap();
+    Endpoint::server(
+        crate::ServerConfig::with_crypto(Arc::new(crypto)),
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+    )
+    .unwrap()
+}
+
+/// Accepts `count` connections, each on its own task, and returns them.
+async fn accept_on_tasks(server: Endpoint, count: usize) -> Vec<crate::Connection> {
+    let mut handshakes = tokio::task::JoinSet::new();
+    for _ in 0..count {
+        let incoming = server.accept().await.expect("endpoint open");
+        handshakes.spawn(async move { incoming.await.expect("handshake") });
+    }
+    handshakes.join_all().await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn accept_concurrent() -> TestResult {
+    const CONNECTIONS: usize = 16;
+    let _guard = subscribe();
+    let factory = EndpointFactory::new();
+    let server = factory.endpoint("server");
+    let client = factory.endpoint("client");
+    let server_addr = server.local_addr()?;
+
+    let server_task = tokio::spawn(accept_on_tasks(server.clone(), CONNECTIONS));
+    let mut clients = tokio::task::JoinSet::new();
+    for _ in 0..CONNECTIONS {
+        clients.spawn(client.connect(server_addr, "localhost")?);
+    }
+    let client_conns = clients.join_all().await;
+    let server_conns = tokio::time::timeout(Duration::from_secs(10), server_task).await??;
+    assert_eq!(server_conns.len(), CONNECTIONS);
+    for conn in client_conns {
+        conn?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn accept_handshake_failure() -> TestResult {
+    let _guard = subscribe();
+    let factory = EndpointFactory::new();
+    let key = PrivateKeyDer::Pkcs8(factory.cert.signing_key.serialize_der().into());
+    let server = server_with_crypto(|builder| {
+        let mut crypto = builder
+            .with_no_client_auth()
+            .with_single_cert(vec![factory.cert.cert.der().clone()], key)
+            .unwrap();
+        crypto.alpn_protocols = vec![b"foo".to_vec()];
+        crypto
+    });
+    let client = factory.endpoint("client");
+
+    let connecting = client.connect(server.local_addr()?, "localhost")?;
+    let incoming = server.accept().await.expect("endpoint open");
+    let Err(server_err) = incoming.accept() else {
+        panic!("accept succeeded despite ALPN mismatch");
+    };
+    assert!(
+        matches!(&server_err, ConnectionError::TransportError(err) if err.code == proto::TransportErrorCode::crypto(0x78)),
+        "{server_err:?}"
+    );
+    let client_err = connecting.await.unwrap_err();
+    assert!(
+        matches!(&client_err, ConnectionError::ConnectionClosed(close) if close.error_code == proto::TransportErrorCode::crypto(0x78)),
+        "{client_err:?}"
+    );
+
+    tokio::time::timeout(Duration::from_millis(500), server.wait_idle()).await?;
+    assert_eq!(server.open_connections(), 0);
+    assert_eq!(server.stats().accepted_handshakes, 0);
+    Ok(())
+}
+
+/// Certificate resolver whose first call blocks until released.
+#[derive(Debug)]
+struct BlockingCertResolver {
+    key: Arc<rustls::sign::CertifiedKey>,
+    release: std::sync::Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+}
+
+impl rustls::server::ResolvesServerCert for BlockingCertResolver {
+    fn resolve(
+        &self,
+        _client_hello: rustls::server::ClientHello<'_>,
+    ) -> Option<Arc<rustls::sign::CertifiedKey>> {
+        let release = self.release.lock().expect("poisoned").take();
+        if let Some(release) = release {
+            let _ = release.recv_timeout(Duration::from_secs(10));
+        }
+        Some(self.key.clone())
+    }
+}
+
+/// Checks that a blocked TLS handshake in `accept` does not hold the endpoint lock.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn accept_handshake_does_not_block_endpoint() -> TestResult {
+    let _guard = subscribe();
+    let factory = EndpointFactory::new();
+    let key = PrivateKeyDer::Pkcs8(factory.cert.signing_key.serialize_der().into());
+    let (release_send, release_recv) = std::sync::mpsc::sync_channel(1);
+    let resolver = BlockingCertResolver {
+        key: Arc::new(rustls::sign::CertifiedKey::new(
+            vec![factory.cert.cert.der().clone()],
+            default_provider().key_provider.load_private_key(key)?,
+        )),
+        release: std::sync::Mutex::new(Some(release_recv)),
+    };
+    let server = server_with_crypto(|builder| {
+        builder
+            .with_no_client_auth()
+            .with_cert_resolver(Arc::new(resolver))
+    });
+    let client = factory.endpoint("client");
+    let server_addr = server.local_addr()?;
+
+    let server_task = tokio::spawn(accept_on_tasks(server.clone(), 2));
+    let mut clients = tokio::task::JoinSet::new();
+    for _ in 0..2 {
+        clients.spawn(client.connect(server_addr, "localhost")?);
+    }
+    let first = tokio::time::timeout(Duration::from_secs(5), clients.join_next())
+        .await
+        .expect("handshake blocked by another connection's TLS work")
+        .expect("two clients")??;
+
+    release_send.send(())?;
+    let second = tokio::time::timeout(Duration::from_secs(5), clients.join_next())
+        .await?
+        .expect("two clients")??;
+    let server_conns = tokio::time::timeout(Duration::from_secs(5), server_task).await??;
+    assert_eq!(server_conns.len(), 2);
+    drop((first, second));
+    Ok(())
+}

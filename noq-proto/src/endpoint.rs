@@ -545,11 +545,32 @@ impl Endpoint {
     // box err to avoid clippy::result_large_err
     pub fn accept(
         &mut self,
-        mut incoming: Incoming,
+        incoming: Incoming,
         now: Instant,
         buf: &mut Vec<u8>,
         server_config: Option<Arc<ServerConfig>>,
     ) -> Result<(ConnectionHandle, Connection), Box<AcceptError>> {
+        let (ch, pending) = self.begin_accept(incoming, now, buf, server_config)?;
+        pending
+            .complete()
+            .map(|conn| (ch, conn))
+            .map_err(|failure| self.abort_accept(*failure, buf))
+    }
+
+    /// Begins accepting this incoming connection, deferring the handshake to [`PendingAccept`]
+    ///
+    /// The handshake does not need the endpoint. Datagrams routed to the connection before it
+    /// completes must be passed to the connection afterwards. If it fails, call [`abort_accept`].
+    ///
+    /// [`abort_accept`]: Self::abort_accept
+    // box err to avoid clippy::result_large_err
+    pub fn begin_accept(
+        &mut self,
+        mut incoming: Incoming,
+        now: Instant,
+        buf: &mut Vec<u8>,
+        server_config: Option<Arc<ServerConfig>>,
+    ) -> Result<(ConnectionHandle, PendingAccept), Box<AcceptError>> {
         let remote_address_validated = incoming.remote_address_validated();
         incoming.improper_drop_warner.dismiss();
         let incoming_buffer = self.incoming_buffers.remove(incoming.incoming_idx);
@@ -643,7 +664,7 @@ impl Endpoint {
 
         let tls = server_config.crypto.start_session(version, &params);
         let transport_config = server_config.transport.clone();
-        let mut conn = self.add_connection(
+        let conn = self.add_connection(
             ch,
             version,
             dst_cid,
@@ -662,45 +683,42 @@ impl Endpoint {
         );
         self.index.insert_initial(dst_cid, ch);
 
-        match conn.handle_first_packet(
-            incoming.received_at,
-            incoming.network_path,
-            incoming.ecn,
-            packet_number,
-            incoming.packet,
-            incoming.rest,
-        ) {
-            Ok(()) => {
-                trace!(
-                    id = ch.0,
-                    icid = %dst_cid,
-                    network_path = %incoming.network_path,
-                    "new connection",
-                );
+        let pending = PendingAccept {
+            ch,
+            conn,
+            received_at: incoming.received_at,
+            network_path: incoming.network_path,
+            ecn: incoming.ecn,
+            packet: incoming.packet,
+            rest: incoming.rest,
+            crypto: incoming.crypto,
+            datagrams: incoming_buffer.datagrams,
+        };
+        Ok((ch, pending))
+    }
 
-                for event in incoming_buffer.datagrams {
-                    conn.handle_event(ConnectionEvent(ConnectionEventInner::Datagram(event)))
-                }
-
-                Ok((ch, conn))
+    /// Removes a connection whose [`PendingAccept::complete`] failed
+    ///
+    /// Returns the same error as a failed [`accept`].
+    ///
+    /// [`accept`]: Self::accept
+    pub fn abort_accept(&mut self, failure: AcceptFailure, buf: &mut Vec<u8>) -> Box<AcceptError> {
+        let AcceptFailure {
+            ch,
+            cause,
+            version,
+            network_path,
+            crypto,
+            src_cid,
+        } = failure;
+        self.handle_event(ch, EndpointEvent(EndpointEventInner::Drained));
+        let response = match cause {
+            ConnectionError::TransportError(ref e) => {
+                Some(self.initial_close(version, network_path, &crypto, src_cid, e.clone(), buf))
             }
-            Err(e) => {
-                debug!("handshake failed: {}", e);
-                self.handle_event(ch, EndpointEvent(EndpointEventInner::Drained));
-                let response = match e {
-                    ConnectionError::TransportError(ref e) => Some(self.initial_close(
-                        version,
-                        incoming.network_path,
-                        &incoming.crypto,
-                        src_cid,
-                        e.clone(),
-                        buf,
-                    )),
-                    _ => None,
-                };
-                Err(Box::new(AcceptError { cause: e, response }))
-            }
-        }
+            _ => None,
+        };
+        Box::new(AcceptError { cause, response })
     }
 
     /// Check if we should refuse a connection attempt regardless of the packet's contents
@@ -1242,6 +1260,88 @@ pub enum DatagramEvent {
     NewConnection(Incoming),
     /// Response generated directly by the endpoint
     Response(Transmit),
+}
+
+/// An incoming connection registered by [`Endpoint::begin_accept`], awaiting its handshake
+#[must_use = "a pending accept must be completed"]
+#[derive(derive_more::Debug)]
+pub struct PendingAccept {
+    ch: ConnectionHandle,
+    #[debug(skip)]
+    conn: Connection,
+    #[debug(skip)]
+    received_at: Instant,
+    network_path: FourTuple,
+    ecn: Option<EcnCodepoint>,
+    #[debug(skip)]
+    packet: InitialPacket,
+    #[debug(skip)]
+    rest: Option<BytesMut>,
+    #[debug(skip)]
+    crypto: Keys,
+    #[debug(skip)]
+    datagrams: Vec<DatagramConnectionEvent>,
+}
+
+impl PendingAccept {
+    /// Processes the client's first packet and the datagrams buffered with it
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`AcceptFailure`] if the handshake fails, to be passed to
+    /// [`Endpoint::abort_accept`].
+    // box err to avoid clippy::result_large_err
+    pub fn complete(self) -> Result<Connection, Box<AcceptFailure>> {
+        let Self {
+            ch,
+            mut conn,
+            received_at,
+            network_path,
+            ecn,
+            packet,
+            rest,
+            crypto,
+            datagrams,
+        } = self;
+        let packet_number = packet.header.number.expand(0);
+        let InitialHeader {
+            src_cid,
+            dst_cid,
+            version,
+            ..
+        } = packet.header;
+        if let Err(e) =
+            conn.handle_first_packet(received_at, network_path, ecn, packet_number, packet, rest)
+        {
+            debug!("handshake failed: {}", e);
+            return Err(Box::new(AcceptFailure {
+                ch,
+                cause: e,
+                version,
+                network_path,
+                crypto,
+                src_cid,
+            }));
+        }
+        trace!(id = ch.0, icid = %dst_cid, %network_path, "new connection");
+        for event in datagrams {
+            conn.handle_event(ConnectionEvent(ConnectionEventInner::Datagram(event)))
+        }
+        Ok(conn)
+    }
+}
+
+/// A failed [`PendingAccept::complete`], to be passed to [`Endpoint::abort_accept`]
+#[must_use = "a failed accept must be passed to `Endpoint::abort_accept`"]
+#[derive(derive_more::Debug)]
+pub struct AcceptFailure {
+    ch: ConnectionHandle,
+    cause: ConnectionError,
+    version: u32,
+    network_path: FourTuple,
+    #[debug(skip)]
+    crypto: Keys,
+    src_cid: ConnectionId,
 }
 
 /// An incoming connection for which the server has not yet begun its part of the handshake.
