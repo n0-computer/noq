@@ -3,7 +3,7 @@
 <a href=#3 id=3 data-nosnippet>3</a>
 <a href=#4 id=4 data-nosnippet>4</a><span class="kw">use super</span>::{BASE_DATAGRAM_SIZE, Controller, ControllerFactory};
 <a href=#5 id=5 data-nosnippet>5</a><span class="kw">use </span><span class="kw">crate</span>::connection::RttEstimator;
-<a href=#6 id=6 data-nosnippet>6</a><span class="kw">use crate</span>::{Duration, Instant};
+<a href=#6 id=6 data-nosnippet>6</a><span class="kw">use crate</span>::{Duration, Instant, math};
 <a href=#7 id=7 data-nosnippet>7</a>
 <a href=#8 id=8 data-nosnippet>8</a><span class="doccomment">/// CUBIC Constants.
 <a href=#9 id=9 data-nosnippet>9</a>///
@@ -50,14 +50,14 @@
 <a href=#50 id=50 data-nosnippet>50</a>    <span class="comment">// K = cbrt(w_max * (1 - beta_cubic) / C) (Eq. 2)
 <a href=#51 id=51 data-nosnippet>51</a>    </span><span class="kw">fn </span>cubic_k(<span class="kw-2">&amp;</span><span class="self">self</span>, max_datagram_size: u64) -&gt; f64 {
 <a href=#52 id=52 data-nosnippet>52</a>        <span class="kw">let </span>w_max = <span class="self">self</span>.w_max / max_datagram_size <span class="kw">as </span>f64;
-<a href=#53 id=53 data-nosnippet>53</a>        (w_max * (<span class="number">1.0 </span>- BETA_CUBIC) / C).cbrt()
+<a href=#53 id=53 data-nosnippet>53</a>        math::cbrt(w_max * (<span class="number">1.0 </span>- BETA_CUBIC) / C)
 <a href=#54 id=54 data-nosnippet>54</a>    }
 <a href=#55 id=55 data-nosnippet>55</a>
 <a href=#56 id=56 data-nosnippet>56</a>    <span class="comment">// W_cubic(t) = C * (t - K)^3 + w_max (Eq. 1)
 <a href=#57 id=57 data-nosnippet>57</a>    </span><span class="kw">fn </span>w_cubic(<span class="kw-2">&amp;</span><span class="self">self</span>, t: Duration, max_datagram_size: u64) -&gt; f64 {
 <a href=#58 id=58 data-nosnippet>58</a>        <span class="kw">let </span>w_max = <span class="self">self</span>.w_max / max_datagram_size <span class="kw">as </span>f64;
 <a href=#59 id=59 data-nosnippet>59</a>
-<a href=#60 id=60 data-nosnippet>60</a>        (C * (t.as_secs_f64() - <span class="self">self</span>.k).powi(<span class="number">3</span>) + w_max) * max_datagram_size <span class="kw">as </span>f64
+<a href=#60 id=60 data-nosnippet>60</a>        (C * math::powi(t.as_secs_f64() - <span class="self">self</span>.k, <span class="number">3</span>) + w_max) * max_datagram_size <span class="kw">as </span>f64
 <a href=#61 id=61 data-nosnippet>61</a>    }
 <a href=#62 id=62 data-nosnippet>62</a>
 <a href=#63 id=63 data-nosnippet>63</a>    <span class="comment">// W_est(t) = w_max * beta_cubic + 3 * (1 - beta_cubic) / (1 + beta_cubic) *
