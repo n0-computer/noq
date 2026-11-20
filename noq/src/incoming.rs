@@ -24,6 +24,9 @@ impl Incoming {
     }
 
     /// Attempt to accept this incoming connection (an error may still occur)
+    ///
+    /// This processes the client's first flight, including the server's TLS work, on the calling
+    /// task without blocking the endpoint. Accept on separate tasks to run handshakes in parallel.
     pub fn accept(mut self) -> Result<Connecting, ConnectionError> {
         let state = self.0.take().unwrap();
         state.endpoint.accept(state.inner, None)
