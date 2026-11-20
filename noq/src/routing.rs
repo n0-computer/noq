@@ -5,7 +5,10 @@ use std::{
     net::{IpAddr, SocketAddr},
     num::NonZeroUsize,
     pin::Pin,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
     task::{Context, Poll},
 };
 
@@ -32,6 +35,9 @@ use crate::runtime::{AsyncUdpSocketNext, UdpSender};
 ///
 /// IPv4 ranges also match IPv4-mapped addresses. IPv6 ranges match IPv4-mapped addresses only
 /// inside `::ffff:0:0/96`, so a dual-stack socket that should carry IPv4 lists that range too.
+///
+/// Sockets with the same local address and the same routes share one place in this order.
+/// Each connection sends on one of them, picked in turn as connections first use them.
 ///
 /// [`Endpoint::new_with_multiple_sockets`]: crate::Endpoint::new_with_multiple_sockets
 /// [`Endpoint::add_socket`]: crate::Endpoint::add_socket
@@ -84,7 +90,7 @@ impl SocketRoute {
     }
 }
 
-/// Identifies one socket of an endpoint, by its index in the route table
+/// Identifies the sockets of an endpoint with one local address and set of routes
 ///
 /// Tables only gain sockets, so an id stays valid for the lifetime of the endpoint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -132,29 +138,45 @@ struct RouteEntry {
     socket: SocketId,
 }
 
-/// A socket of the table, for creating its senders
+/// The sockets of one [`SocketId`], which share a local address and routes
 #[derive(Debug, Clone)]
 struct RoutedSocket {
-    socket: Arc<dyn AsyncUdpSocketNext>,
+    // Several sockets bound to one address with the same routes, such as `SO_REUSEPORT`
+    // sockets for parallel receive, act as one route. Each connection is given one in turn.
+    sockets: Vec<Arc<dyn AsyncUdpSocketNext>>,
     local_addr: SocketAddr,
+    /// Sorted, so the same routes in any order match
+    routes: Vec<SocketRoute>,
+    /// Picks the socket of the next sender, shared by all copies of the table
+    next_sender: Arc<AtomicUsize>,
 }
 
 impl RouteTable {
     /// Returns a copy of this table with `socket` and its routes added
     ///
-    /// The new socket gets the next [`SocketId`], its index.
+    /// The socket joins the [`SocketId`] of the sockets with the same local address and routes,
+    /// or gets the next one, its index.
     pub(crate) fn with_socket(
         &self,
         socket: Arc<dyn AsyncUdpSocketNext>,
         local_addr: SocketAddr,
-        routes: Vec<SocketRoute>,
+        mut routes: Vec<SocketRoute>,
     ) -> Self {
+        routes.sort_by_key(|route| (route.destinations, route.source, route.is_default));
+        let mut table = self.clone();
+        if let Some(group) = table
+            .sockets
+            .iter_mut()
+            .find(|group| group.local_addr == local_addr && group.routes == routes)
+        {
+            group.sockets.push(socket);
+            return table;
+        }
         let id = SocketId(self.sockets.len());
         let scope_id = match local_addr {
             SocketAddr::V6(addr) => addr.scope_id(),
             SocketAddr::V4(_) => 0,
         };
-        let mut table = self.clone();
         table.routes.extend(
             routes
                 .iter()
@@ -165,7 +187,12 @@ impl RouteTable {
         table
             .routes
             .sort_by_key(|entry| std::cmp::Reverse(entry.mask.count_ones()));
-        table.sockets.push(RoutedSocket { socket, local_addr });
+        table.sockets.push(RoutedSocket {
+            sockets: vec![socket],
+            local_addr,
+            routes,
+            next_sender: Arc::default(),
+        });
         table
     }
 
@@ -208,11 +235,13 @@ impl RouteTable {
 
     /// Creates a new sender for `id`, or `None` if the socket is not in this table
     ///
-    /// Senders of IPv4 sockets map the endpoint's IPv4-mapped addresses back to IPv4.
+    /// The sockets of `id` take turns. Senders of IPv4 sockets map the endpoint's IPv4-mapped
+    /// addresses back to IPv4.
     pub(crate) fn create_sender(&self, id: SocketId) -> Option<Pin<Box<dyn UdpSender>>> {
-        let socket = self.sockets.get(id.index())?;
-        let sender = socket.socket.create_sender();
-        Some(match socket.local_addr {
+        let group = self.sockets.get(id.index())?;
+        let index = group.next_sender.fetch_add(1, Ordering::Relaxed) % group.sockets.len();
+        let sender = group.sockets[index].create_sender();
+        Some(match group.local_addr {
             SocketAddr::V4(_) => Box::pin(Ipv4Sender(sender)),
             SocketAddr::V6(_) => sender,
         })
@@ -233,7 +262,8 @@ impl RouteTable {
     pub(crate) fn may_fragment(&self) -> bool {
         self.sockets
             .iter()
-            .any(|socket| socket.socket.may_fragment())
+            .flat_map(|group| &group.sockets)
+            .any(|socket| socket.may_fragment())
     }
 }
 
@@ -459,6 +489,79 @@ mod tests {
         // Link-local destinations select by scope id.
         assert_eq!(select("[fe80::9%7]:1", None), Some(ids[4]));
         assert_eq!(select("[2001:db8::1]:1", None), Some(ids[3]));
+    }
+
+    /// A socket that records which of a set created each sender
+    #[derive(Debug)]
+    struct RecordingSocket {
+        id: usize,
+        created: Arc<std::sync::Mutex<Vec<usize>>>,
+    }
+
+    impl AsyncUdpSocketNext for RecordingSocket {
+        fn create_sender(&self) -> Pin<Box<dyn UdpSender>> {
+            self.created.lock().expect("poisoned").push(self.id);
+            Box::pin(NullSender)
+        }
+
+        fn create_receiver(&self) -> Option<Box<dyn UdpReceiver>> {
+            None
+        }
+
+        fn local_addr(&self) -> io::Result<SocketAddr> {
+            unimplemented!()
+        }
+    }
+
+    #[derive(Debug)]
+    struct NullSender;
+
+    impl UdpSender for NullSender {
+        fn poll_send(
+            self: Pin<&mut Self>,
+            _transmit: &Transmit<'_>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    /// Sockets with the same address and routes share an id, and senders take turns on them
+    #[test]
+    fn same_address_and_routes_share_an_id() {
+        let created = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut table = RouteTable::default();
+        let sockets = [
+            ("127.0.0.1:1", route("0.0.0.0/0")),
+            ("127.0.0.1:1", route("0.0.0.0/0")),
+            ("127.0.0.1:2", route("0.0.0.0/0")),
+            ("127.0.0.1:1", route("10.0.0.0/8")),
+            ("127.0.0.1:1", route("0.0.0.0/0")),
+        ];
+        for (id, (addr, route)) in sockets.into_iter().enumerate() {
+            let socket = RecordingSocket {
+                id,
+                created: created.clone(),
+            };
+            table = table.with_socket(Arc::new(socket), addr.parse().unwrap(), vec![route]);
+        }
+        assert_eq!(table.sockets.len(), 3);
+        assert_eq!(table.routes.len(), 3);
+        let id = table.route("192.0.2.1:1".parse().unwrap(), None).unwrap();
+        assert_eq!(id, SocketId(0));
+        for _ in 0..4 {
+            table.create_sender(id).unwrap();
+        }
+        assert_eq!(*created.lock().expect("poisoned"), [0, 1, 4, 0]);
+    }
+
+    /// Sockets with the same routes in a different order share an id
+    #[test]
+    fn route_order_does_not_split_an_id() {
+        let (v4, v6) = (route("0.0.0.0/0"), route("::/0"));
+        let (table, _) = table(&[("[::]:1", &[v4, v6]), ("[::]:1", &[v6, v4])]);
+        assert_eq!(table.sockets.len(), 1);
+        assert_eq!(table.sockets[0].sockets.len(), 2);
     }
 
     #[test]

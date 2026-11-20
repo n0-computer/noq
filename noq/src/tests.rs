@@ -2552,3 +2552,138 @@ async fn blocked_socket_resumes() {
     conn.close(0u32.into(), b"done");
     accept.await.unwrap();
 }
+
+/// Counts the sends of a socket.
+#[derive(Debug)]
+struct CountingSocket {
+    inner: Box<dyn AsyncUdpSocketNext>,
+    sends: Arc<AtomicUsize>,
+}
+
+impl AsyncUdpSocketNext for CountingSocket {
+    fn create_sender(&self) -> Pin<Box<dyn crate::UdpSender>> {
+        Box::pin(CountingSender {
+            inner: self.inner.create_sender(),
+            sends: self.sends.clone(),
+        })
+    }
+
+    fn create_receiver(&self) -> Option<Box<dyn UdpReceiver>> {
+        self.inner.create_receiver()
+    }
+
+    fn local_addr(&self) -> io::Result<SocketAddr> {
+        self.inner.local_addr()
+    }
+}
+
+#[derive(Debug)]
+struct CountingSender {
+    inner: Pin<Box<dyn crate::UdpSender>>,
+    sends: Arc<AtomicUsize>,
+}
+
+impl crate::UdpSender for CountingSender {
+    fn poll_send(
+        self: Pin<&mut Self>,
+        transmit: &udp::Transmit<'_>,
+        cx: &mut Context<'_>,
+    ) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        this.sends.fetch_add(1, Ordering::Relaxed);
+        this.inner.as_mut().poll_send(transmit, cx)
+    }
+
+    fn max_transmit_segments(&self) -> NonZeroUsize {
+        self.inner.max_transmit_segments()
+    }
+}
+
+/// Serves echo clients from `sockets`, all bound to one address, and checks each socket sent.
+///
+/// The sockets get the same routes, so they share one entry of the route table.
+async fn sends_spread_over(sockets: Vec<UdpSocket>) {
+    const CLIENTS: usize = 8;
+    const PAYLOAD: usize = 64 * 1024;
+    let factory = EndpointFactory::new();
+    let addr = sockets[0].local_addr().unwrap();
+    let routes = vec![SocketRoute::new("0.0.0.0/0".parse().unwrap())];
+    let mut sends = Vec::new();
+    let sockets = sockets
+        .into_iter()
+        .map(|socket| {
+            let socket = CountingSocket {
+                inner: crate::Runtime::wrap_udp_socket_next(&TokioRuntime, socket).unwrap(),
+                sends: Arc::default(),
+            };
+            sends.push(socket.sends.clone());
+            (
+                Box::new(socket) as Box<dyn AsyncUdpSocketNext>,
+                routes.clone(),
+            )
+        })
+        .collect();
+    let server = Endpoint::new_with_multiple_sockets(
+        factory.endpoint_config.clone(),
+        Some(factory.server_config()),
+        sockets,
+        Arc::new(TokioRuntime),
+    )
+    .unwrap();
+    assert_eq!(server.local_addr().unwrap(), addr);
+
+    // Echoes one stream per connection.
+    let accept = tokio::spawn(async move {
+        let mut echoes = tokio::task::JoinSet::new();
+        for _ in 0..CLIENTS {
+            let incoming = server.accept().await.unwrap();
+            echoes.spawn(async move {
+                let conn = incoming.await.unwrap();
+                let (mut send, mut recv) = conn.accept_bi().await.unwrap();
+                let data = recv.read_to_end(usize::MAX).await.unwrap();
+                send.write_all(&data).await.unwrap();
+                send.finish().unwrap();
+                conn.closed().await;
+            });
+        }
+        echoes.join_all().await;
+    });
+
+    let mut clients = tokio::task::JoinSet::new();
+    for i in 0..CLIENTS {
+        let client = factory.endpoint_with_socket(
+            "client",
+            UdpSocket::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)).unwrap(),
+        );
+        clients.spawn(async move {
+            let conn = client.connect(addr, "localhost").unwrap().await.unwrap();
+            let (mut send, mut recv) = conn.open_bi().await.unwrap();
+            let data = vec![i as u8; PAYLOAD];
+            send.write_all(&data).await.unwrap();
+            send.finish().unwrap();
+            let echo = recv.read_to_end(usize::MAX).await.unwrap();
+            assert_eq!(echo, data);
+            conn.close(0u32.into(), b"done");
+            client.wait_idle().await;
+        });
+    }
+    clients.join_all().await;
+    accept.await.unwrap();
+
+    let sends = sends
+        .iter()
+        .map(|sends| sends.load(Ordering::Relaxed))
+        .collect::<Vec<_>>();
+    info!(?sends, "sends per socket");
+    // Connections take turns on the sockets, so every socket sends for some of them.
+    assert!(sends.iter().all(|&sends| sends > 0), "{sends:?}");
+}
+
+/// Connections spread their sends over sockets with the same address and routes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn same_address_sockets_share_sends() {
+    let _guard = subscribe();
+    let socket = UdpSocket::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)).unwrap();
+    let sockets = (0..4).map(|_| socket.try_clone().unwrap()).collect();
+    sends_spread_over(sockets).await;
+}
