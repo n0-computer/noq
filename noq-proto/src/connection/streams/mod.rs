@@ -501,7 +501,8 @@ impl<'a> SendStream<'a> {
     /// Returns whether the send stream is incremental.
     ///
     /// # Panics
-    /// - when applied to a receive stream
+    ///
+    /// This call will panic when applied to a receive stream.
     pub fn incremental(&self) -> Result<bool, ClosedStream> {
         let stream = self
             .state
