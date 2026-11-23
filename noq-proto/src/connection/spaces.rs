@@ -9,10 +9,9 @@ use core::{
 };
 
 use rand::{CryptoRng, RngExt};
-use sorted_index_buffer::SortedIndexBuffer;
 use tracing::trace;
 
-use super::{PathId, paths::PathResponses, paths::PathRetransmits};
+use super::{PathId, packet_map::PacketMap, paths::PathResponses, paths::PathRetransmits};
 use crate::{
     Dir, Duration, FourTuple, FxHashMap, FxHashSet, Instant, StreamId, TransportError,
     TransportErrorCode, VarInt,
@@ -262,11 +261,10 @@ pub(super) struct PacketNumberSpace {
     /// Number of packets in `sent_packets` with numbers above `largest_ack_eliciting_sent`
     pub(super) unacked_non_ack_eliciting_tail: u64,
     /// Transmitted but not acked
-    // We use a BTreeMap here so we can efficiently query by range on ACK and for loss detection
-    pub(super) sent_packets: SortedIndexBuffer<SentPacket>,
+    pub(super) sent_packets: PacketMap<SentPacket>,
     /// Packets that were deemed lost
     // Older packets are regularly removed in `Connection::drain_lost_packets`.
-    pub(super) lost_packets: SortedIndexBuffer<LostPacket>,
+    pub(super) lost_packets: PacketMap<LostPacket>,
     /// Number of explicit congestion notification codepoints seen on incoming packets
     pub(super) ecn_counters: frame::EcnCounts,
     /// Recent ECN counters sent by the peer in ACK frames
@@ -322,8 +320,8 @@ impl PacketNumberSpace {
             largest_acked_packet_send_time: now,
             largest_ack_eliciting_sent: 0,
             unacked_non_ack_eliciting_tail: 0,
-            sent_packets: SortedIndexBuffer::new(),
-            lost_packets: SortedIndexBuffer::new(),
+            sent_packets: PacketMap::new(),
+            lost_packets: PacketMap::new(),
             ecn_counters: frame::EcnCounts::ZERO,
             ecn_feedback: frame::EcnCounts::ZERO,
             pending_ping: false,
@@ -352,8 +350,8 @@ impl PacketNumberSpace {
             largest_acked_packet_send_time: now,
             largest_ack_eliciting_sent: 0,
             unacked_non_ack_eliciting_tail: 0,
-            sent_packets: SortedIndexBuffer::new(),
-            lost_packets: SortedIndexBuffer::new(),
+            sent_packets: PacketMap::new(),
+            lost_packets: PacketMap::new(),
             ecn_counters: frame::EcnCounts::ZERO,
             ecn_feedback: frame::EcnCounts::ZERO,
             pending_ping: false,
@@ -468,9 +466,9 @@ impl PacketNumberSpace {
             self.unacked_non_ack_eliciting_tail = 0;
             self.largest_ack_eliciting_sent = number;
         } else if self.unacked_non_ack_eliciting_tail > MAX_UNACKED_NON_ACK_ELICTING_TAIL {
-            let oldest_after_ack_eliciting = self
+            let (oldest_after_ack_eliciting, _) = self
                 .sent_packets
-                .keys_range((
+                .iter_range((
                     Bound::Excluded(self.largest_ack_eliciting_sent),
                     Bound::Unbounded,
                 ))
@@ -499,7 +497,7 @@ impl PacketNumberSpace {
         // The number of non-congestion-controlled (i.e. size == 0) packets in flight at a time
         // should be small, since otherwise congestion control wouldn't be effective. Therefore,
         // this shouldn't need to visit many packets before finishing one way or another.
-        self.sent_packets.values().any(|x| x.size != 0)
+        self.sent_packets.iter().any(|(_, x)| x.size != 0)
     }
 }
 

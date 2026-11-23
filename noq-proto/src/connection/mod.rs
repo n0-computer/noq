@@ -76,6 +76,7 @@ mod packet_builder;
 use packet_builder::{PacketBuilder, PadDatagram};
 
 mod packet_crypto;
+mod packet_map;
 use packet_crypto::CryptoState;
 pub(crate) use packet_crypto::EncryptionLevel;
 
