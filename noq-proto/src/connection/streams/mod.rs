@@ -710,6 +710,7 @@ struct PendingStream {
     /// The priority of the stream
     priority: i32,
     /// Controls whether the stream is fairly multiplexed with others at the same urgency level.
+    /// See [RFC 9218 §4.2](https://www.rfc-editor.org/rfc/rfc9218.html#section-4.2).
     incremental: bool,
     /// A tie-breaker for streams of the same priority, used to improve fairness by implementing
     /// round-robin scheduling: Larger values are prioritized, so it is initialised to
@@ -724,11 +725,18 @@ struct PendingStream {
 
 impl Ord for PendingStream {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.priority
+        let Self {
+            priority,
+            incremental,
+            recency,
+            id,
+        } = self;
+
+        priority
             .cmp(&other.priority) // Higher urgency first
-            .then_with(|| other.incremental.cmp(&self.incremental)) // i=false first
-            .then_with(|| self.recency.cmp(&other.recency)) // higher recency first
-            .then_with(|| other.id.cmp(&self.id)) // lower stream ID first, when non-incremental
+            .then_with(|| other.incremental.cmp(incremental)) // i=false first
+            .then_with(|| recency.cmp(&other.recency)) // higher recency first
+            .then_with(|| other.id.cmp(id)) // lower stream ID first, when non-incremental
     }
 }
 

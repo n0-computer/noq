@@ -138,6 +138,10 @@ pub struct StreamsState {
     pub(super) streams_blocked: [bool; 2],
 
     /// Whether streams are interleaved by default.
+    /// [`TransportConfig::send_fairness`](crate::TransportConfig::send_fairness) sets this
+    /// default. [`SendStream::set_incremental`](crate::SendStream::set_incremental) overrides
+    /// it for an individual stream and describes how interleaving works within a priority
+    /// group.
     pub(super) default_incremental: bool,
 }
 
