@@ -1,7 +1,7 @@
 //! A sorted map for packet numbers that are inserted in increasing order.
 
-use alloc::{collections::BTreeMap, vec::Vec};
-use core::ops::{Bound, RangeBounds};
+use alloc::collections::BTreeMap;
+use core::ops::Range;
 
 use run::Run;
 
@@ -54,48 +54,29 @@ impl<T> PacketMap<T> {
         }
     }
 
-    pub(super) fn is_empty(&self) -> bool {
-        self.runs.is_empty()
-    }
-
-    /// Inserts `value` at `pn`, replacing any value already stored there.
+    /// Inserts `value` at `pn`.
     ///
-    /// `pn` should be larger than every packet number inserted before. A smaller one is still
-    /// stored correctly, but only by a slower path.
-    pub(super) fn insert(&mut self, pn: u64, value: T) {
+    /// Fails, leaving the map unchanged, if `pn` is not larger than every packet number
+    /// inserted before. The map relies on that order: only the last run ever grows, which keeps
+    /// the tree keys valid.
+    pub(super) fn insert(&mut self, pn: u64, value: T) -> Result<(), ()> {
         let Some(mut last) = self.runs.last_entry() else {
             self.runs.insert(pn, Span::new(pn, value));
-            return;
+            return Ok(());
         };
         let span = last.get_mut();
         let end = span.last();
-        debug_assert!(end < pn, "packet number {pn} inserted at or below {end}");
-        if end.checked_add(1) == Some(pn) {
+        if pn <= end {
+            return Err(());
+        }
+        if pn == end + 1 {
             span.values.push_back(value);
-        } else if end < pn {
+        } else {
             // A skipped packet number: the current last run will not grow any more.
             span.values.shrink(false);
             self.runs.insert(pn, Span::new(pn, value));
-        } else {
-            self.insert_out_of_order(pn, value);
         }
-    }
-
-    /// Inserts `value` at `pn`, which is at or below the last packet number.
-    fn insert_out_of_order(&mut self, pn: u64, value: T) {
-        if let Some((&key, span)) = self.runs.range_mut(..=pn).next_back() {
-            if let Some(index) = span.index(pn) {
-                *span.values.get_mut(index).expect("index is in range") = value;
-                return;
-            }
-            if pn < span.start {
-                // `pn` lies between the run's key and its first packet number. Key the run by
-                // its first packet number, so that the new run sorts before it.
-                let span = self.runs.remove(&key).expect("key was just found");
-                self.runs.insert(span.start, span);
-            }
-        }
-        self.runs.insert(pn, Span::new(pn, value));
+        Ok(())
     }
 
     pub(super) fn get(&self, pn: u64) -> Option<&T> {
@@ -137,63 +118,28 @@ impl<T> PacketMap<T> {
         value
     }
 
-    /// Removes the values for which `f` returns false.
-    ///
-    /// `f` is called for every value before anything is removed, so a panic in `f` leaves the
-    /// map unchanged apart from what `f` itself modified.
-    pub(super) fn retain(&mut self, mut f: impl FnMut(u64, &mut T) -> bool) {
-        let mut removed = Vec::new();
-        for span in self.runs.values_mut() {
-            let start = span.start;
-            for (index, value) in span.values.iter_mut().enumerate() {
-                let pn = start + index as u64;
-                if !f(pn, value) {
-                    removed.push(pn);
-                }
-            }
-        }
-        for pn in removed {
-            self.remove(pn);
-        }
-    }
-
-    /// Iterates over the entries in `range` in ascending order.
-    pub(super) fn iter_range(
-        &self,
-        range: impl RangeBounds<u64>,
-    ) -> impl Iterator<Item = (u64, &T)> + '_ {
-        let (runs, lo, hi) = match bounds(range) {
-            Some((lo, hi)) => {
-                // The run holding `lo` may be keyed below it.
-                let first = self
-                    .runs
-                    .range(..=lo)
-                    .next_back()
-                    .map_or(lo, |(&key, _)| key);
-                (self.runs.range(first..=hi), lo, hi)
-            }
-            None => (self.runs.range(0..0), 0, 0),
-        };
-        runs.flat_map(move |(_, span)| {
-            let start = span.start;
-            // Indices of the values with packet numbers in `lo..=hi`.
-            let skip = usize::try_from(lo.saturating_sub(start)).unwrap_or(usize::MAX);
-            let end = match hi.checked_sub(start) {
-                Some(n) => usize::try_from(n).map_or(usize::MAX, |n| n.saturating_add(1)),
-                None => 0,
-            };
-            span.values
-                .iter()
-                .enumerate()
-                .take(end)
-                .skip(skip)
-                .map(move |(index, value)| (start + index as u64, value))
-        })
+    /// Iterates over the entries with packet numbers in `range`, in ascending order.
+    pub(super) fn iter_range(&self, range: Range<u64>) -> impl Iterator<Item = (u64, &T)> + '_ {
+        let Range { start, end } = range;
+        // The run holding `start` may be keyed below it.
+        let first = self
+            .runs
+            .range(..=start)
+            .next_back()
+            .map_or(start, |(&key, _)| key);
+        self.runs
+            .range(first..end.max(first))
+            .flat_map(move |(_, span)| {
+                // The index of `pn` in the run, or 0 if `pn` is below the run.
+                let index =
+                    |pn: u64| usize::try_from(pn.saturating_sub(span.start)).unwrap_or(usize::MAX);
+                span.entries().take(index(end)).skip(index(start))
+            })
     }
 
     /// Iterates over all entries in ascending order.
     pub(super) fn iter(&self) -> impl Iterator<Item = (u64, &T)> + '_ {
-        self.iter_range(..)
+        self.runs.values().flat_map(Span::entries)
     }
 
     /// Iterates over all values in ascending order of their packet numbers.
@@ -240,19 +186,13 @@ impl<T> Span<T> {
         let index = usize::try_from(pn.checked_sub(self.start)?).ok()?;
         (index < self.values.len()).then_some(index)
     }
-}
 
-/// Returns the inclusive bounds of `range`, or `None` if it is empty.
-fn bounds(range: impl RangeBounds<u64>) -> Option<(u64, u64)> {
-    let lo = match range.start_bound() {
-        Bound::Included(&n) => n,
-        Bound::Excluded(&n) => n.checked_add(1)?,
-        Bound::Unbounded => 0,
-    };
-    let hi = match range.end_bound() {
-        Bound::Included(&n) => n,
-        Bound::Excluded(&n) => n.checked_sub(1)?,
-        Bound::Unbounded => u64::MAX,
-    };
-    (lo <= hi).then_some((lo, hi))
+    /// Iterates over the entries of this run in ascending order.
+    fn entries(&self) -> impl Iterator<Item = (u64, &T)> + '_ {
+        let start = self.start;
+        self.values
+            .iter()
+            .enumerate()
+            .map(move |(index, value)| (start + index as u64, value))
+    }
 }

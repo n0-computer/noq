@@ -33,13 +33,6 @@ impl<T> Run<T> {
         }
     }
 
-    pub(super) fn get_mut(&mut self, index: usize) -> Option<&mut T> {
-        match self {
-            Self::One(value) => (index == 0).then_some(value),
-            Self::Many(values) => values.get_mut(index),
-        }
-    }
-
     /// Appends `value` after the last value.
     pub(super) fn push_back(&mut self, value: T) {
         match self {

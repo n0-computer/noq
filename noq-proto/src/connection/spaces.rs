@@ -5,7 +5,7 @@ use alloc::{
 };
 use core::{
     cmp, mem,
-    ops::{Bound, Index, IndexMut, Range},
+    ops::{Index, IndexMut, Range},
 };
 
 use rand::{CryptoRng, RngExt};
@@ -264,7 +264,7 @@ pub(super) struct PacketNumberSpace {
     pub(super) sent_packets: PacketMap<SentPacket>,
     /// Packets that were deemed lost
     // Older packets are regularly removed in `Connection::drain_lost_packets`.
-    pub(super) lost_packets: PacketMap<LostPacket>,
+    pub(super) lost_packets: BTreeMap<u64, LostPacket>,
     /// Number of explicit congestion notification codepoints seen on incoming packets
     pub(super) ecn_counters: frame::EcnCounts,
     /// Recent ECN counters sent by the peer in ACK frames
@@ -321,7 +321,7 @@ impl PacketNumberSpace {
             largest_ack_eliciting_sent: 0,
             unacked_non_ack_eliciting_tail: 0,
             sent_packets: PacketMap::new(),
-            lost_packets: PacketMap::new(),
+            lost_packets: BTreeMap::new(),
             ecn_counters: frame::EcnCounts::ZERO,
             ecn_feedback: frame::EcnCounts::ZERO,
             pending_ping: false,
@@ -351,7 +351,7 @@ impl PacketNumberSpace {
             largest_ack_eliciting_sent: 0,
             unacked_non_ack_eliciting_tail: 0,
             sent_packets: PacketMap::new(),
-            lost_packets: PacketMap::new(),
+            lost_packets: BTreeMap::new(),
             ecn_counters: frame::EcnCounts::ZERO,
             ecn_feedback: frame::EcnCounts::ZERO,
             pending_ping: false,
@@ -468,10 +468,7 @@ impl PacketNumberSpace {
         } else if self.unacked_non_ack_eliciting_tail > MAX_UNACKED_NON_ACK_ELICTING_TAIL {
             let (oldest_after_ack_eliciting, _) = self
                 .sent_packets
-                .iter_range((
-                    Bound::Excluded(self.largest_ack_eliciting_sent),
-                    Bound::Unbounded,
-                ))
+                .iter_range(self.largest_ack_eliciting_sent + 1..u64::MAX)
                 .next()
                 .unwrap();
             // Per https://www.rfc-editor.org/rfc/rfc9000.html#name-frames-and-frame-types,
@@ -488,7 +485,9 @@ impl PacketNumberSpace {
             self.unacked_non_ack_eliciting_tail += 1;
         }
 
-        self.sent_packets.insert(number, packet);
+        self.sent_packets
+            .insert(number, packet)
+            .expect("packet numbers are assigned in increasing order");
         forgotten
     }
 

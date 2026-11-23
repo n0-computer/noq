@@ -1,5 +1,4 @@
 use alloc::{collections::BTreeMap, vec::Vec};
-use core::ops::Bound;
 
 use proptest::{collection::vec, prelude::*};
 use test_strategy::proptest;
@@ -52,17 +51,8 @@ enum Op {
     /// Removes a packet number that may or may not be present.
     Remove(u64),
     Get(u64),
-    Range(Bound<u64>, Bound<u64>),
-    /// Keeps the entries whose value is not divisible by the modulus.
-    Retain(u64),
-}
-
-fn bound() -> impl Strategy<Value = Bound<u64>> {
-    prop_oneof![
-        (0..3000u64).prop_map(Bound::Included),
-        (0..3000u64).prop_map(Bound::Excluded),
-        Just(Bound::Unbounded),
-    ]
+    /// Iterates over `start..end`, which may be empty or reversed.
+    Range(u64, u64),
 }
 
 fn op() -> impl Strategy<Value = Op> {
@@ -72,8 +62,7 @@ fn op() -> impl Strategy<Value = Op> {
         5 => any::<usize>().prop_map(Op::RemoveEntry),
         1 => (0..3000u64).prop_map(Op::Remove),
         1 => (0..3000u64).prop_map(Op::Get),
-        1 => (bound(), bound()).prop_map(|(lo, hi)| Op::Range(lo, hi)),
-        1 => (2..5u64).prop_map(Op::Retain),
+        1 => (0..3000u64, 0..3000u64).prop_map(|(start, end)| Op::Range(start, end)),
     ]
 }
 
@@ -87,7 +76,7 @@ fn matches_btree_map(#[strategy(vec(op(), 0..400))] ops: Vec<Op>) {
             Op::Append { gap } => {
                 let pn = next + gap;
                 let value = pn.wrapping_mul(0x9e37_79b9);
-                map.insert(pn, value);
+                map.insert(pn, value).unwrap();
                 reference.insert(pn, value);
                 next = pn + 1;
             }
@@ -99,30 +88,16 @@ fn matches_btree_map(#[strategy(vec(op(), 0..400))] ops: Vec<Op>) {
             }
             Op::Remove(pn) => assert_eq!(map.remove(pn), reference.remove(&pn)),
             Op::Get(pn) => assert_eq!(map.get(pn), reference.get(&pn)),
-            Op::Range(lo, hi) => {
-                let actual = map.iter_range((lo, hi)).map(|(pn, &value)| (pn, value));
-                // `BTreeMap::range` panics on these, so they are expected to be empty.
-                let expected = match (lo, hi) {
-                    (Bound::Included(a) | Bound::Excluded(a), Bound::Excluded(b)) if a >= b => {
-                        Vec::new()
-                    }
-                    (Bound::Excluded(a) | Bound::Included(a), Bound::Included(b)) if a > b => {
-                        Vec::new()
-                    }
-                    _ => reference
-                        .range((lo, hi))
-                        .map(|(&pn, &value)| (pn, value))
-                        .collect(),
-                };
-                assert_eq!(actual.collect::<Vec<_>>(), expected);
-            }
-            Op::Retain(modulus) => {
-                map.retain(|_, value| *value % modulus != 0);
-                reference.retain(|_, value| *value % modulus != 0);
+            Op::Range(start, end) => {
+                let actual = map.iter_range(start..end).map(|(pn, &value)| (pn, value));
+                // `BTreeMap::range` panics on a reversed range, which is empty.
+                let expected = reference
+                    .range(start..end.max(start))
+                    .map(|(&pn, &value)| (pn, value));
+                assert_eq!(actual.collect::<Vec<_>>(), expected.collect::<Vec<_>>());
             }
         }
         check_invariants(&map);
-        assert_eq!(map.is_empty(), reference.is_empty());
         assert_eq!(
             entries(&map),
             reference
@@ -144,11 +119,11 @@ fn matches_btree_map(#[strategy(vec(op(), 0..400))] ops: Vec<Op>) {
 fn pinned_packet_with_sliding_tail() {
     const TAIL: usize = 1000;
     let mut map = PacketMap::new();
-    map.insert(0, 0u64);
+    map.insert(0, 0u64).unwrap();
     for pn in 1..100_000 {
-        map.insert(pn, pn);
+        map.insert(pn, pn).unwrap();
         if pn as usize > TAIL {
-            let (oldest, _) = map.iter_range(1..).next().unwrap();
+            let (oldest, _) = map.iter_range(1..u64::MAX).next().unwrap();
             map.remove(oldest);
         }
         check_invariants(&map);
@@ -163,7 +138,7 @@ fn pinned_packet_with_sliding_tail() {
 fn holes_in_long_run() {
     let mut map = PacketMap::new();
     for pn in 0..10_000u64 {
-        map.insert(pn, pn);
+        map.insert(pn, pn).unwrap();
     }
     for pn in (50..10_000).step_by(100) {
         assert_eq!(map.remove(pn), Some(pn));
@@ -179,7 +154,7 @@ fn holes_in_long_run() {
 fn isolated_packets_need_no_allocation() {
     let mut map = PacketMap::new();
     for pn in 0..1001u64 {
-        map.insert(pn, pn);
+        map.insert(pn, pn).unwrap();
     }
     for pn in (1..1000).step_by(2) {
         map.remove(pn);
@@ -201,7 +176,7 @@ fn isolated_packets_need_no_allocation() {
 fn drained_run_releases_memory() {
     let mut map = PacketMap::new();
     for pn in 0..10_000u64 {
-        map.insert(pn, pn);
+        map.insert(pn, pn).unwrap();
     }
     for pn in 0..9_990 {
         map.remove(pn);
@@ -214,56 +189,31 @@ fn drained_run_releases_memory() {
 fn packet_numbers_near_u64_max() {
     let mut map = PacketMap::new();
     for pn in u64::MAX - 4..=u64::MAX {
-        map.insert(pn, pn);
+        map.insert(pn, pn).unwrap();
     }
     assert_eq!(map.get(u64::MAX), Some(&u64::MAX));
     assert_eq!(map.remove(u64::MAX - 2), Some(u64::MAX - 2));
-    let range: Vec<_> = map.iter_range(u64::MAX - 2..).map(|(pn, _)| pn).collect();
-    assert_eq!(range, [u64::MAX - 1, u64::MAX]);
-    let all: Vec<_> = map.iter_range(..=u64::MAX).map(|(pn, _)| pn).collect();
+    // A half-open range cannot include `u64::MAX` itself.
+    let range: Vec<_> = map
+        .iter_range(u64::MAX - 2..u64::MAX)
+        .map(|(pn, _)| pn)
+        .collect();
+    assert_eq!(range, [u64::MAX - 1]);
+    let all: Vec<_> = map.iter().map(|(pn, _)| pn).collect();
     assert_eq!(all, [u64::MAX - 4, u64::MAX - 3, u64::MAX - 1, u64::MAX]);
-    assert_eq!(
-        map.iter_range((Bound::Excluded(u64::MAX), Bound::Unbounded))
-            .count(),
-        0
-    );
     check_invariants(&map);
 }
 
 #[test]
-#[cfg(debug_assertions)]
-#[should_panic(expected = "inserted at or below")]
-fn out_of_order_insert_asserts() {
+fn insert_at_or_below_last_fails() {
     let mut map = PacketMap::new();
-    map.insert(10, 10u64);
-    map.insert(5, 5);
-}
-
-/// The fallback that release builds use for an out-of-order insert.
-#[test]
-fn out_of_order_insert() {
-    let mut map = PacketMap::new();
-    for pn in [10, 11, 12, 20, 21] {
-        map.insert(pn, pn);
+    map.insert(10, 10u64).unwrap();
+    map.insert(11, 11).unwrap();
+    // Leave the run keyed below its first packet number.
+    map.remove(10);
+    for pn in [5, 10, 11] {
+        assert_eq!(map.insert(pn, 0), Err(()));
     }
-    // Leave the run starting at 20 keyed below its first packet number.
-    map.remove(20);
-    // 21 replaces a value, 15 and 5 fill gaps, 11 replaces a value, and 20 lies between the
-    // stale key of the last run and its first packet number.
-    for pn in [21, 15, 5, 11, 20] {
-        map.insert_out_of_order(pn, pn + 100);
-        check_invariants(&map);
-    }
-    assert_eq!(
-        entries(&map),
-        [
-            (5, 105),
-            (10, 10),
-            (11, 111),
-            (12, 12),
-            (15, 115),
-            (20, 120),
-            (21, 121)
-        ]
-    );
+    check_invariants(&map);
+    assert_eq!(entries(&map), [(11, 11)]);
 }

@@ -3125,12 +3125,12 @@ impl Connection {
 
         for range in ack.iter() {
             let spurious_losses: Vec<u64> = lost_packets
-                .iter_range(range.clone())
-                .map(|(pn, _info)| pn)
+                .range(range.clone())
+                .map(|(&pn, _info)| pn)
                 .collect();
 
             for pn in spurious_losses {
-                lost_packets.remove(pn);
+                lost_packets.remove(&pn);
             }
         }
 
