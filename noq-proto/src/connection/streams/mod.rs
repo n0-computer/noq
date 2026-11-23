@@ -469,7 +469,8 @@ impl<'a> SendStream<'a> {
     /// transmitted.
     ///
     /// # Panics
-    /// - when applied to a receive stream
+    ///
+    /// This call will panic when applied to a receive stream.
     pub fn set_incremental(&mut self, incremental: bool) -> Result<(), ClosedStream> {
         let max_send_data = self.state.max_send_data(self.id);
         let stream = self
