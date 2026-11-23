@@ -458,7 +458,9 @@ impl<'a> SendStream<'a> {
         Ok(())
     }
 
-    /// Sets the incrementality of the send stream.
+    /// Sets the send stream's incremental flag (see [RFC 9218 §4.2]).
+    ///
+    /// [RFC 9218 §4.2]: https://www.rfc-editor.org/rfc/rfc9218.html#section-4.2
     ///
     /// Incremental streams with the same priority are fairly multiplexed in a round-robin manner,
     /// while non-incremental streams are scheduled without interleaving. Non-incremental streams
@@ -499,6 +501,8 @@ impl<'a> SendStream<'a> {
     }
 
     /// Returns whether the send stream is incremental.
+    ///
+    /// See [`set_incremental`](Self::set_incremental) for how this flag affects stream scheduling.
     ///
     /// # Panics
     ///
