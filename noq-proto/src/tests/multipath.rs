@@ -412,6 +412,50 @@ fn open_path_key_update() -> TestResult {
     Ok(())
 }
 
+/// Packet numbers are per path, so an old-key packet still in flight on one path can carry a
+/// higher number than the first new-key packet on another. It must be decrypted with the previous
+/// keys, not taken for a further key update and dropped.
+#[test]
+fn key_update_keeps_late_old_key_packets_on_another_path() -> TestResult {
+    let _guard = subscribe();
+    let mut pair = ConnPair::builder().enable_multipath().connect();
+
+    // Number path 0's packets well past where the new path starts.
+    for _ in 0..20 {
+        pair.ping_path(Client, PathId::ZERO)?;
+        pair.drive();
+    }
+    let server_addr = pair.routes.public_server_addr();
+    let path_id = pair.open_path(
+        Client,
+        FourTuple::from_remote(server_addr),
+        PathStatus::Backup,
+    )?;
+    pair.drive();
+    assert_matches!(
+        pair.poll(Client),
+        Some(Event::Path(PathEvent::Established { id })) if id == path_id
+    );
+
+    // An old-key packet on path 0, held back behind a new-key packet on the new path.
+    pair.ping_path(Client, PathId::ZERO)?;
+    let now = pair.time;
+    pair.client.drive(now);
+    pair.client.delay_outbound();
+    pair.force_key_update(Client);
+    pair.ping_path(Client, path_id)?;
+    pair.client.drive(now);
+    pair.client.finish_delay();
+    pair.drive();
+
+    assert_eq!(
+        pair.path_stats(Client, PathId::ZERO).unwrap().lost_packets,
+        0
+    );
+    assert_eq!(pair.path_stats(Client, path_id).unwrap().lost_packets, 0);
+    Ok(())
+}
+
 /// Client starts opening a path but the server fails to validate the path
 ///
 /// The client should receive an event closing the path.
@@ -1484,6 +1528,63 @@ fn stream_affinity_block_and_resume() -> TestResult {
     assert_matches!(chunks.next(usize::MAX), Ok(Some(chunk)) if chunk.bytes == b"blocked"[..]);
     assert_matches!(chunks.next(usize::MAX), Ok(None));
     let _ = chunks.finalize();
+    Ok(())
+}
+
+#[test]
+fn stream_affinity_persists_across_packets() -> TestResult {
+    let _guard = subscribe();
+    let mut pair = ConnPair::builder().enable_multipath().connect();
+
+    let available = PathId::ZERO;
+    let server_addr = pair.routes.public_server_addr();
+    let backup = pair.open_path(
+        Client,
+        FourTuple::from_remote(server_addr),
+        PathStatus::Backup,
+    )?;
+    pair.drive();
+    assert_matches!(
+        pair.poll(Client),
+        Some(Event::Path(PathEvent::Established { id })) if id == backup
+    );
+
+    // Too large for one packet, so the stream is requeued after each packet it fills.
+    // The backup path cannot send unpinned data, so a requeue that drops the affinity would
+    // move the remaining data to the available path.
+    let pinned = pair.streams(Client).open(Dir::Uni).unwrap();
+    pair.send_stream(Client, pinned)
+        .set_affinity(StreamAffinity::Sticky(backup))?;
+
+    let available_before = pair.path_stats(Client, available).unwrap().frame_tx.stream;
+    let backup_before = pair.path_stats(Client, backup).unwrap().frame_tx.stream;
+
+    const MSG: &[u8] = &[42u8; 10_000];
+    assert_eq!(pair.send_stream(Client, pinned).write(MSG)?, MSG.len());
+    pair.send_stream(Client, pinned).finish()?;
+    pair.drive();
+
+    assert_eq!(
+        pair.path_stats(Client, available).unwrap().frame_tx.stream,
+        available_before,
+        "stream {pinned} should not use path {available}"
+    );
+    assert!(
+        pair.path_stats(Client, backup).unwrap().frame_tx.stream > backup_before + 1,
+        "stream {pinned} should need more than one packet on path {backup}"
+    );
+
+    // sanity check that the data transferred
+    assert_eq!(pair.streams(Server).accept(Dir::Uni), Some(pinned));
+    let mut recv = pair.recv_stream(Server, pinned);
+    let mut chunks = recv.read(true)?;
+    let mut received = Vec::new();
+    while let Ok(Some(chunk)) = chunks.next(usize::MAX) {
+        received.extend_from_slice(&chunk.bytes);
+    }
+    let _ = chunks.finalize();
+    assert_eq!(received, MSG);
+
     Ok(())
 }
 

@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  merge_group:
   workflow_dispatch:
 
 concurrency:
@@ -14,6 +15,7 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   RUSTFLAGS: -Dwarnings
+  CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUNNER: wine
 
 # Default to read-only; jobs that need more grant it explicitly.
 permissions:
@@ -51,18 +53,10 @@ jobs:
 
       - name: Build tests
         # Release mode required - debug builds exceed mingw's export ordinal limit (~65k symbols)
-        run: cargo build --locked --target x86_64-pc-windows-gnu --tests --release
+        run: cargo test --locked --target x86_64-pc-windows-gnu --tests --release --no-run
 
       - name: List available tests
-        run: |
-          for exe in target/x86_64-pc-windows-gnu/release/deps/*.exe; do
-            echo "=== Tests in $exe ==="
-            wine "$exe" --list
-          done
+        run: cargo test --locked --target x86_64-pc-windows-gnu --tests --release -- --list
 
       - name: Run tests under Wine
-        run: |
-          for exe in target/x86_64-pc-windows-gnu/release/deps/*.exe; do
-            echo "=== Running $exe ==="
-            wine "$exe" --test-threads=1
-          done
+        run: cargo test --locked --target x86_64-pc-windows-gnu --tests --release -- --test-threads=1

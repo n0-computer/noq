@@ -25,7 +25,7 @@ use crate::runtime::{AsyncTimer, AsyncUdpSocket, TokioRuntime};
 use crate::{Duration, Instant};
 use bytes::Bytes;
 use proto::{
-    ConnectionError, FourTuple, PathId, PathStatus, RandomConnectionIdGenerator,
+    ConnectionError, FourTuple, PathId, PathStatus, RandomConnectionIdGenerator, StreamAffinity,
     crypto::rustls::QuicClientConfig,
 };
 use rand::{Rng, SeedableRng, rngs::StdRng};
@@ -1655,6 +1655,202 @@ async fn nat_traversal_wakes_connection_driver() -> TestResult {
             result.is_ok(),
             "Client should learn server's address (via ADD_ADDRESS) within 500ms — \
              frame likely stuck waiting for connection driver wake"
+        );
+
+        conn.close(0u8.into(), b"done");
+    }
+    .instrument(info_span!("client"));
+
+    tokio::join!(server_task, client_task);
+    Ok(())
+}
+
+/// After switching from `StreamAffinity::Block` to any other `StreamAffinity`,
+/// the connection driver should be woken so that any buffered STREAM data is sent.
+/// Without a wake, the data sits pending until something else triggers packet
+/// assembly.
+///
+/// This test connects two endpoints and opens a uni stream with its affinity set
+/// to `StreamAffinity::Block`, writes and finishes it, and checks the server does
+/// not see the stream while the connection goes idle. It then unblocks the stream
+/// and checks that the server reads all of its data within 10s.
+#[tokio::test(start_paused = true)]
+async fn stream_affinity_wakes_connection_driver() -> TestResult {
+    let _logging = subscribe();
+    let factory = EndpointFactory::new();
+
+    let server = factory.endpoint("server");
+    let server_addr = server.local_addr().unwrap();
+
+    let client = factory.endpoint("client");
+    let (server_conn_tx, server_conn_rx) = tokio::sync::oneshot::channel();
+
+    let server_task = async move {
+        let conn = server.accept().await.unwrap().await.unwrap();
+        server_conn_tx.send(conn.clone()).unwrap();
+        conn.closed().await;
+    }
+    .instrument(info_span!("server"));
+
+    let client_task = async move {
+        let conn = client
+            .connect(server_addr, "localhost")
+            .unwrap()
+            .await
+            .unwrap();
+
+        let server_conn = server_conn_rx.await.unwrap();
+
+        // Buffer the stream's data and FIN while it is blocked, nothing is actually sent b/c the
+        // stream is blocked.
+        const MSG: &[u8] = b"blocked until woken";
+        let mut send = conn.open_uni().await.unwrap();
+        send.set_affinity(StreamAffinity::Block).unwrap();
+        send.write_all(MSG).await.unwrap();
+        send.finish().unwrap();
+
+        // Wait for the connection to become idle.
+        // The server should not see the blocked stream yet.
+        let accepted =
+            tokio::time::timeout(Duration::from_millis(100), server_conn.accept_uni()).await;
+        assert!(
+            accepted.is_err(),
+            "server should not see a stream whose affinity is Block"
+        );
+
+        // Unblocking requeues the stream's data.
+        send.set_affinity(StreamAffinity::Any).unwrap();
+
+        // The server should read the whole stream within 10s.
+        let result = tokio::time::timeout(Duration::from_secs(10), async {
+            let mut recv = server_conn.accept_uni().await.unwrap();
+            recv.read_to_end(usize::MAX).await.unwrap()
+        })
+        .await;
+        let Ok(received) = result else {
+            panic!(
+                "server should read the unblocked stream within 10s — \
+                 data likely stuck waiting for connection driver wake"
+            );
+        };
+        assert_eq!(received, MSG);
+
+        conn.close(0u8.into(), b"done");
+    }
+    .instrument(info_span!("client"));
+
+    tokio::join!(server_task, client_task);
+    Ok(())
+}
+
+/// A stream with `StreamAffinity::Sticky` sends its STREAM frames only on the pinned path.
+///
+/// Both paths are available, so it is the affinity and not the path status that decides
+/// which path carries the data.
+///
+/// The test sends one stream pinned to the first path, then one pinned to the second path.
+/// This is to ensure that the data was not sent on the first path as a fluke.
+#[tokio::test(start_paused = true)]
+async fn stream_affinity_pins_stream_to_path() -> TestResult {
+    let _logging = subscribe();
+    let factory = EndpointFactory::new();
+
+    let mut transport_config = TransportConfig::default();
+    transport_config.max_concurrent_multipath_paths(2);
+    let server = factory.endpoint_with_config("server", transport_config.clone());
+    let server_addr = server.local_addr().unwrap();
+
+    let client = factory.endpoint_with_config("client", transport_config);
+    let (server_conn_tx, server_conn_rx) = tokio::sync::oneshot::channel();
+
+    let server_task = async move {
+        let conn = server.accept().await.unwrap().await.unwrap();
+        server_conn_tx.send(conn.clone()).unwrap();
+        conn.closed().await;
+    }
+    .instrument(info_span!("server"));
+
+    let client_task = async move {
+        let conn = client
+            .connect(server_addr, "localhost")
+            .unwrap()
+            .await
+            .unwrap();
+
+        let server_conn = server_conn_rx.await.unwrap();
+
+        // Open a second path, retrying until remote CIDs are available
+        let path = loop {
+            match conn
+                .open_path(FourTuple::from_remote(server_addr), PathStatus::Available)
+                .await
+            {
+                Ok(path) => break path,
+                Err(proto::PathError::RemoteCidsExhausted) => {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                Err(err) => panic!("Unexpected path error: {err:#}"),
+            }
+        };
+        let first = PathId::ZERO;
+        let second = path.id();
+        const MSG: &[u8] = b"stream affinity";
+
+        // Pin a stream to the first path.
+        let first_before = conn.path_stats(first).unwrap().frame_tx.stream;
+        let second_before = conn.path_stats(second).unwrap().frame_tx.stream;
+
+        let mut send = conn.open_uni().await.unwrap();
+        send.set_affinity(StreamAffinity::Sticky(first)).unwrap();
+        send.write_all(MSG).await.unwrap();
+        send.finish().unwrap();
+
+        let received = tokio::time::timeout(Duration::from_secs(10), async {
+            let mut recv = server_conn.accept_uni().await.unwrap();
+            recv.read_to_end(usize::MAX).await.unwrap()
+        })
+        .await
+        .expect("server should read the stream pinned to the first path within 10s");
+        assert_eq!(received, MSG);
+
+        // Retransmits may add STREAM frames, but only on the pinned path.
+        assert!(
+            conn.path_stats(first).unwrap().frame_tx.stream > first_before,
+            "stream should use path {first}"
+        );
+        assert_eq!(
+            conn.path_stats(second).unwrap().frame_tx.stream,
+            second_before,
+            "stream should not use path {second}"
+        );
+
+        // Pin a new stream to the second path.
+        // If affinity were ignored and the data just went to whichever path the scheduler prefers,
+        // either this check or the one above would fail.
+        let first_before = conn.path_stats(first).unwrap().frame_tx.stream;
+        let second_before = conn.path_stats(second).unwrap().frame_tx.stream;
+
+        let mut send = conn.open_uni().await.unwrap();
+        send.set_affinity(StreamAffinity::Sticky(second)).unwrap();
+        send.write_all(MSG).await.unwrap();
+        send.finish().unwrap();
+
+        let received = tokio::time::timeout(Duration::from_secs(10), async {
+            let mut recv = server_conn.accept_uni().await.unwrap();
+            recv.read_to_end(usize::MAX).await.unwrap()
+        })
+        .await
+        .expect("server should read the stream pinned to the second path within 10s");
+        assert_eq!(received, MSG);
+
+        assert!(
+            conn.path_stats(second).unwrap().frame_tx.stream > second_before,
+            "stream should use path {second}"
+        );
+        assert_eq!(
+            conn.path_stats(first).unwrap().frame_tx.stream,
+            first_before,
+            "stream should not use path {first}"
         );
 
         conn.close(0u8.into(), b"done");

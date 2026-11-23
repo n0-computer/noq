@@ -23,6 +23,7 @@ dependencies = [
      "clippy",
      "doc",
      "test",
+     "test-bbr3",
      "proptests-extralight",
 ]
 
@@ -92,6 +93,11 @@ args = [
      "--tests",
      "--no-fail-fast",
 ]
+
+[tasks.test-bbr3]
+description = "Run BBR3 congestion controller tests"
+command = "cargo"
+args = ["nextest", "run", "--package=noq-proto", "-P", "bbr3", "--no-fail-fast", "${@}"]
 
 [tasks.proptests-long]
 description = "Run proptests with high case count (runs for ~10 minutes)"

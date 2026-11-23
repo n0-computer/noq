@@ -8,6 +8,7 @@ on:
   push:
     branches: [main]
     paths: ['.github/workflows/**']
+  merge_group:
   workflow_dispatch:
 
 permissions:

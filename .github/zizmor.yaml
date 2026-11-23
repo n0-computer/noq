@@ -1,0 +1,6 @@
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        # Allow pinning by tag to n0 actions and workflows.
+        n0-computer/*: ref-pin

@@ -94,7 +94,7 @@ pub use spaces::Retransmits;
 #[cfg(not(fuzzing))]
 use spaces::Retransmits;
 pub(crate) use spaces::SpaceKind;
-use spaces::{OpenStatus, PacketSpace, SendableFrames, SentPacket, ThinRetransmits};
+use spaces::{OpenStatus, PacketNumberSpace, PacketSpace, SendableFrames, SentPacket, ThinRetransmits};
 
 mod stats;
 pub use stats::{ConnectionStats, FrameStats, PathStats, UdpStats};
@@ -1663,22 +1663,20 @@ impl Connection {
                 // especially important with ack delay, since the peer might not
                 // have gotten any other ACK for the data earlier on.
                 let is_multipath_negotiated = self.is_multipath_negotiated();
-                for path_id in self.spaces[space_id]
+                for (path_id, pns) in self.spaces[space_id]
                     .number_spaces
-                    .iter()
+                    .iter_mut()
                     .filter(|(_, pns)| !pns.pending_acks.ranges().is_empty())
-                    .map(|(&path_id, _)| path_id)
-                    .collect::<Vec<_>>()
                 {
                     Self::populate_acks(
                         now,
                         self.receiving_ecn,
-                        path_id,
+                        *path_id,
                         space_id,
-                        &mut self.spaces[space_id],
+                        pns,
                         is_multipath_negotiated,
                         &mut builder,
-                        &mut self.path_stats.get_mut(path_id).frame_tx,
+                        &mut self.path_stats.get_mut(*path_id).frame_tx,
                         self.crypto_state.has_keys(space_id.encryption_level()),
                     );
                 }
@@ -3227,10 +3225,8 @@ impl Connection {
                 .prev_crypto
                 .as_ref()
                 .expect("no previous keys")
-                .end_packet
-                .as_ref()
+                .end_time
                 .expect("update not acknowledged yet")
-                .1
         };
 
         // QUIC-MULTIPATH § 2.5 Key Phase Update Process: use largest PTO of all paths.
@@ -6145,19 +6141,17 @@ impl Connection {
             && scheduling_info.can_send_data
             && scheduling_info.status_allows_data
         {
-            for path_id in space
+            for (path_id, pns) in space
                 .number_spaces
                 .iter_mut()
                 .filter(|(_, pns)| pns.pending_acks.can_send())
-                .map(|(&path_id, _)| path_id)
-                .collect::<Vec<_>>()
             {
                 Self::populate_acks(
                     now,
                     self.receiving_ecn,
-                    path_id,
+                    *path_id,
                     space_id,
-                    space,
+                    pns,
                     is_multipath_negotiated,
                     builder,
                     stats,
@@ -6612,7 +6606,7 @@ impl Connection {
         receiving_ecn: bool,
         path_id: PathId,
         space_id: SpaceId,
-        space: &mut PacketSpace,
+        pns: &mut PacketNumberSpace,
         is_multipath_negotiated: bool,
         builder: &mut PacketBuilder<'a, 'b>,
         stats: &mut FrameStats,
@@ -6632,7 +6626,6 @@ impl Connection {
             );
         }
 
-        let pns = space.for_path(path_id);
         let ranges = pns.pending_acks.ranges();
         debug_assert!(!ranges.is_empty(), "can not send empty ACK range");
         let ecn = if receiving_ecn {
@@ -6794,14 +6787,20 @@ impl Connection {
         if result.outgoing_key_update_acked
             && let Some(prev) = self.crypto_state.prev_crypto.as_mut()
         {
-            prev.end_packet = Some((result.packet_number, now));
+            prev.end_time = Some(now);
             self.set_key_discard_timer(now, packet.header.space());
+        }
+
+        if result.current_keys
+            && let Some(prev) = self.crypto_state.prev_crypto.as_mut()
+        {
+            prev.record_end(path_id, result.packet_number);
         }
 
         if result.incoming_key_update {
             trace!("key update authenticated");
             self.crypto_state
-                .update_keys(Some((result.packet_number, now)), true);
+                .update_keys(Some((path_id, result.packet_number, now)), true);
             self.set_key_discard_timer(now, packet.header.space());
         }
 
