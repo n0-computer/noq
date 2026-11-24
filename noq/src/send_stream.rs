@@ -241,15 +241,15 @@ impl SendStream {
 
     /// Sets the send stream's incremental flag (see [RFC 9218 §4.2]).
     ///
-    /// [RFC 9218 §4.2]: https://www.rfc-editor.org/rfc/rfc9218.html#section-4.2
-    ///
     /// Incremental streams with the same priority are fairly multiplexed in a round-robin manner,
     /// while non-incremental streams are scheduled without interleaving. Non-incremental streams
     /// are sent before incremental ones when the priority is tied. Among non-incremental streams,
     /// lower stream IDs are favored. The default incremental value (`true`) can be changed with
-    /// [`TransportConfig::send_fairness`](crate::TransportConfig::send_fairness). Changing the
-    /// incrementality of a stream with pending data may only take effect after that data has been
-    /// transmitted.
+    /// [`TransportConfig::send_fairness`]. Changing the incrementality of a stream with pending
+    /// data may only take effect after that data has been transmitted.
+    ///
+    /// [RFC 9218 §4.2]: https://www.rfc-editor.org/rfc/rfc9218.html#section-4.2
+    /// [`TransportConfig::send_fairness`]: crate::TransportConfig::send_fairness
     pub fn set_incremental(&self, incremental: bool) -> Result<(), ClosedStream> {
         let mut conn = self.conn.lock_without_waking("SendStream::set_incremental");
         conn.inner
@@ -260,7 +260,9 @@ impl SendStream {
 
     /// Returns whether the send stream is incremental.
     ///
-    /// See [`set_incremental`](Self::set_incremental) for how this flag affects stream scheduling.
+    /// See [`set_incremental`] for how this flag affects stream scheduling.
+    ///
+    /// [`set_incremental`]: Self::set_incremental
     pub fn incremental(&self) -> Result<bool, ClosedStream> {
         let mut conn = self.conn.lock_without_waking("SendStream::incremental");
         conn.inner.send_stream(self.stream).incremental()

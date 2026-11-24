@@ -163,11 +163,13 @@ impl TransportConfig {
     /// Passing `false` is equivalent to setting `incremental = false` on every stream while leaving
     /// all streams in the same priority group. The scheduler favors lower stream IDs in that case.
     ///
-    /// [`SendStream::set_priority`](crate::SendStream::set_priority) assigns a stream to a priority
-    /// group. Streams have priority 0 by default. Higher-priority streams are scheduled first.
-    /// [`SendStream::set_incremental`](crate::SendStream::set_incremental) overrides the default
-    /// for one stream. Within a group, non-incremental streams are scheduled before incremental
-    /// streams, and incremental streams take turns.
+    /// [`SendStream::set_priority`] assigns a stream to a priority group. Streams have priority 0
+    /// by default. Higher-priority streams are scheduled first. [`SendStream::set_incremental`]
+    /// overrides the default for one stream. Within a group, non-incremental streams are scheduled
+    /// before incremental streams, and incremental streams take turns.
+    ///
+    /// [`SendStream::set_priority`]: crate::SendStream::set_priority
+    /// [`SendStream::set_incremental`]: crate::SendStream::set_incremental
     #[deprecated(note = "use SendStream::set_incremental and SendStream::set_priority instead")]
     pub fn send_fairness(&mut self, default_incremental: bool) -> &mut Self {
         self.send_fairness = default_incremental;

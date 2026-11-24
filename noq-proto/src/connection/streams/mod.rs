@@ -460,19 +460,19 @@ impl<'a> SendStream<'a> {
 
     /// Sets the send stream's incremental flag (see [RFC 9218 §4.2]).
     ///
-    /// [RFC 9218 §4.2]: https://www.rfc-editor.org/rfc/rfc9218.html#section-4.2
-    ///
     /// Incremental streams with the same priority are fairly multiplexed in a round-robin manner,
     /// while non-incremental streams are scheduled without interleaving. Non-incremental streams
     /// are sent before incremental ones when the priority is tied. Among non-incremental streams,
     /// lower stream IDs are favored. The default incremental value (`true`) can be changed with
-    /// [`TransportConfig::send_fairness`](crate::TransportConfig::send_fairness). Changing the
-    /// incrementality of a stream with pending data may only take effect after that data has been
-    /// transmitted.
+    /// [`TransportConfig::send_fairness`]. Changing the incrementality of a stream with pending
+    /// data may only take effect after that data has been transmitted.
     ///
     /// # Panics
     ///
     /// This call will panic when applied to a receive stream.
+    ///
+    /// [RFC 9218 §4.2]: https://www.rfc-editor.org/rfc/rfc9218.html#section-4.2
+    /// [`TransportConfig::send_fairness`]: crate::TransportConfig::send_fairness
     pub fn set_incremental(&mut self, incremental: bool) -> Result<(), ClosedStream> {
         let max_send_data = self.state.max_send_data(self.id);
         let stream = self
@@ -502,11 +502,13 @@ impl<'a> SendStream<'a> {
 
     /// Returns whether the send stream is incremental.
     ///
-    /// See [`set_incremental`](Self::set_incremental) for how this flag affects stream scheduling.
+    /// See [`set_incremental`] for how this flag affects stream scheduling.
     ///
     /// # Panics
     ///
     /// This call will panic when applied to a receive stream.
+    ///
+    /// [`set_incremental`]: Self::set_incremental
     pub fn incremental(&self) -> Result<bool, ClosedStream> {
         let stream = self
             .state
@@ -714,7 +716,9 @@ struct PendingStream {
     /// The priority of the stream
     priority: i32,
     /// Controls whether the stream is fairly multiplexed with others at the same urgency level.
-    /// See [RFC 9218 §4.2](https://www.rfc-editor.org/rfc/rfc9218.html#section-4.2).
+    /// See [RFC 9218 §4.2].
+    ///
+    /// [RFC 9218 §4.2]: https://www.rfc-editor.org/rfc/rfc9218.html#section-4.2
     incremental: bool,
     /// A tie-breaker for streams of the same priority, used to improve fairness by implementing
     /// round-robin scheduling: Larger values are prioritized, so it is initialised to
