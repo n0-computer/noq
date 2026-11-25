@@ -268,6 +268,11 @@ impl RecvStream {
     ///
     /// [`ReadToEndError::TooLong`]: crate::ReadToEndError::TooLong
     pub async fn read_to_end(&mut self, size_limit: usize) -> Result<Vec<u8>, ReadToEndError> {
+        // A stream already read to its end has nothing left, and its state
+        // is freed, so `is_ordered` would fail on it
+        if self.all_data_read {
+            return Ok(Vec::new());
+        }
         if !self.is_ordered()? {
             return Err(ReadError::ClosedStream.into());
         }
