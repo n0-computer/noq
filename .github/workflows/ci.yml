@@ -190,7 +190,7 @@ jobs:
         run: cargo check --locked -p noq-udp --target wasm32-unknown-unknown --no-default-features --features=tracing,log
 
       - name: wasm32 build (noq)
-        run: cargo rustc --locked -p noq --target wasm32-unknown-unknown --no-default-features --features=tracing-log,platform-verifier,rustls,ring --crate-type=cdylib
+        run: cargo rustc --locked -p noq --target wasm32-unknown-unknown --no-default-features --features=tracing-log,platform-verifier,rustls,ring,wasm_js --crate-type=cdylib
 
       # If the Wasm file contains any 'import "env"' declarations, then
       # some non-Wasm-compatible code made it into the final code.

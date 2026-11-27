@@ -31,6 +31,8 @@ aws-lc-rs-fips = ["proto/aws-lc-rs-fips"]
 ring = ["proto/ring"]
 # Enables BloomTokenLog, and uses it by default
 bloom = ["proto/bloom"]
+# Selects getrandom's browser entropy source on wasm32-unknown-unknown (see noq-proto)
+wasm_js = ["proto/wasm_js"]
 # Records how long locks are held, and warns if they are held >= 1ms
 lock_tracking = []
 # Provides `ClientConfig::with_platform_verifier()` convenience method
