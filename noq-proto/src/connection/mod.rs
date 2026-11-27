@@ -3495,8 +3495,14 @@ impl Connection {
                 let Some(info) = self.spaces[pn_space].for_path(path_id).take(packet) else {
                     continue;
                 };
-                self.qlog
-                    .emit_packet_lost(packet, &info, loss_delay, pn_space.kind(), now);
+                self.qlog.emit_packet_lost(
+                    path_id,
+                    packet,
+                    &info,
+                    loss_delay,
+                    pn_space.kind(),
+                    now,
+                );
                 self.paths
                     .get_mut(&path_id)
                     .unwrap()
