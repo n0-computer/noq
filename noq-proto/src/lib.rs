@@ -39,6 +39,8 @@ mod cid_queue;
 pub mod coding;
 mod constant_time;
 mod range_set;
+#[cfg(test)]
+mod test_util;
 #[cfg(all(test, feature = "rustls", any(feature = "aws-lc-rs", feature = "ring")))]
 mod tests;
 pub mod transport_parameters;
@@ -132,7 +134,10 @@ pub(crate) use web_time::{Instant, SystemTime, UNIX_EPOCH};
 // Deal with hash maps
 #[expect(clippy::disallowed_types)]
 pub(crate) type HashMap<K, V, S = std::hash::RandomState> = std::collections::HashMap<K, V, S>;
-#[cfg(any(test, feature = "bloom"))]
+#[cfg(any(
+    feature = "bloom",
+    all(test, feature = "rustls", any(feature = "aws-lc-rs", feature = "ring"))
+))]
 #[expect(clippy::disallowed_types)]
 pub(crate) type HashSet<T, S = std::hash::RandomState> = std::collections::HashSet<T, S>;
 #[expect(clippy::disallowed_types)]
