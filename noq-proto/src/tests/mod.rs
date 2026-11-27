@@ -1141,6 +1141,36 @@ fn alpn_mismatch() {
         pair.client_conn_mut(client_ch).poll(),
         Some(Event::ConnectionLost { reason: ConnectionError::ConnectionClosed(err) }) if err.error_code == TransportErrorCode::crypto(0x78)
     );
+    assert_eq!(pair.server.known_connections(), 0);
+    assert_eq!(pair.server.known_cids(), 0);
+}
+
+/// Checks that datagrams routed to a connection while its accept is pending reach it later.
+#[test]
+fn begin_accept_with_datagrams_while_pending() {
+    let _guard = subscribe();
+    let mut pair = Pair::default();
+    pair.server.handle_incoming = Box::new(|_| IncomingConnectionBehavior::Wait);
+    let client_ch = pair.begin_connect(client_config());
+    while pair.server.waiting_incoming.is_empty() {
+        assert!(pair.step());
+    }
+    let incoming = pair.server.waiting_incoming.pop().unwrap();
+    let (server_ch, pending) = pair
+        .server
+        .endpoint
+        .begin_accept(incoming, pair.time, &mut Vec::new(), None)
+        .unwrap();
+
+    // Let the client retransmit its Initial, which the endpoint routes to the pending connection.
+    while !pair.server.conn_events.contains_key(&server_ch) {
+        assert!(pair.step());
+    }
+
+    let conn = pending.complete().unwrap();
+    pair.server.connections.insert(server_ch, conn);
+    pair.drive();
+    pair.finish_connect(client_ch, server_ch);
 }
 
 #[test]

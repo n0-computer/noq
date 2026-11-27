@@ -520,26 +520,47 @@ impl EndpointInner {
         let mut state = self.state.lock().unwrap();
         let mut response_buffer = Vec::new();
         let now = state.runtime.now();
-        match state
+        let result = state
             .inner
-            .accept(incoming, now, &mut response_buffer, server_config)
-        {
-            Ok((handle, conn)) => {
+            .begin_accept(incoming, now, &mut response_buffer, server_config);
+        let error = match result {
+            Ok((handle, pending)) => {
                 state.stats.accepted_handshakes += 1;
                 let sender = state.socket.create_sender();
                 let runtime = state.runtime.clone();
-                Ok(state
-                    .recv_state
-                    .connections
-                    .insert(handle, conn, sender, runtime))
-            }
-            Err(error) => {
-                if let Some(transmit) = error.response {
-                    respond(transmit, &response_buffer, &mut state.sender);
+                let conn_events = state.recv_state.connections.reserve(handle);
+                let endpoint_events = state.recv_state.connections.sender.clone();
+                drop(state);
+
+                // Run the handshake unlocked; `conn_events` queues datagrams meanwhile
+                let failure = match pending.complete() {
+                    Ok(conn) => {
+                        return Ok(Connecting::new(
+                            handle,
+                            conn,
+                            endpoint_events,
+                            conn_events,
+                            sender,
+                            runtime,
+                        ));
+                    }
+                    Err(failure) => failure,
+                };
+                state = self.state.lock().unwrap();
+                state.stats.accepted_handshakes -= 1;
+                state.recv_state.connections.release(handle, &self.shared);
+                // Let a closed endpoint's driver notice it may have no connections left
+                if let Some(driver) = state.driver.take() {
+                    driver.wake();
                 }
-                Err(error.cause)
+                state.inner.abort_accept(*failure, &mut response_buffer)
             }
+            Err(error) => error,
+        };
+        if let Some(transmit) = error.response {
+            respond(transmit, &response_buffer, &mut state.sender);
         }
+        Err(error.cause)
     }
 
     pub(crate) fn refuse(&self, incoming: proto::Incoming) {
@@ -770,6 +791,12 @@ impl ConnectionSet {
         sender: Pin<Box<dyn UdpSender>>,
         runtime: Arc<dyn Runtime>,
     ) -> Connecting {
+        let recv = self.reserve(handle);
+        Connecting::new(handle, conn, self.sender.clone(), recv, sender, runtime)
+    }
+
+    /// Registers a new connection and returns the receiver for its events.
+    fn reserve(&mut self, handle: ConnectionHandle) -> mpsc::UnboundedReceiver<ConnectionEvent> {
         let (send, recv) = mpsc::unbounded_channel();
         if let Some((error_code, ref reason)) = self.close {
             send.send(ConnectionEvent::Close {
@@ -780,7 +807,22 @@ impl ConnectionSet {
         }
         self.senders.insert(handle, send);
         self.active_connections += 1;
-        Connecting::new(handle, conn, self.sender.clone(), recv, sender, runtime)
+        recv
+    }
+
+    /// Unregisters a connection that failed to be accepted.
+    fn release(&mut self, handle: ConnectionHandle, shared: &Shared) {
+        // The sender is already gone if the endpoint driver was dropped in the meantime.
+        if self.senders.remove(&handle).is_none() {
+            return;
+        }
+        self.active_connections -= 1;
+        if self.active_connections == 0 {
+            shared.all_draining.notify_waiters();
+        }
+        if self.is_empty() {
+            shared.idle.notify_waiters();
+        }
     }
 
     fn is_empty(&self) -> bool {

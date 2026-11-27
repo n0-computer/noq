@@ -2144,3 +2144,134 @@ impl crate::runtime::Runtime for PanicPropagatingRuntime {
         TokioRuntime.now()
     }
 }
+
+/// Builds a server endpoint from a rustls config.
+fn server_with_crypto(
+    configure: impl FnOnce(
+        rustls::ConfigBuilder<rustls::ServerConfig, rustls::server::WantsServerCert>,
+    ) -> rustls::ServerConfig,
+) -> Endpoint {
+    let builder = rustls::ServerConfig::builder_with_provider(Arc::new(default_provider()))
+        .with_protocol_versions(&[&rustls::version::TLS13])
+        .unwrap()
+        .with_no_client_auth();
+    let crypto = crate::crypto::rustls::QuicServerConfig::try_from(configure(builder)).unwrap();
+    Endpoint::server(
+        crate::ServerConfig::with_crypto(Arc::new(crypto)),
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+    )
+    .unwrap()
+}
+
+/// Certificate resolver whose first call fails unless another call starts within 5s.
+#[derive(Debug)]
+struct OverlapCertResolver {
+    key: Arc<rustls::sign::CertifiedKey>,
+    calls: AtomicUsize,
+    send: std::sync::mpsc::SyncSender<()>,
+    recv: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
+}
+
+impl rustls::server::ResolvesServerCert for OverlapCertResolver {
+    fn resolve(
+        &self,
+        _client_hello: rustls::server::ClientHello<'_>,
+    ) -> Option<Arc<rustls::sign::CertifiedKey>> {
+        if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            let recv = self.recv.lock().expect("poisoned");
+            recv.recv_timeout(Duration::from_secs(5)).ok()?;
+        } else {
+            let _ = self.send.try_send(());
+        }
+        Some(self.key.clone())
+    }
+}
+
+/// Checks that handshakes in `accept` run concurrently, without holding the endpoint lock.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn accept_concurrent() -> TestResult {
+    const CONNECTIONS: usize = 16;
+    let _guard = subscribe();
+    let factory = EndpointFactory::new();
+    let key = PrivateKeyDer::Pkcs8(factory.cert.signing_key.serialize_der().into());
+    let (send, recv) = std::sync::mpsc::sync_channel(1);
+    let resolver = OverlapCertResolver {
+        key: Arc::new(rustls::sign::CertifiedKey::new(
+            vec![factory.cert.cert.der().clone()],
+            default_provider().key_provider.load_private_key(key)?,
+        )),
+        calls: AtomicUsize::new(0),
+        send,
+        recv: std::sync::Mutex::new(recv),
+    };
+    let server = server_with_crypto(|builder| builder.with_cert_resolver(Arc::new(resolver)));
+    let client = factory.endpoint("client");
+    let server_addr = server.local_addr()?;
+
+    let server_task = tokio::spawn(async move {
+        let mut handshakes = tokio::task::JoinSet::new();
+        for _ in 0..CONNECTIONS {
+            let incoming = server.accept().await.expect("endpoint open");
+            handshakes.spawn(async move { incoming.await.expect("handshake") });
+        }
+        handshakes.join_all().await
+    });
+    let mut clients = tokio::task::JoinSet::new();
+    for _ in 0..CONNECTIONS {
+        clients.spawn(client.connect(server_addr, "localhost")?);
+    }
+    for conn in tokio::time::timeout(Duration::from_secs(10), clients.join_all()).await? {
+        conn?;
+    }
+    assert_eq!(server_task.await?.len(), CONNECTIONS);
+    Ok(())
+}
+
+/// Checks that a failed handshake errors from `accept` and frees the endpoint state.
+#[tokio::test]
+async fn accept_handshake_failure() -> TestResult {
+    let _guard = subscribe();
+    let factory = EndpointFactory::new();
+    let key = PrivateKeyDer::Pkcs8(factory.cert.signing_key.serialize_der().into());
+    let server = server_with_crypto(|builder| {
+        let mut crypto = builder
+            .with_single_cert(vec![factory.cert.cert.der().clone()], key)
+            .unwrap();
+        crypto.alpn_protocols = vec![b"foo".to_vec()];
+        crypto
+    });
+    // Offer only X25519 so the ClientHello fits in one Initial and `accept` sees all of it.
+    let mut provider = default_provider();
+    provider
+        .kx_groups
+        .retain(|group| group.name() == rustls::NamedGroup::X25519);
+    let mut roots = RootCertStore::empty();
+    roots.add(factory.cert.cert.der().clone())?;
+    let client_crypto = rustls::ClientConfig::builder_with_provider(Arc::new(provider))
+        .with_protocol_versions(&[&rustls::version::TLS13])?
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    let client_config = ClientConfig::new(Arc::new(QuicClientConfig::try_from(client_crypto)?));
+    let client = factory.endpoint("client");
+
+    let connecting = client.connect_with(client_config, server.local_addr()?, "localhost")?;
+    let incoming = server.accept().await.expect("endpoint open");
+    let server_err = incoming.accept().expect_err("ALPN mismatch");
+    let client_err = tokio::time::timeout(Duration::from_secs(5), connecting)
+        .await?
+        .unwrap_err();
+    let crypto_0x78 = proto::TransportErrorCode::crypto(0x78);
+    assert!(
+        matches!(&server_err, ConnectionError::TransportError(err) if err.code == crypto_0x78),
+        "{server_err:?}"
+    );
+    assert!(
+        matches!(&client_err, ConnectionError::ConnectionClosed(close) if close.error_code == crypto_0x78),
+        "{client_err:?}"
+    );
+
+    tokio::time::timeout(Duration::from_millis(500), server.wait_idle()).await?;
+    assert_eq!(server.open_connections(), 0);
+    assert_eq!(server.stats().accepted_handshakes, 0);
+    Ok(())
+}
