@@ -36,6 +36,7 @@ pub struct TransportConfig {
     pub(crate) stream_receive_window: VarInt,
     pub(crate) receive_window: VarInt,
     pub(crate) send_window: u64,
+    pub(crate) send_fairness: bool,
 
     pub(crate) packet_threshold: u32,
     pub(crate) time_threshold: f32,
@@ -156,11 +157,22 @@ impl TransportConfig {
         self
     }
 
-    /// Has no effect. Equal-priority send streams are always scheduled round-robin.
-    #[deprecated(
-        note = "Send fairness is now always enabled. Neither enabling nor disabling it has no effect."
-    )]
-    pub fn send_fairness(&mut self, _value: bool) -> &mut Self {
+    /// Sets the default incremental flag for send streams.
+    ///
+    /// With the default incremental value of `true`, streams take turns in round-robin order.
+    /// Passing `false` is equivalent to setting `incremental = false` on every stream while leaving
+    /// all streams in the same priority group. The scheduler favors lower stream IDs in that case.
+    ///
+    /// [`SendStream::set_priority`] assigns a stream to a priority group. Streams have priority 0
+    /// by default. Higher-priority streams are scheduled first. [`SendStream::set_incremental`]
+    /// overrides the default for one stream. Within a group, non-incremental streams are scheduled
+    /// before incremental streams, and incremental streams take turns.
+    ///
+    /// [`SendStream::set_priority`]: crate::SendStream::set_priority
+    /// [`SendStream::set_incremental`]: crate::SendStream::set_incremental
+    #[deprecated(note = "use SendStream::set_incremental and SendStream::set_priority instead")]
+    pub fn send_fairness(&mut self, default_incremental: bool) -> &mut Self {
+        self.send_fairness = default_incremental;
         self
     }
 
@@ -578,6 +590,7 @@ impl Default for TransportConfig {
             stream_receive_window: STREAM_RWND.into(),
             receive_window: VarInt::MAX,
             send_window: (8 * STREAM_RWND).into(),
+            send_fairness: true,
 
             packet_threshold: 3,
             time_threshold: 9.0 / 8.0,
@@ -631,6 +644,7 @@ impl fmt::Debug for TransportConfig {
             stream_receive_window,
             receive_window,
             send_window,
+            send_fairness,
             packet_threshold,
             time_threshold,
             initial_rtt,
@@ -669,6 +683,7 @@ impl fmt::Debug for TransportConfig {
             .field("stream_receive_window", stream_receive_window)
             .field("receive_window", receive_window)
             .field("send_window", send_window)
+            .field("send_fairness", send_fairness)
             .field("packet_threshold", packet_threshold)
             .field("time_threshold", time_threshold)
             .field("initial_rtt", initial_rtt)
